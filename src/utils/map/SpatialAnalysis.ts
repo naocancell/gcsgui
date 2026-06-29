@@ -1,0 +1,876 @@
+/**
+ 文件描述：空间分析方法
+ 创建时间：2024/4/15 9:52
+ 创建人：Zhaipeixiu
+ */
+
+import { getDistance, getElevation } from '@/utils/map/geocomputation.ts'
+import { Cartesian3, Viewer } from 'cesium'
+import * as echarts from 'echarts'
+import { EChartsType } from 'echarts'
+import { Airline } from '@/types/entityoptions.ts'
+type ProfileResult = {
+  distanceArray: number[]
+  elevationArray: number[]
+}
+
+/**
+ * 两点间地形剖面分析数值计算
+ * @param viewer 地图Viewer
+ * @param start 起点
+ * @param end 终点
+ * @param interval 线段采样间隔 m为单位
+ * @return 从起点至终点剖面线的海拔高度数组
+ */
+export function elevationProfile(
+  viewer: Viewer,
+  start: Cartesian3,
+  end: Cartesian3,
+  interval: number,
+) {
+  let breakPointsHeight: number[] = [] //断点的高程m
+  let distanceFromStart: number[] = [] //断点至起点的距离m
+  // 计算首尾点距离 m
+  let totalLen = getDistance(start, end) * 1000
+  // 获取起点高度及其与起点的距离
+  breakPointsHeight.push(Math.round(getElevation(viewer, start)))
+  distanceFromStart.push(0)
+
+  //获取中间断点的高度及其与起点的距离
+  if (interval > 0) {
+    //断点数量
+    let breakNum = Math.floor(totalLen / interval)
+    // 如果采样间隔小于首尾点距离，则获取每个断点的坐标 并获取其高度
+    if (breakNum >= 1) {
+      for (let i = 1; i < breakNum; i++) {
+        let breakP = Cartesian3.lerp(start, end, i / breakNum, new Cartesian3())
+        breakPointsHeight.push(Math.round(getElevation(viewer, breakP))) //单位 米
+        distanceFromStart.push(Math.round(getDistance(start, breakP) * 1000)) //单位 米
+      }
+    }
+  }
+
+  // 获取终点高度及其与起点的距离
+  breakPointsHeight.push(Math.round(getElevation(viewer, end)))
+  distanceFromStart.push(Math.round(totalLen))
+
+  return { distanceArray: distanceFromStart, elevationArray: breakPointsHeight }
+}
+
+/**
+ * 折线段地形剖面分析数值计算
+ * @param viewer 地图Viewer
+ * @param polyline 折线点数组
+ * @param interval 线段采样间隔 m为单位
+ * @return 从折线起点至终点剖面线的海拔高度数组
+ */
+export function profileAnalyse(
+  viewer: Viewer,
+  polyline: Cartesian3[],
+  interval: number,
+) {
+  let result: ProfileResult = { distanceArray: [], elevationArray: [] }
+  let temp_dis = 0 //每两点之间的距离
+  for (let i = 0; i <= polyline.length - 2; i++) {
+    let temp = elevationProfile(viewer, polyline[i], polyline[i + 1], interval)
+    result.elevationArray = result.elevationArray.concat(temp.elevationArray)
+    temp.distanceArray.forEach((distance) => {
+      result.distanceArray.push(distance + temp_dis)
+    })
+    if (temp.distanceArray.length > 0) {
+      temp_dis += temp.distanceArray[temp.distanceArray.length - 1]
+    }
+  }
+  return result
+}
+
+/**
+ * 折线段地形剖面分析数值计算（异步处理函数）
+ * @param viewer 地图Viewer
+ * @param route 航线
+ * @param interval 线段采样间隔 m为单位
+ * @return 从折线起点至终点剖面线的海拔高度数组
+ */
+export function profileAnalyse_promise(
+  viewer: Viewer,
+  route: Airline,
+  interval: number,
+) {
+  return new Promise((resolve) => {
+    let result: ProfileResult = { distanceArray: [], elevationArray: [] }
+    let polyline = []
+    //航线转为坐标点数组
+    route.points.forEach((point) => {
+      polyline.push(Cartesian3.fromDegrees(point.lon, point.lat, point.alt))
+    })
+    let temp_dis = 0 //每两点之间的距离
+    for (let i = 0; i <= polyline.length - 2; i++) {
+      let temp = elevationProfile(
+        viewer,
+        polyline[i],
+        polyline[i + 1],
+        interval,
+      )
+      result.elevationArray = result.elevationArray.concat(temp.elevationArray)
+      temp.distanceArray.forEach((distance) => {
+        result.distanceArray.push(distance + temp_dis)
+      })
+      if (temp.distanceArray.length > 0) {
+        temp_dis += temp.distanceArray[temp.distanceArray.length - 1]
+      }
+    }
+    resolve(result)
+  })
+}
+
+/**
+ * 两点间通视分析（基于最大斜率的算法） <br>
+ * 返回值：通视为true，不通视为false，异常返回undefined
+ * @param viewer 地图
+ * @param viewpoint 视点
+ * @param target 目标点
+ * @param h1 视点地面挂高 m
+ * @param h2 目标点地面挂高 m
+ * @param curvature 是否考虑地球曲率
+ * @param breakNum 采样间隔，默认为100个断点
+ */
+export function visibilityAnalyse(
+  viewer: Viewer,
+  viewpoint: Cartesian3,
+  target: Cartesian3,
+  h1: number,
+  h2: number,
+  curvature: boolean,
+  breakNum = 100,
+) {
+  // 获取视点高度和目标点高度
+  let viewpointH = getElevation(viewer, viewpoint) + h1
+  let targetH = getElevation(viewer, target) + h2
+  if (viewpointH === -9999.2024 + h1) {
+    console.log('无法获取视点海拔高度！')
+    return undefined
+  }
+  if (targetH === -9999.2024 + h2) {
+    console.log('无法获取目标点海拔高度！')
+    return undefined
+  }
+  // 计算首尾点距离 m
+  let totalLen = getDistance(viewpoint, target) * 1000
+  // 计算首尾点斜率
+  let visibleK = (targetH - viewpointH) / totalLen
+
+  // 逐个计算断点与视点的斜率
+  for (let i = 1; i <= breakNum; i++) {
+    let breakP = Cartesian3.lerp(
+      viewpoint,
+      target,
+      i / breakNum,
+      new Cartesian3(),
+    )
+    let breakPH = getElevation(viewer, breakP) //断点海拔
+    if (breakPH == -9999.2024) return false
+
+    let breakPDis = Math.floor(getDistance(viewpoint, breakP) * 1000) //断点与视点的距离
+    // 计算断点与视点的斜率
+    let breakPK = (breakPH - viewpointH) / breakPDis
+    if (breakPK > visibleK) {
+      return false
+    }
+  }
+
+  if (curvature) {
+    let Rmax = 2.898 * (Math.sqrt(h1) + Math.sqrt(h2))
+    if (Rmax < totalLen / 1000.0) return false
+  }
+  return true
+}
+
+/**
+ * 两点间通视分析（基于最大斜率的算法） <br>
+ * 返回值：通视为true，不通视为false
+ * @param profile   剖面分析的结果
+ * @param curvature 是否考虑地球曲率
+ * @param startExtraH 视点地面挂高 m
+ * @param endExtraH   目标点地面挂高 m
+ */
+export function visibilityAnalyse2(
+  profile: ProfileResult,
+  curvature: boolean,
+  startExtraH: number,
+  endExtraH: number,
+) {
+  // 计算起点、终点的高度（海拔+挂高）m
+  let startH = profile.elevationArray[0] + startExtraH
+  let endH = profile.elevationArray.at(-1) + endExtraH
+  // 计算首尾点斜率
+  let visibleK = (endH - startH) / profile.distanceArray.at(-1)
+  // 逐个计算断点与视点的斜率
+  for (let i = 1; i < profile.elevationArray.length; i++) {
+    let breakPK =
+      (profile.elevationArray[i] - startH) / profile.distanceArray[i]
+    if (breakPK > visibleK) return false
+  }
+
+  if (curvature) {
+    let coefficient: number = 3.57 //考虑大气折射 4.12， 公司文件给出 2.898
+    let Rmax = coefficient * (Math.sqrt(startExtraH) + Math.sqrt(endExtraH))
+    if (Rmax < profile.distanceArray.at(-1) / 1000.0) return false
+  }
+  return true
+}
+
+/**
+ *  绘制地形剖面折线图
+ * @param xData x数组
+ * @param yData y数组，以面积线绘制
+ */
+export function drawEchartsProfileAnalyse(xData: number[], yData: number[]) {
+  let myChart = echarts.init(document.getElementById('profileEChart'))
+  // 绘制图表
+  myChart.setOption({
+    legend: {
+      show: true,
+      type: 'plain',
+      top: '5%',
+      data: [
+        {
+          name: 'groundLine',
+          itemStyle: 'inherit',
+          lineStyle: 'inherit',
+        },
+      ],
+    },
+    tooltip: {
+      show: true,
+      trigger: 'axis',
+      axisPointer: {
+        type: 'cross',
+      },
+      formatter: '地表高度: {c0}',
+    },
+    xAxis: {
+      data: xData,
+      name: '距离/米',
+      nameTextStyle: {
+        fontWeight: 'bolder',
+        fontSize: 14,
+      },
+      nameLocation: 'end',
+      axisLine: {
+        onZero: false,
+        show: true, // 是否显示坐标轴轴线
+        symbol: ['none', 'arrow'],
+        symbolSize: [7, 10],
+      },
+      axisLabel: {
+        formatter: '{value}',
+        margin: 5,
+      },
+      axisTick: {
+        show: true, // 是否显示坐标轴刻度
+        inside: true, // 坐标轴刻度是否朝内，默认朝外
+        alignWithLabel: true,
+        lineStyle: {
+          color: '#000000', //刻度线的颜色
+          type: 'solid', //坐标轴线线的类型（solid实线类型；dashed虚线类型；dotted点状类型）
+        },
+      },
+    },
+    yAxis: {
+      type: 'value',
+      name: '高度/米',
+      nameTextStyle: {
+        fontWeight: 'bolder',
+        fontSize: 14,
+      },
+      nameLocation: 'end',
+      position: 'left',
+      axisLabel: {
+        formatter: '{value}',
+      },
+      axisLine: {
+        show: true,
+        symbol: ['none', 'arrow'],
+        symbolSize: [7, 10],
+      },
+    },
+    series: [
+      {
+        name: 'groundLine',
+        type: 'line',
+        data: yData,
+        areaStyle: {
+          color: '#37a5fb',
+          opacity: 0.5,
+        },
+      },
+    ],
+  })
+}
+
+/**
+ *  绘制地形碰撞检测剖面图
+ * @param myChart ECharts对象
+ * @param xData x数组
+ * @param yData y数组，以面积线绘制
+ * @param height 水平辅助线的高度
+ * @param max_distance 预先探测距离
+ */
+export function drawEcharts_CollisionDetection(
+  myChart: EChartsType,
+  xData: number[],
+  yData: number[],
+  height: number,
+  max_distance: number,
+) {
+  // 绘制图表
+  myChart.setOption(
+    {
+      /** 配置图标离容器上下左右的距离 */
+      grid: {
+        top: '20%',
+        right: '5%',
+        left: '10%',
+        bottom: '12%',
+      },
+      legend: {
+        show: true,
+        type: 'plain',
+        top: '5%',
+        data: [
+          {
+            name: '地形',
+            itemStyle: 'inherit',
+            lineStyle: 'inherit',
+          },
+          {
+            //视线图例
+            name: '飞机高度',
+            lineStyle: {
+              type: 'dotted',
+              width: 3,
+              color: '#f8364d',
+            },
+            itemStyle: {
+              fontSize: 18,
+            },
+          },
+        ],
+      },
+      tooltip: {
+        show: true,
+        trigger: 'axis',
+        axisPointer: {
+          type: 'cross',
+        },
+        formatter: '地表高度: {c0}',
+      },
+      xAxis: {
+        max: Math.ceil(max_distance).toString(),
+        data: xData,
+        nameTextStyle: {
+          fontWeight: 'bolder',
+          fontSize: 14,
+        },
+        nameLocation: 'bottom',
+        axisLine: {
+          onZero: false,
+          show: true, // 是否显示坐标轴轴线
+          symbol: ['none', 'arrow'],
+          symbolSize: [7, 10],
+        },
+        axisLabel: {
+          formatter: '{value} m',
+          margin: 5,
+        },
+        axisTick: {
+          show: true, // 是否显示坐标轴刻度
+          inside: true, // 坐标轴刻度是否朝内，默认朝外
+          alignWithLabel: true,
+          lineStyle: {
+            color: '#000000', //刻度线的颜色
+            type: 'solid', //坐标轴线线的类型（solid实线类型；dashed虚线类型；dotted点状类型）
+          },
+        },
+      },
+      yAxis: {
+        type: 'value',
+        name: '高度/米',
+        max: (value: any) => {
+          return Math.floor(Math.max(value.max, height) * 1.01)
+        },
+        min: (value: any) => {
+          return Math.floor(value.min * 0.99)
+        },
+        nameTextStyle: {
+          fontWeight: 'bolder',
+          fontSize: 14,
+        },
+        nameLocation: 'end',
+        position: 'left',
+        axisLabel: {
+          formatter: '{value}',
+        },
+        axisLine: {
+          show: true,
+          symbol: ['none', 'arrow'],
+          symbolSize: [7, 10],
+        },
+      },
+      series: [
+        {
+          name: '地形',
+          type: 'line',
+          data: yData,
+          areaStyle: {
+            color: '#37a5fb',
+            opacity: 0.5,
+          },
+          markLine: {
+            name: '飞机高度',
+            data: [
+              {
+                yAxis: height.toString(),
+                itemStyle: {
+                  normal: { color: '#c60c30' },
+                },
+              },
+            ],
+            symbol: ['circle', 'arrow'],
+            label: {
+              formatter: '飞机高度',
+              show: true,
+              position: 'middle',
+              fontSize: 15,
+              fontWeight: 'bold',
+              color: '#e73d3d',
+            },
+            lineStyle: {
+              //标注线样式
+              type: 'dashed',
+              color: 'red',
+              width: 10,
+            },
+          },
+        },
+        {
+          type: 'line',
+          symbol: 'none',
+          name: '飞机高度',
+          color: 'transparent',
+        },
+      ],
+    },
+    false,
+  )
+}
+
+/**
+ *  绘制（更新）地形碰撞检测剖面图
+ * @param myChart ECharts对象
+ * @param xData x数组
+ * @param yData y数组，以面积线绘制
+ * @param yData2 y数组2，以折线绘制
+ */
+export function drawEcharts_CollisionDetection2(
+  myChart: EChartsType,
+  xData: number[],
+  yData: number[],
+  yData2: number[],
+) {
+  // 绘制图表
+  myChart.setOption(
+    {
+      /** 配置图标离容器上下左右的距离 */
+      grid: {
+        top: '20%',
+        right: '5%',
+        left: '10%',
+        bottom: '12%',
+      },
+      legend: {
+        show: true,
+        type: 'plain',
+        top: '5%',
+        data: [
+          {
+            name: '地表高度',
+            itemStyle: 'inherit',
+            lineStyle: 'inherit',
+          },
+          {
+            name: '飞机高度',
+            lineStyle: 'inherit',
+          },
+        ],
+      },
+      tooltip: {
+        show: true,
+        trigger: 'axis',
+        axisPointer: {
+          type: 'cross',
+        },
+        formatter: '地表高度: {c0}<br>飞机高度: {c1}',
+      },
+      xAxis: {
+        data: xData,
+        // name: '距离/米',
+        nameTextStyle: {
+          fontWeight: 'bolder',
+          fontSize: 14,
+        },
+        nameLocation: 'end',
+        axisLine: {
+          onZero: false,
+          show: true, // 是否显示坐标轴轴线
+          symbol: ['none', 'arrow'],
+          symbolSize: [7, 10],
+        },
+        axisLabel: {
+          formatter: '{value}',
+          margin: 5,
+        },
+        axisTick: {
+          show: true, // 是否显示坐标轴刻度
+          inside: true, // 坐标轴刻度是否朝内，默认朝外
+          alignWithLabel: true,
+          lineStyle: {
+            color: '#000000', //刻度线的颜色
+            type: 'solid', //坐标轴线线的类型（solid实线类型；dashed虚线类型；dotted点状类型）
+          },
+        },
+      },
+      yAxis: {
+        max: (value: any) => {
+          return Math.floor(value.max * 1.01)
+        },
+        min: (value: any) => {
+          return Math.floor(value.min * 0.99)
+        },
+        type: 'value',
+        name: '高度/米',
+        nameTextStyle: {
+          fontWeight: 'bolder',
+          fontSize: 14,
+        },
+        nameLocation: 'end',
+        position: 'left',
+        axisLabel: {
+          formatter: '{value}',
+        },
+        axisLine: {
+          show: true,
+          symbol: ['none', 'arrow'],
+          symbolSize: [7, 10],
+        },
+      },
+      series: [
+        {
+          name: '地表高度',
+          type: 'line',
+          data: yData,
+          areaStyle: {
+            color: '#37a5fb',
+            opacity: 0.5,
+          },
+        },
+        {
+          name: '飞机高度',
+          type: 'line',
+          symbol: 'none',
+          color: 'red',
+          data: yData2,
+        },
+      ],
+    },
+    false,
+  )
+}
+
+/**
+ *  绘制通视分析图 面积线和直线
+ * @param xData x数组，地面距离
+ * @param yData y数组，以面积线绘制
+ * @param startHeight 视线起始点高度（包含地面挂高）
+ * @param endHeight  视线终点高度（包含地面挂高）
+ */
+export const drawEchartsVisibility = (
+  xData: number[],
+  yData: number[],
+  startHeight: number,
+  endHeight: number,
+) => {
+  let myChart = echarts.init(document.getElementById('profileEChart')) //Echarts-UnitTest
+  // 绘制图表
+  myChart.setOption({
+    legend: {
+      show: true,
+      type: 'plain',
+      top: '7%',
+      data: [
+        {
+          //地形剖面图例
+          name: '剖面线',
+          itemStyle: {
+            fontSize: 18,
+          },
+          lineStyle: 'inherit',
+        },
+        {
+          //视线图例
+          name: '视线',
+          lineStyle: {
+            type: 'dotted',
+            width: 3,
+            color: '#f8364d',
+          },
+          itemStyle: {
+            fontSize: 18,
+          },
+        },
+      ],
+      selectedMode: false, //图例选择模式关闭
+    },
+    tooltip: {
+      show: true,
+      trigger: 'axis',
+      axisPointer: {
+        type: 'cross',
+      },
+      formatter: '地表高度: {c0}',
+    },
+    xAxis: {
+      boundaryGap: false,
+      max: (value: any) => {
+        return value.max * 1.01
+      },
+      min: 0,
+      data: xData,
+      name: '距离/m',
+      nameTextStyle: {
+        fontWeight: 'bolder',
+        fontSize: 14,
+      },
+      nameLocation: 'end',
+      axisLine: {
+        onZero: false,
+        show: true, // 是否显示坐标轴轴线
+        symbol: ['none', 'arrow'],
+        symbolSize: [7, 10],
+      },
+      axisLabel: {
+        formatter: '{value}',
+        margin: 5,
+      },
+      axisTick: {
+        show: true, // 是否显示坐标轴刻度
+        inside: true, // 坐标轴刻度是否朝内，默认朝外
+        alignWithLabel: true,
+        lineStyle: {
+          color: '#000000', //刻度线的颜色
+          type: 'solid', //坐标轴线线的类型（solid实线类型；dashed虚线类型；dotted点状类型）
+        },
+      },
+    },
+    yAxis: {
+      max: (value: any) => {
+        return Math.floor(Math.max(value.max, startHeight, endHeight) * 1.01)
+      },
+      min: (value: any) => {
+        return Math.floor(Math.min(value.min, startHeight, endHeight) * 0.99)
+      },
+      type: 'value',
+      name: '高度/ m',
+      nameTextStyle: {
+        fontWeight: 'bolder',
+        fontSize: 14,
+      },
+      nameLocation: 'end',
+      position: 'left',
+      axisLabel: {
+        formatter: '{value}',
+      },
+      axisLine: {
+        show: true,
+        symbol: ['none', 'arrow'],
+        symbolSize: [7, 10],
+      },
+    },
+    series: [
+      {
+        name: '剖面线',
+        type: 'line',
+        data: yData,
+        areaStyle: {
+          color: '#37a5fb',
+          opacity: 0.5,
+        },
+        markLine: {
+          data: [
+            [
+              { coord: ['0', startHeight.toString()] },
+              { coord: [xData.at(-1)?.toString(), endHeight.toString()] },
+              // Markline中的坐标点必须为string，否则异常
+            ],
+          ],
+          symbol: ['circle', 'arrow'],
+          label: {
+            formatter: '模 拟 视 线',
+            show: true,
+            position: 'middle',
+            fontSize: 15,
+            fontWeight: 'bold',
+            color: '#e73d3d',
+          },
+          lineStyle: {
+            //标注线样式
+            type: 'dashed',
+            color: 'red',
+            width: 10,
+          },
+        },
+      },
+      {
+        /* 视线的series */ type: 'line',
+        symbol: 'none',
+        name: '视线',
+        color: 'transparent',
+      },
+    ],
+  })
+}
+
+/**
+ *  航线管理页面图表
+ * @param myChart
+ * @param xData 地形距离数组，地面距离
+ * @param yData 地形高度数组，以面积线绘制
+ * @param routeArr 航点序号数组
+ * @param routeHeight  航线高度数组，以折线绘制
+ */
+export const drawEcharts_RouteDetection = (
+  myChart: EChartsType,
+  xData: number[],
+  yData: number[],
+  routeArr: number[],
+  routeHeight: number[],
+) => {
+  // 绘制图表
+  myChart.setOption({
+    backgroundColor: '#101014',
+    grid: {
+      containLabel: true,
+      top: '15%',
+      right: '6%',
+      left: ' 5%',
+      bottom: '5%',
+    },
+    legend: {
+      show: true,
+      type: 'plain',
+      top: '7%',
+      right: '5%',
+      data: [
+        {
+          //地形剖面图例
+          name: '地形剖面',
+          itemStyle: { fontSize: 14 },
+          lineStyle: 'inherit',
+        },
+        {
+          //视线图例
+          name: '航线高度',
+          lineStyle: 'inherit',
+          itemStyle: { fontSize: 14 },
+        },
+      ],
+      selectedMode: true, //图例选择模式
+      inactiveColor: '#626161',
+    },
+    tooltip: {
+      show: true,
+      appendToBody: true,
+      trigger: 'axis',
+      axisPointer: {
+        type: 'cross',
+      },
+      formatter: '地表高度: {c0}m<br> 航点高度：{c1}m',
+    },
+    xAxis: [
+      {
+        boundaryGap: false,
+        min: 0,
+        data: xData,
+        nameTextStyle: {
+          fontWeight: 'bolder',
+          fontSize: 12,
+        },
+        axisLine: {
+          onZero: false,
+          show: true, // 是否显示坐标轴轴线
+          symbol: ['none', 'arrow'],
+          symbolSize: [7, 10],
+        },
+        axisLabel: {
+          formatter: '{value}',
+          margin: 4,
+        },
+      },
+      {
+        position: 'bottom',
+        boundaryGap: false,
+        data: routeArr,
+        offset: 30,
+        axisTick: { show: true, inside: true }, // 是否显示坐标轴刻度
+        axisLine: {
+          onZero: false,
+          symbol: ['none', 'arrow'],
+          symbolSize: [7, 10],
+        },
+        axisLabel: {
+          formatter: '航点{value}',
+          margin: 4,
+        },
+      },
+    ],
+    yAxis: {
+      type: 'value',
+      name: '高度/m',
+      nameTextStyle: {
+        fontSize: 12,
+      },
+      nameLocation: 'end',
+      position: 'left',
+      axisLabel: {
+        formatter: '{value}',
+        margin: 4,
+      },
+      axisLine: {
+        show: true,
+        symbol: ['none', 'arrow'],
+        symbolSize: [7, 10],
+      },
+    },
+    series: [
+      {
+        name: '地形剖面',
+        xAxisIndex: 0,
+        type: 'line',
+        data: yData,
+        areaStyle: {
+          color: '#37a5fb',
+          opacity: 0.5,
+        },
+      },
+      {
+        name: '航线高度',
+        xAxisIndex: 1,
+        type: 'line',
+        data: routeHeight,
+        lineStyle: {
+          color: '#8ae73d',
+        },
+      },
+    ],
+  })
+}

@@ -1,0 +1,52 @@
+<!--
+ * @Author: cbwu 504-wuchengbo@htsdfp.com
+ * @Date: 2024-03-07 09:19:24
+ * @LastEditors: cbwu
+ * @LastEditTime: 2024-04-02 13:19:05
+ * @Description: 
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vite + Vue + TS</title>
+    <style>
+      * {
+        padding: 0;
+        margin: 0;
+      }
+    </style>
+    <!-- 天地图三维地形服务接入 -->
+    <script
+      type="text/javascript"
+      cesium="true"
+      src="/Cesium/Cesium.js"
+    ></script>
+    <script
+      type="text/javascript"
+      cesium="true"
+      src="https://api.tianditu.gov.cn/cdn/plugins/cesium/Cesium_ext_min.js"
+    ></script>
+    <script
+      type="text/javascript"
+      cesium="true"
+      src="https://api.tianditu.gov.cn/cdn/plugins/cesium/long.min.js"
+    ></script>
+    <script
+      type="text/javascript"
+      cesium="true"
+      src="https://api.tianditu.gov.cn/cdn/plugins/cesium/bytebuffer.min.js"
+    ></script>
+    <script
+      type="text/javascript"
+      cesium="true"
+      src="https://api.tianditu.gov.cn/cdn/plugins/cesium/protobuf.min.js"
+    ></script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
