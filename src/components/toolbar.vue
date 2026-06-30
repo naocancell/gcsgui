@@ -706,17 +706,17 @@ function startDrawRoute(routeParams) {
         <span>UDP设置</span>
       </n-tooltip>
 
-      <!-- 点击显示飞机实时位置 -->
-       <!-- <n-tooltip placement="bottom" trigger="hover">
+      <!-- 模拟uavinfo -->
+       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
-          <n-button tertiary type="warning" @click="showPlanePosition">
+          <n-button tertiary type="warning" @click="uavStore.toggleMockUavInfoService">
             <template #icon>
               <n-icon><Airplane /></n-icon>
             </template>
           </n-button>
         </template>
         <span>飞机实时位置</span>
-      </n-tooltip> -->
+      </n-tooltip>
        <!-- 通视和剖面 -->
       <n-popselect
         v-model:value="SceneValue"
