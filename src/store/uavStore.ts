@@ -265,32 +265,21 @@ export const useUavStore = defineStore('uav', () => {
     isServiceRunning.value = true
 
     mockUavTimer = setInterval(() => {
-      mockUavList[0].longitude += 0.0008
-      mockUavList[0].latitude += 0.0002
+      mockUavList[0].longitude += 0.008
+      mockUavList[0].latitude += 0.002
       mockUavList[0].groundSpeedDirection = 90
       mockUavList[0].rollAngle = 3
       mockUavList[0].distanceNext = Math.max(0, mockUavList[0].distanceNext - 25)
 
-      mockUavList[1].longitude += 0.0005
-      mockUavList[1].latitude += 0.0005
+      mockUavList[1].longitude += 0.005
+      mockUavList[1].latitude += 0.005
       mockUavList[1].groundSpeedDirection = 45
       mockUavList[1].rollAngle = -4
       mockUavList[1].distanceNext = Math.max(0, mockUavList[1].distanceNext - 30)
 
-      if (mockUavList[0].longitude > 111.2) {
-        mockUavList[0].longitude = 110.3312
-        mockUavList[0].latitude = 20.0311
-        mockUavList[0].distanceNext = 5000
-      }
-
-      if (mockUavList[1].longitude > 110.5 || mockUavList[1].latitude > 19.2) {
-        mockUavList[1].longitude = 109.5119
-        mockUavList[1].latitude = 18.2528
-        mockUavList[1].distanceNext = 8000
-      }
 
       updateUavInfoList(mockUavList.map((item) => ({ ...item })))
-    }, 1000)
+    }, 100)
 
     console.log('已启动 UAVInfo 模拟数据服务')
   }

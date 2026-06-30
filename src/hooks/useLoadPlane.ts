@@ -45,6 +45,9 @@ export function useLoadPlane() {
   // 动态尾巴保留的点数，到这个数量就把这段封存成静态历史段
   const TAIL_SIZE = 50;
 
+  // 冻结后动态尾巴与历史段的重叠点数，保证接缝连续不闪
+const TAIL_OVERLAP = 10;
+
   //每架飞机最后一次收到数据的时间戳，判断飞机是否离线
   const lastSeenMap = new Map<string, number>();
 
@@ -75,67 +78,70 @@ export function useLoadPlane() {
    * 2. 尾巴满了就封存成静态历史段，并保留最后一点接上下一段
    */
   const updateTrail = (viewer: Cesium.Viewer, plane: PlaneState) => {
-    const key = plane.id;
+  const key = plane.id;
 
-    // 取出或初始化该飞机的动态尾巴数组
-    let tail = tailPositions.get(key);
-    if (!tail) {
-      tail = [];
-      tailPositions.set(key, tail);
+  // 取出或初始化该飞机的动态尾巴数组
+  let tail = tailPositions.get(key);
+  if (!tail) {
+    tail = [];
+    tailPositions.set(key, tail);
+  }
+
+  // 当前点的世界坐标
+  const pos = Cesium.Cartesian3.fromDegrees(plane.lon, plane.lat, plane.alt);
+
+  // 和上一个点几乎重合就不重复添加，避免静止时堆积大量点
+  const last = tail[tail.length - 1];
+  if (last && Cesium.Cartesian3.equalsEpsilon(last, pos, Cesium.Math.EPSILON7)) {
+    return;
+  }
+  tail.push(pos);
+
+  // 动态尾巴实体只创建一次，positions 用 CallbackProperty 每帧读取最新尾巴
+  if (!tailEntities.has(key)) {
+    const entity = viewer.entities.add({
+      polyline: {
+        positions: new Cesium.CallbackProperty(
+          () => tailPositions.get(key) ?? [],
+          false
+        ),
+        width: 2,
+        material: Cesium.Color.YELLOW,
+        clampToGround: false,
+      },
+    });
+    tailEntities.set(key, entity);
+  }
+
+  // 尾巴满了，封存成历史段
+  if (tail.length >= TAIL_SIZE) {
+    // 固定快照：创建后引用不再变化
+    const frozenPositions = tail.slice();
+
+    const frozen = viewer.entities.add({
+      polyline: {
+        // 关键：用 CallbackProperty 返回固定引用，
+        // 走和动态尾巴一样的“立即渲染”路径，避免静态几何构建的延迟（闪烁根因）
+        positions: new Cesium.CallbackProperty(() => frozenPositions, false),
+        width: 2,
+        material: Cesium.Color.YELLOW,
+        clampToGround: false,
+      },
+    });
+
+    let list = frozenTrails.get(key);
+    if (!list) {
+      list = [];
+      frozenTrails.set(key, list);
     }
+    list.push(frozen);
 
-    // 当前点的世界坐标
-    const pos = Cesium.Cartesian3.fromDegrees(plane.lon, plane.lat, plane.alt);
+    // 动态尾巴保留最近 TAIL_OVERLAP 个点，与历史段末尾重叠，接缝连续不断线
+    tailPositions.set(key, tail.slice(-TAIL_OVERLAP));
+  }
 
-    // 和上一个点几乎重合就不重复添加，避免静止时堆积大量点
-    const last = tail[tail.length - 1];
-    if (last && Cesium.Cartesian3.equalsEpsilon(last, pos, Cesium.Math.EPSILON7)) {
-      return;
-    }
-    tail.push(pos);
-
-    // 动态尾巴实体只创建一次，positions 用 CallbackProperty 每帧读取最新尾巴
-    if (!tailEntities.has(key)) {
-      const entity = viewer.entities.add({
-        polyline: {
-          // 第二个参数 false 表示非常量，每帧重新读取
-          positions: new Cesium.CallbackProperty(
-            () => tailPositions.get(key) ?? [],
-            false
-          ),
-          width: 2,
-          material: Cesium.Color.YELLOW,
-          clampToGround: false,
-        },
-      });
-      tailEntities.set(key, entity);
-    }
-
-    // 尾巴满了，封存成一条静态历史段（普通数组，画完不再每帧重算）
-    if (tail.length >= TAIL_SIZE) {
-      const frozen = viewer.entities.add({
-        polyline: {
-          // 注意：这里传普通数组，不是 CallbackProperty
-          positions: tail.slice(),
-          width: 2,
-          material: Cesium.Color.YELLOW,
-          clampToGround: false,
-        },
-      });
-
-      let list = frozenTrails.get(key);
-      if (!list) {
-        list = [];
-        frozenTrails.set(key, list);
-      }
-      list.push(frozen);
-
-      // 尾巴重置，保留最后一点作为下一段起点，保证两段首尾相接、视觉连续
-      tailPositions.set(key, [pos]);
-    }
-
-    viewer.scene.requestRender();
-  };
+  viewer.scene.requestRender();
+};
 
   // 清理某架飞机的所有航线资源（动态尾巴 + 所有历史段）
   const removeTrail = (viewer: Cesium.Viewer, key: string) => {
