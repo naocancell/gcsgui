@@ -143,7 +143,7 @@ function getTimesInterval() {
   nowTime.value = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }
 
-// 航线选择回调
+// 航线选择,选择航线后才真正绘制了实体
 function checkRoute(key: number | string) {
   new Promise((resolve, reject) => {
     selectedRoute.value = routeStore.flyRoute.filter(

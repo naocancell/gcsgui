@@ -17,6 +17,7 @@ export function normalizeUAVInfo(uav: UAVInfo): PlaneState {
     pitch: uav.pitchAngle,
     roll: uav.rollAngle,
     raw: uav,
+    showTrail: true,//显示轨迹线
   };
 }
 
@@ -33,5 +34,6 @@ export function normalizeFP95(item: FP95Frame94Sub1): PlaneState {
     pitch: 0,
     roll: 0,
     raw: item,
+    showTrail: false,//不显示轨迹线
   };
 }

@@ -26,6 +26,24 @@ export function useLoadPlane() {
    * 每帧渲染时 updateModelMatrix 会读取这个数据
   */
   const targetMap = new Map<string, PlaneState>();
+/**
+   * 动态尾巴的点（世界坐标）
+   * 只有最近 TAIL_SIZE 个点放这里，CallbackProperty 每帧读取，
+   * 所以无论总轨迹多长，每帧重算的几何体永远只有这一小段
+   */
+  const tailPositions = new Map<string, Cesium.Cartesian3[]>();
+
+  // 每架飞机的动态尾巴实体（CallbackProperty polyline），只创建一次
+  const tailEntities = new Map<string, Cesium.Entity>();
+
+  /**
+   * 已经"封存"的历史段实体列表
+   * 每段是一条静态 polyline，画完就不再参与每帧重算
+   */
+  const frozenTrails = new Map<string, Cesium.Entity[]>();
+
+  // 动态尾巴保留的点数，到这个数量就把这段封存成静态历史段
+  const TAIL_SIZE = 50;
 
   //每架飞机最后一次收到数据的时间戳，判断飞机是否离线
   const lastSeenMap = new Map<string, number>();
@@ -50,6 +68,96 @@ export function useLoadPlane() {
     // 根据位置和姿态生成模型矩阵
     return Cesium.Transforms.headingPitchRollToFixedFrame(position, hpr);
   };
+
+  /**
+   * 更新某架飞机的航线
+   * 1. 新点 push 进动态尾巴
+   * 2. 尾巴满了就封存成静态历史段，并保留最后一点接上下一段
+   */
+  const updateTrail = (viewer: Cesium.Viewer, plane: PlaneState) => {
+    const key = plane.id;
+
+    // 取出或初始化该飞机的动态尾巴数组
+    let tail = tailPositions.get(key);
+    if (!tail) {
+      tail = [];
+      tailPositions.set(key, tail);
+    }
+
+    // 当前点的世界坐标
+    const pos = Cesium.Cartesian3.fromDegrees(plane.lon, plane.lat, plane.alt);
+
+    // 和上一个点几乎重合就不重复添加，避免静止时堆积大量点
+    const last = tail[tail.length - 1];
+    if (last && Cesium.Cartesian3.equalsEpsilon(last, pos, Cesium.Math.EPSILON7)) {
+      return;
+    }
+    tail.push(pos);
+
+    // 动态尾巴实体只创建一次，positions 用 CallbackProperty 每帧读取最新尾巴
+    if (!tailEntities.has(key)) {
+      const entity = viewer.entities.add({
+        polyline: {
+          // 第二个参数 false 表示非常量，每帧重新读取
+          positions: new Cesium.CallbackProperty(
+            () => tailPositions.get(key) ?? [],
+            false
+          ),
+          width: 2,
+          material: Cesium.Color.YELLOW,
+          clampToGround: false,
+        },
+      });
+      tailEntities.set(key, entity);
+    }
+
+    // 尾巴满了，封存成一条静态历史段（普通数组，画完不再每帧重算）
+    if (tail.length >= TAIL_SIZE) {
+      const frozen = viewer.entities.add({
+        polyline: {
+          // 注意：这里传普通数组，不是 CallbackProperty
+          positions: tail.slice(),
+          width: 2,
+          material: Cesium.Color.YELLOW,
+          clampToGround: false,
+        },
+      });
+
+      let list = frozenTrails.get(key);
+      if (!list) {
+        list = [];
+        frozenTrails.set(key, list);
+      }
+      list.push(frozen);
+
+      // 尾巴重置，保留最后一点作为下一段起点，保证两段首尾相接、视觉连续
+      tailPositions.set(key, [pos]);
+    }
+
+    viewer.scene.requestRender();
+  };
+
+  // 清理某架飞机的所有航线资源（动态尾巴 + 所有历史段）
+  const removeTrail = (viewer: Cesium.Viewer, key: string) => {
+    // 移除动态尾巴实体
+    const tailEntity = tailEntities.get(key);
+    if (tailEntity) {
+      viewer.entities.remove(tailEntity);
+      tailEntities.delete(key);
+    }
+
+    // 移除所有冻结历史段实体
+    const list = frozenTrails.get(key);
+    if (list) {
+      for (const entity of list) {
+        viewer.entities.remove(entity);
+      }
+      frozenTrails.delete(key);
+    }
+
+    tailPositions.delete(key);
+  };
+
   //移除指定飞机函数
    const removePlane = (viewer: Cesium.Viewer, key: string) => {
     const model = planeMap.get(key);
@@ -58,6 +166,9 @@ export function useLoadPlane() {
     if (model) {
       viewer.scene.primitives.remove(model);
     }
+    // 负责连航线一起移除
+    removeTrail(viewer, key);
+
     // 清理该飞机缓存
     planeMap.delete(key);
     loadingSet.delete(key);
@@ -144,6 +255,11 @@ export function useLoadPlane() {
 
       // 如果该飞机模型还没加载，则开始加载
       loadPlaneIfNeeded(viewer, plane);
+
+      // 只有需要显示航线的飞机（UAVInfo 类型）才更新航线
+      if (plane.showTrail) {
+        updateTrail(viewer, plane);
+      }
     }
 
      //清理当前数据中已经不存在的飞机
@@ -240,12 +356,26 @@ export function useLoadPlane() {
       viewer.scene.primitives.remove(model);
     });
 
+    // 移除所有动态尾巴实体
+    tailEntities.forEach((entity) => {
+      viewer.entities.remove(entity);
+    });
+
+    // 移除所有冻结历史段实体
+    frozenTrails.forEach((list) => {
+      list.forEach((entity) => {
+        viewer.entities.remove(entity);
+      });
+    });
+
     // 清空所有缓存
     planeMap.clear();
     loadingSet.clear();
     targetMap.clear();
     lastSeenMap.clear();
-
+    tailPositions.clear();
+    tailEntities.clear();
+    frozenTrails.clear();
     // 重置解绑函数，避免重复调用
     stopWatch = null;
     removePreUpdate = null;

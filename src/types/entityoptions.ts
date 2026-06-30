@@ -133,6 +133,7 @@ export interface UAVInfo {
     pitch?: number;// 俯仰角
     roll?: number;// 滚转角
     raw: UAVInfo | FP95Frame94Sub1; // 保留原始数据，点击时用
+    showTrail?: boolean;// 是否显示轨迹
   }
 
 

@@ -70,5 +70,57 @@ export const useLayerStore = defineStore('LayerStore', {
       )
       this.navi.activeDesignRoute = found ?? null
     },
+        // 置顶
+    moveLayerTop(lId: string) {
+      const index = this.Layers.findIndex((item) => item.lId === lId);
+
+      // 没找到，或者已经在最上面了
+      if (index <= 0) {
+        return;
+      }
+
+      const [layer] = this.Layers.splice(index, 1);
+      this.Layers.unshift(layer);
+    },
+
+    // 置底
+    moveLayerBottom(lId: string) {
+      const index = this.Layers.findIndex((item) => item.lId === lId);
+
+      // 没找到，或者已经在最下面了
+      if (index === -1 || index >= this.Layers.length - 1) {
+        return;
+      }
+
+      const [layer] = this.Layers.splice(index, 1);
+      this.Layers.push(layer);
+    },
+      // 上移一层
+    moveLayerUp(lId: string) {
+      const index = this.Layers.findIndex((item) => item.lId === lId);
+
+      // 没找到，或者已经在最上面了
+      if (index <= 0) {
+        return;
+      }
+
+      const temp = this.Layers[index - 1];
+      this.Layers[index - 1] = this.Layers[index];
+      this.Layers[index] = temp;
+    },
+
+    // 下移一层
+    moveLayerDown(lId: string) {
+      const index = this.Layers.findIndex((item) => item.lId === lId);
+
+      // 没找到，或者已经在最下面了
+      if (index === -1 || index >= this.Layers.length - 1) {
+        return;
+      }
+      
+      const temp = this.Layers[index + 1];
+      this.Layers[index + 1] = this.Layers[index];
+      this.Layers[index] = temp;
+    },
   },
 })

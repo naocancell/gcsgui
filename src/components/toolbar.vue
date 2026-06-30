@@ -557,14 +557,14 @@ function closeApp() {
  * @param routeParams 航线属性，type:{name: string,code: number,isOpen: bool,height: number,routePts: []}
  */
 function startDrawRoute(routeParams) {
-  showRouteModal.value = false
-  let drawLine = new RouteManageViewer(window.viewer)
-  drawLine.routeParams.isClose = routeParams.isClose
-  drawLine.routeParams.height = routeParams.height
+  showRouteModal.value = false// 关闭航线参数窗口
+  let drawLine = new RouteManageViewer(window.viewer)// 航线绘制类
+  drawLine.routeParams.isClose = routeParams.isClose//是否闭合
+  drawLine.routeParams.height = routeParams.height//高度
   drawLine
     .start()
     .then((result) => {
-      // result是经纬度坐标数组，需转换为 AirlinePoint数组
+      // result[0]是经纬度坐标数组，需转换为 AirlinePoint数组
       let AirlinePoints = []
       result[0].forEach((pt, index) => {
         let AirlinePoint = {
@@ -576,10 +576,10 @@ function startDrawRoute(routeParams) {
           speed: 0,
           nPt: index + 1,
         }
-        AirlinePoints.push(AirlinePoint)
+        AirlinePoints.push(AirlinePoint) //航点数组
       })
-      AirlinePoints.at(-1).ch2 = 0x01
-      // 航线加入store
+      AirlinePoints.at(-1).ch2 = 0x01 //最后一个航点的ch2字段设置未0x01
+      //这是航线 航线加入store
       let aRoute = {
         code: routeParams.code,
         PtNum: result[0].length,
@@ -599,20 +599,6 @@ function startDrawRoute(routeParams) {
     })
 }
 
-
-
-// 显示飞机实施的位置
-// const {init} = useLoadPlane();
-// const {start} = useUavEvent();
-// function showPlanePosition(){
-//   //模拟飞机位置
-//   //uavStore.startMock();
- 
-//   //  开始渲染监听
-//   init();
-//   //  开始接收后端数据
-//   // start();
-// }
 </script>
 
 <template>
@@ -640,6 +626,7 @@ function startDrawRoute(routeParams) {
         </template>
         <span>添加数据</span>
       </n-tooltip>
+      <!-- 地形分析 -->
       <n-dropdown
         :options="store.menuOptions.AnalyzeOptions"
         @select="handleAnalyseSelect"
@@ -650,7 +637,7 @@ function startDrawRoute(routeParams) {
           </template>
         </n-button>
       </n-dropdown>
-
+       <!-- 航线 -->
       <n-dropdown
         :options="store.menuOptions.EditOptions"
         @select="handleEditSelect"
@@ -662,6 +649,7 @@ function startDrawRoute(routeParams) {
           </template>
         </n-button>
       </n-dropdown>
+       <!-- 测量 -->
       <n-dropdown
         :options="store.menuOptions.MeasureOptions"
         @select="handleSelect"

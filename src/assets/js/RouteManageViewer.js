@@ -22,22 +22,23 @@ export default class RouteManageViewer {
    */
   addAirLine(line) {
     let res = this.viewer.entities.getById('航线' + line.unicode)
+    //是否已经绘制过
     if (res !== undefined) {
       return res
     }
-
-    let degreesArr = []
+    //绘制航线
+    let cartesianArr = []
     for (let i = 0; i < line.points.length; i++) {
-      let coord = new Cartesian3.fromDegrees(
+      let coord = Cartesian3.fromDegrees(
         line.points[i].lon,
         line.points[i].lat,
         line.points[i].alt,
       )
-      degreesArr.push(coord)
+      cartesianArr.push(coord)
     }
     if (line.isClose)
-      degreesArr.push(
-        new Cartesian3.fromDegrees(
+      cartesianArr.push(
+        Cartesian3.fromDegrees(
           line.points[0].lon,
           line.points[0].lat,
           line.points[0].alt,
@@ -48,14 +49,14 @@ export default class RouteManageViewer {
       name: line.name,
       id: '航线' + line.unicode,
       polyline: {
-        positions: degreesArr,
+        positions: cartesianArr,
         width: 3,
         material: Cesium.Color.ORANGE,
         clampToGround: false,
       },
     })
     this.viewer.entities.add(airlineEntity)
-    degreesArr.forEach((pt, index) => {
+    cartesianArr.forEach((pt, index) => {
       let vertexEntity = new Cesium.Entity({
         id: line.unicode + '-航点' + (index + 1),
         position: pt,
@@ -67,7 +68,7 @@ export default class RouteManageViewer {
           disableDepthTestDistance: 99000000,
         },
         label:
-          index === degreesArr.length - 1 && line.isClose
+          index === cartesianArr.length - 1 && line.isClose
             ? undefined
             : {
                 text: '航点 ' + (index + 1),
@@ -108,16 +109,16 @@ export default class RouteManageViewer {
   }
 
   // -----------------绘制航线相关功能--------------------------//
-  //开始绘制
+  //开始绘制 这个绘制的线和点是临时的  仅仅是负责把点数据收集出来() 
   start() {
     this.handler = new Cesium.ScreenSpaceEventHandler(this.viewer.scene.canvas)
-    this.viewer.scene.globe.depthTestAgainstTerrain = true
+    this.viewer.scene.globe.depthTestAgainstTerrain = true//开启深度检测
 
     //设置鼠标样式
     this.viewer._element.style.cursor = 'crosshair'
     this.viewer.enableCursorStyle = true
-    this.temPositions = []
-    this.positions = []
+    this.temPositions = []//临时的点
+    this.positions = []//保存点的数组
     return new Promise((resolve, reject) => {
       //注册鼠标事件
       //单击鼠标左键画点点击事件
@@ -141,10 +142,10 @@ export default class RouteManageViewer {
       }, Cesium.ScreenSpaceEventType.LEFT_CLICK)
 
       this.handler.setInputAction((e) => {
-        if (this.positions.length < 3) {
+        if (this.positions.length < 2) {
           this.endDraw()
-          this.clearDisEntity()
-          reject('航线不得少于三个航点！')
+          this.clearDisEntity()//这是一个类 每次绘制新建了一个类 清空的是本身
+          reject('航线不得少于2个航点！')
         } else {
           this.lineEntity.polyline = {
             positions: this.routeParams.isClose
@@ -155,13 +156,14 @@ export default class RouteManageViewer {
             depthFailMaterial: Cesium.Color.YELLOW,
           }
           this.endDraw()
+          
           resolve([
-            this._Cartesian_degrees(this.positions),
-            [...this.vertexEntities, this.lineEntity],
+            this._Cartesian_degrees(this.positions),//返回经纬度坐标数组
+            [...this.vertexEntities, this.lineEntity],//点线实体
           ])
         }
       }, Cesium.ScreenSpaceEventType.RIGHT_CLICK)
-
+      //鼠标移动事件
       this.handler.setInputAction((e) => {
         let position = this.viewer.scene.pickPosition(e.endPosition)
         if (!position) {
@@ -180,10 +182,10 @@ export default class RouteManageViewer {
 
   //结束绘制
   endDraw() {
-    this.unRegisterEvents()
-    this.viewer._element.style.cursor = 'default'
-    this.viewer.enableCursorStyle = true
-    this.lineEntitys.push(this.lineEntity)
+    this.unRegisterEvents()//注销鼠标事件
+    this.viewer._element.style.cursor = 'default'//鼠标样式还原
+    this.viewer.enableCursorStyle = true//允许自定义鼠标样式
+    this.lineEntitys.push(this.lineEntity)//将折线实体加入线实体数组
   }
 
   //清空绘制
@@ -219,8 +221,8 @@ export default class RouteManageViewer {
     })
     this.viewer.scene.requestRender()
   }
-  //创建线节点
-  createVertex() {
+  //小标记点(航点)
+  createVertex() { 
     let vertexEntity = new Cesium.Entity({
       id: 'Route' + this.positions[this.positions.length - 1],
       position: this.positions[this.positions.length - 1],
