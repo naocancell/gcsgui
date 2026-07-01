@@ -616,6 +616,12 @@ function parseRouteFile(fileName: string, content: string) {
         label: r.name,
       }
     })
+    
+    //导入航线直接显示缩放显示到航线
+    window.viewer.flyTo(routeManage.addAirLine(newRoute), {
+      duration: 2,
+    })
+    
     uiMsg.success(`成功导入航线: ${newRoute.name}`)
   } else {
     uiMsg.error('航线文件解析失败，无有效航点')

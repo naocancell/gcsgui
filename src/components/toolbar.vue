@@ -17,7 +17,7 @@ import {
   ShieldCheckmark,
   ShieldOutline,
   Airplane,
-
+  RemoveOutline
 } from '@vicons/ionicons5'
 //引入监听hooks和飞机数据状态管理
 
@@ -52,6 +52,7 @@ import NFZViewer from '@/assets/js/NFZViewer.js'
 import { useRouter } from 'vue-router'
 import { getUnicode } from '@/types/entityoptions.ts'
 import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 
 const router = useRouter()
 
@@ -551,6 +552,14 @@ function refreshPage() {
 function closeApp() {
   invoke('close_app')
 }
+//最小化
+async function minimizeApp() {
+  try {
+    await getCurrentWindow().minimize()
+  } catch (err) {
+    message.error('最小化失败：' + err)
+  }
+}
 
 /**
  * 绘制航线，目前只绘制任务航线
@@ -731,6 +740,17 @@ function startDrawRoute(routeParams) {
         </template>
         <span>刷新页面</span>
       </n-tooltip>
+      <!-- 最小化程序 -->
+    <n-tooltip placement="bottom" trigger="hover">
+      <template #trigger>
+        <n-button tertiary type="warning" @click="minimizeApp">
+          <template #icon>
+            <n-icon><RemoveOutline /></n-icon>
+          </template>
+        </n-button>
+      </template>
+      <span>最小化</span>
+    </n-tooltip>
     <!-- 关闭程序 -->
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
