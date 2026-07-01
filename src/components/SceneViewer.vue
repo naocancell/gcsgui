@@ -42,7 +42,8 @@ const viewerReady = ref(false)
 onMounted(() => {
   //初始化
   viewer = initViewer(viewerDivRef.value as HTMLElement)
-
+  // 显示帧率
+  viewer.scene.debugShowFramesPerSecond = true;
   //监听飞机模型数据
   init(viewer);
 

@@ -42,6 +42,12 @@ export function useLoadPlane() {
    */
   const frozenTrails = new Map<string, Cesium.Entity[]>();
 
+  // 每架飞机上一次刷新轨迹的时间
+  const lastTrailUpdateMap = new Map<string, number>()
+
+  // 轨迹刷新间隔：1000ms = 1秒
+  const TRAIL_UPDATE_INTERVAL = 5000
+
   // 动态尾巴保留的点数，到这个数量就把这段封存成静态历史段
   const TAIL_SIZE = 50;
 
@@ -164,6 +170,7 @@ const TAIL_OVERLAP = 10;
     }
 
     tailPositions.delete(key);
+    lastTrailUpdateMap.delete(key)
   };
 
   //移除指定飞机函数
@@ -264,9 +271,14 @@ const TAIL_OVERLAP = 10;
       // 如果该飞机模型还没加载，则开始加载
       loadPlaneIfNeeded(viewer, plane);
 
-      // 只有需要显示航线的飞机（UAVInfo 类型）才更新航线
+      // 只有需要显示航线的飞机（UAVInfo 类型）才更新航线 并且限制为 1 秒一次
       if (plane.showTrail) {
-        updateTrail(viewer, plane);
+        const lastTrailTime = lastTrailUpdateMap.get(plane.id) ?? 0
+
+        if (now - lastTrailTime >= TRAIL_UPDATE_INTERVAL) {
+          updateTrail(viewer, plane)
+          lastTrailUpdateMap.set(plane.id, now)
+        }
       }
     }
 
@@ -384,6 +396,7 @@ const TAIL_OVERLAP = 10;
     tailPositions.clear();
     tailEntities.clear();
     frozenTrails.clear();
+    lastTrailUpdateMap.clear()
     // 重置解绑函数，避免重复调用
     stopWatch = null;
     removePreUpdate = null;
