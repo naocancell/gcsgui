@@ -3,6 +3,7 @@
  */
 import * as Cesium from "cesium";
 import type { PlaneType } from "@/types/entityoptions";
+import fp98 from "@/assets/models/fp-98.gltf";
 //飞机加载时候的配置信息
 export interface PlaneConfig {
   url: string;
@@ -15,7 +16,7 @@ export interface PlaneConfig {
 //约束飞机的模型和材质
 export const PLANE_CONFIG: Record<PlaneType, PlaneConfig> = {
   uavInfo: {
-    url: "src/assets/models/fp-98.gltf",
+    url: fp98,
     scale: 0.1,
     minimumPixelSize: 64,
     maximumScale: 20000,
@@ -23,7 +24,7 @@ export const PLANE_CONFIG: Record<PlaneType, PlaneConfig> = {
     colorBlendAmount: 0.8,
   },
   fp95: {
-    url: "src/assets/models/fp-98.gltf",
+    url: fp98,
     scale: 0.15,
     minimumPixelSize: 64,
     maximumScale: 20000,

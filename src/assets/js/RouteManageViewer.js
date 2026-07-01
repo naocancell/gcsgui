@@ -18,7 +18,7 @@ export default class RouteManageViewer {
 
   /**
    * 显示航线
-   * @param line Airline
+   * @param line Airline  需要传入一个装好的航线
    */
   addAirLine(line) {
     let res = this.viewer.entities.getById('航线' + line.unicode)
@@ -109,7 +109,7 @@ export default class RouteManageViewer {
   }
 
   // -----------------绘制航线相关功能--------------------------//
-  //开始绘制 这个绘制的线和点是临时的  仅仅是负责把点数据收集出来() 
+  //开始绘制 这个绘制的线和点是临时的  仅仅是负责把点数据收集出来  只绘制了一个临时的航线位置（存在Bug  这个临时航线未清除） 
   start() {
     this.handler = new Cesium.ScreenSpaceEventHandler(this.viewer.scene.canvas)
     this.viewer.scene.globe.depthTestAgainstTerrain = true//开启深度检测
@@ -142,10 +142,10 @@ export default class RouteManageViewer {
       }, Cesium.ScreenSpaceEventType.LEFT_CLICK)
 
       this.handler.setInputAction((e) => {
-        if (this.positions.length < 2) {
+        if (this.positions.length < 3) {
           this.endDraw()
           this.clearDisEntity()//这是一个类 每次绘制新建了一个类 清空的是本身
-          reject('航线不得少于2个航点！')
+          reject('航线不得少于3个航点！')
         } else {
           this.lineEntity.polyline = {
             positions: this.routeParams.isClose
@@ -161,6 +161,7 @@ export default class RouteManageViewer {
             this._Cartesian_degrees(this.positions),//返回经纬度坐标数组
             [...this.vertexEntities, this.lineEntity],//点线实体
           ])
+          this.clearDisEntity()//清空缓存的航线（地面残留）
         }
       }, Cesium.ScreenSpaceEventType.RIGHT_CLICK)
       //鼠标移动事件

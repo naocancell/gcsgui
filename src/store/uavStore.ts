@@ -224,7 +224,7 @@ export const useUavStore = defineStore('uav', () => {
         uavId: 1,
         longitude: 110.3312,
         latitude: 20.0311,
-        altitude: 1200,
+        altitude: 5500,
         relativeAltitude: 300,
         groundSpeed: 25,
         groundSpeedDirection: 70,
@@ -242,9 +242,9 @@ export const useUavStore = defineStore('uav', () => {
       {
         uavSeries: '981C',
         uavId: 2,
-        longitude: 109.5119,
-        latitude: 18.2528,
-        altitude: 1500,
+        longitude: 109.5100,
+        latitude: 18.2500,
+        altitude: 3500,
         relativeAltitude: 500,
         groundSpeed: 30,
         groundSpeedDirection: 45,
@@ -265,14 +265,14 @@ export const useUavStore = defineStore('uav', () => {
     isServiceRunning.value = true
 
     mockUavTimer = setInterval(() => {
-      mockUavList[0].longitude += 0.008
-      mockUavList[0].latitude += 0.002
+      mockUavList[0].longitude += 0.00008
+      mockUavList[0].latitude += 0.00002
       mockUavList[0].groundSpeedDirection = 90
       mockUavList[0].rollAngle = 3
       mockUavList[0].distanceNext = Math.max(0, mockUavList[0].distanceNext - 25)
 
-      mockUavList[1].longitude += 0.005
-      mockUavList[1].latitude += 0.005
+      mockUavList[1].longitude += 0.00005
+      mockUavList[1].latitude += 0.00005
       mockUavList[1].groundSpeedDirection = 45
       mockUavList[1].rollAngle = -4
       mockUavList[1].distanceNext = Math.max(0, mockUavList[1].distanceNext - 30)

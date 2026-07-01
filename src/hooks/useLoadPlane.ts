@@ -115,14 +115,15 @@ const TAIL_OVERLAP = 10;
 
   // 尾巴满了，封存成历史段
   if (tail.length >= TAIL_SIZE) {
-    // 固定快照：创建后引用不再变化
-    const frozenPositions = tail.slice();
+    const start = Math.max(0, tail.length - TAIL_SIZE);
+    const end = tail.length - TAIL_OVERLAP;
+
+    // 冻结段包含 end 这个连接点
+    const frozenPositions = tail.slice(start, end + 1);
 
     const frozen = viewer.entities.add({
       polyline: {
-        // 关键：用 CallbackProperty 返回固定引用，
-        // 走和动态尾巴一样的“立即渲染”路径，避免静态几何构建的延迟（闪烁根因）
-        positions: new Cesium.CallbackProperty(() => frozenPositions, false),
+        positions: frozenPositions,
         width: 2,
         material: Cesium.Color.YELLOW,
         clampToGround: false,
@@ -134,10 +135,11 @@ const TAIL_OVERLAP = 10;
       list = [];
       frozenTrails.set(key, list);
     }
+
     list.push(frozen);
 
-    // 动态尾巴保留最近 TAIL_OVERLAP 个点，与历史段末尾重叠，接缝连续不断线
-    tailPositions.set(key, tail.slice(-TAIL_OVERLAP));
+    // 动态尾巴也从 end 这个连接点开始
+    tailPositions.set(key, tail.slice(end));
   }
 
   viewer.scene.requestRender();

@@ -558,10 +558,10 @@ function closeApp() {
  */
 function startDrawRoute(routeParams) {
   showRouteModal.value = false// 关闭航线参数窗口
-  let drawLine = new RouteManageViewer(window.viewer)// 航线绘制类
-  drawLine.routeParams.isClose = routeParams.isClose//是否闭合
-  drawLine.routeParams.height = routeParams.height//高度
-  drawLine
+  let routeManage = new RouteManageViewer(window.viewer)// 航线绘制类
+  routeManage.routeParams.isClose = routeParams.isClose//是否闭合
+  routeManage.routeParams.height = routeParams.height//高度
+  routeManage
     .start()
     .then((result) => {
       // result[0]是经纬度坐标数组，需转换为 AirlinePoint数组
@@ -591,8 +591,10 @@ function startDrawRoute(routeParams) {
         isDesignRoute: true, // 标记为设计航线
       }
       useRouteStore().addRoute(aRoute)
-      // 航线加入图层管理
-      lStore.addLayer(aRoute.name, undefined, undefined, result[1], true)
+      // 航线不加入图层管理
+      // lStore.addLayer(aRoute.name, undefined, undefined, result[1], true)
+      //直接执行勾选航线
+      routeManage.addAirLine(aRoute)
     })
     .catch((reject) => {
       message.error(reject)

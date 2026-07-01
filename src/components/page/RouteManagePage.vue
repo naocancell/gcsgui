@@ -42,7 +42,7 @@ let selectedLevel = ref(null)
 let showPtList = ref(true)
 let selectedRoute = ref<Airline>(newAirline())
 let routesListRef = ref<{ value: string | number; label: string }[]>(null)
-let routeViewer = null
+let routeManage = null
 let routePtNumber = ref(1)
 let uiMsg = useMessage()
 let nowTime = ref('')
@@ -92,7 +92,7 @@ onBeforeUnmount(() => {
   clearInterval(timer)
 })
 onMounted(() => {
-  routeViewer = new RouteManageViewer(window.viewer)
+  routeManage = new RouteManageViewer(window.viewer)
   myChart = echarts.init(document.getElementById('echarts-profile'), 'dark')
   weatherChart = echarts.init(document.getElementById('weatherChart'), 'dark')
 
@@ -143,6 +143,76 @@ function getTimesInterval() {
   nowTime.value = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }
 
+
+/**
+ * 生成地形剖面所需航点。
+ * 闭合航线会在末尾临时追加首点，但不会修改原航线数据。
+ */
+function getProfilePoints(route: Airline) {
+  const points = route.points.map((pt) => ({ ...pt }))
+
+  if (!route.isClose || points.length < 2) {
+    return points
+  }
+
+  const first = points[0]
+  const last = points[points.length - 1]
+
+  // 防止导入的闭合航线本身已经重复保存了首点
+  const alreadyClosed =
+    Math.abs(first.lon - last.lon) < 1e-8 &&
+    Math.abs(first.lat - last.lat) < 1e-8 &&
+    Math.abs(first.alt - last.alt) < 1e-3
+
+  if (!alreadyClosed) {
+    points.push({
+      ...first,
+      // 只用于剖面图上的顺序，不改变原航点编号
+      nPt: points.length + 1,
+    })
+  }
+
+  return points
+}
+
+/**
+ * 绘制航线地形剖面
+ */
+function drawRouteProfile(route: Airline) {
+  if (!route?.points || route.points.length < 2) {
+    myChart?.clear()
+    return
+  }
+
+  // 闭合航线会临时形成：首点 -> ... -> 末点 -> 首点
+  const profilePoints = getProfilePoints(route)
+  const cartesianPositions = transLonlat2Car3(profilePoints)
+
+  const result = profileAnalyse(
+    window.viewer,
+    cartesianPositions,
+    1000,
+  )
+
+  const orderArr = profilePoints.map((_, index) => {
+  // 闭合航线最后一个剖面点实际上是首航点
+  if (route.isClose && index === profilePoints.length - 1) {
+    return 1
+  }
+
+  return index + 1
+})
+
+  const hArr = profilePoints.map((point) => point.alt)
+
+  drawEcharts_RouteDetection(
+    myChart,
+    result.distanceArray,
+    result.elevationArray,
+    orderArr,
+    hArr,
+  )
+}
 // 航线选择,选择航线后才真正绘制了实体
 function checkRoute(key: number | string) {
   new Promise((resolve, reject) => {
@@ -150,8 +220,8 @@ function checkRoute(key: number | string) {
       (element) => element.unicode === String(key),
     )[0]
     if (selectedRoute.value == null) reject('未找到航线')
-    routeViewer.routeParams.isClose = selectedRoute.value.isClose
-    window.viewer.flyTo(routeViewer.addAirLine(selectedRoute.value), {
+    routeManage.routeParams.isClose = selectedRoute.value.isClose
+    window.viewer.flyTo(routeManage.addAirLine(selectedRoute.value), {
       duration: 2,
     })
     queryWeather(
@@ -161,26 +231,8 @@ function checkRoute(key: number | string) {
     setTimeout(() => resolve('success'), 2500)
   })
     .then((result) => {
-      //绘制地形图表
-      let Cartain3 = transLonlat2Car3(selectedRoute.value.points)
-      // 计算地形剖面，默认采样间隔为1km
-      let res = profileAnalyse(window.viewer, Cartain3, 1000)
-      // 计算航线距离数组
-      let orderArr = []
-      let hArr = []
-      Cartain3.forEach((_, index) => {
-        orderArr.push(index + 1)
-        hArr.push(selectedRoute.value.points[index].alt)
-      })
-      console.log(orderArr, hArr)
-      // 弹出地形图表
-      drawEcharts_RouteDetection(
-        myChart,
-        res.distanceArray,
-        res.elevationArray,
-        orderArr,
-        hArr,
-      )
+      //绘制航线地形剖面
+     drawRouteProfile(selectedRoute.value)
     })
     .catch((err) => {
       uiMsg.error(err)
@@ -207,30 +259,83 @@ function savePt() {
   selectedRoute.value.PtNum = selectedRoute.value.points.length
   routeStore.addRoute(selectedRoute.value)
 
-  if (routeViewer) {
+ if (routeManage) {
     // 移除旧航线并绘制新航线
-    routeViewer.removeRoute(selectedRoute.value)
-    routeViewer.addAirLine(selectedRoute.value)
+    routeManage.removeRoute(selectedRoute.value)
+    const routeEntity = routeManage.addAirLine(selectedRoute.value)
 
-    // 重新绘制地形剖面图表
-    let Cartain3 = transLonlat2Car3(selectedRoute.value.points)
-    let res = profileAnalyse(window.viewer, Cartain3, 1000)
-    let orderArr = []
-    let hArr = []
-    Cartain3.forEach((_, index) => {
-      orderArr.push(index + 1)
-      hArr.push(selectedRoute.value.points[index].alt)
-    })
-    drawEcharts_RouteDetection(
-      myChart,
-      res.distanceArray,
-      res.elevationArray,
-      orderArr,
-      hArr,
-    )
+    // 保存后缩放至当前航线
+    if (routeEntity) {
+      window.viewer.flyTo(routeEntity, {
+        duration: 1.5,
+      })
+    }
+
+    // 重新绘制地形剖面，闭合航线包含末点到首点
+    drawRouteProfile(selectedRoute.value)
   }
-  uiMsg.success('保存编辑成功')
+
+    // 保存后重新请求当前航点天气
+    const currentPoint = selectedRoute.value.points[routePtNumber.value - 1]
+
+    if (currentPoint?.lon && currentPoint?.lat) {
+      queryWeather(
+        currentPoint.lon,
+        currentPoint.lat,
+        Number(selectedLevel.value),
+      )
+    }
+    uiMsg.success('保存编辑成功')
 }
+//航点变化后就重新绘制剖面请求天气
+function refreshRouteAfterPointChanged() {
+  if (!selectedRoute.value?.points) return
+
+  // 更新航点数量
+  selectedRoute.value.PtNum = selectedRoute.value.points.length
+
+  // 防止当前航点序号越界
+  if (routePtNumber.value > selectedRoute.value.points.length) {
+    routePtNumber.value = selectedRoute.value.points.length
+  }
+
+  if (routePtNumber.value < 1) {
+    routePtNumber.value = 1
+  }
+
+  // 重新绘制地图航线
+  if (routeManage && selectedRoute.value.points.length >= 2) {
+    routeManage.removeRoute(selectedRoute.value)
+    const routeEntity = routeManage.addAirLine(selectedRoute.value)
+
+    if (routeEntity) {
+      window.viewer.flyTo(routeEntity, {
+        duration: 1.5,
+      })
+    }
+  }
+
+  // 重新绘制剖面图
+  if (selectedRoute.value.points.length >= 2) {
+    drawRouteProfile(selectedRoute.value)
+  } else {
+    myChart?.clear()
+  }
+
+  // 重新请求当前航点天气
+  const currentPoint = selectedRoute.value.points[routePtNumber.value - 1]
+
+  if (currentPoint?.lon != null && currentPoint?.lat != null) {
+    queryWeather(
+      currentPoint.lon,
+      currentPoint.lat,
+      Number(selectedLevel.value),
+    )
+  } else {
+    weatherChart?.clear()
+  }
+}
+
 
 /** 删除或在此前插入航点
  *
@@ -240,12 +345,16 @@ function savePt() {
 function handlePtSelect(key: any, index: number) {
   if (key == 'deletePt') {
     selectedRoute.value.points.splice(index, 1)
+
     selectedRoute.value.points.forEach((pt, i) => {
       pt.nPt = i + 1
     })
+
     showPtList.value = false
+
     nextTick(() => {
       showPtList.value = true
+      refreshRouteAfterPointChanged()
     })
   } else if (key == 'insertPt') {
     selectedRoute.value.points.forEach((pt, i) => {
@@ -345,6 +454,24 @@ function levelChanged(key: string | number) {
     queryWeather(lon, lat, Number(key))
   }
 }
+//点击开闭重新绘制剖面图
+
+function handleRouteCloseChanged(value: boolean) {
+  selectedRoute.value.isClose = value
+
+  if (!selectedRoute.value?.points || selectedRoute.value.points.length < 2) {
+    return
+  }
+
+  // 地图上的航线也重新绘制
+  if (routeManage) {
+    routeManage.removeRoute(selectedRoute.value)
+    routeManage.addAirLine(selectedRoute.value)
+  }
+
+  // 重绘地形剖面
+  drawRouteProfile(selectedRoute.value)
+}
 
 /**
  * 将航线信息发送给Rust端（每次发送一条航线）
@@ -394,8 +521,8 @@ function delRoute(routeUnicode: string | number) {
   }
 
   // 从地图中移除航线实体
-  if (routeViewer) {
-    routeViewer.removeRoute(selectedRouteToDelete)
+  if (routeManage) {
+    routeManage.removeRoute(selectedRouteToDelete)
   }
 
   // 从 store 中删除
@@ -667,6 +794,7 @@ function backToHomePage() {
                     <n-switch
                       v-model:value="selectedRoute.isClose"
                       size="small"
+                      @update:value="handleRouteCloseChanged"
                     >
                       <template #checked>闭</template>
                       <template #unchecked>开</template>
