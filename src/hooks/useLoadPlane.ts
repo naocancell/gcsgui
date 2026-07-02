@@ -64,6 +64,26 @@ const TAIL_OVERLAP = 10;
   let stopWatch: (() => void) | null = null;
   //间隔定时器检查飞机是否离线
   let intervalId: number | null = null; 
+  //飞机轨迹高度偏移
+  const offsetPositionByHeight = (
+    position: Cesium.Cartesian3,
+    offsetMeters: number,
+  ) => {
+    const normal = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(
+      position,
+      new Cesium.Cartesian3(),
+    );
+
+    return Cesium.Cartesian3.add(
+      position,
+      Cesium.Cartesian3.multiplyByScalar(
+        normal,
+        offsetMeters,
+        new Cesium.Cartesian3(),
+      ),
+      new Cesium.Cartesian3(),
+    );
+  };
 //飞机模型矩阵
    const buildMatrix = (p: PlaneState) => {
     // 经纬高转换成 Cesium 世界坐标
@@ -93,8 +113,14 @@ const TAIL_OVERLAP = 10;
     tailPositions.set(key, tail);
   }
 
-  // 当前点的世界坐标
-  const pos = Cesium.Cartesian3.fromDegrees(plane.lon, plane.lat, plane.alt);
+  const rawPos = Cesium.Cartesian3.fromDegrees(
+  plane.lon,
+  plane.lat,
+  plane.alt,
+  );
+
+  // 黄色实际轨迹抬高 0.5 米，避免与绿色计划航线共面闪烁
+  const pos = offsetPositionByHeight(rawPos, 0.5);
 
   // 和上一个点几乎重合就不重复添加，避免静止时堆积大量点
   const last = tail[tail.length - 1];
@@ -111,7 +137,7 @@ const TAIL_OVERLAP = 10;
           () => tailPositions.get(key) ?? [],
           false
         ),
-        width: 2,
+        width: 5,
         material: Cesium.Color.YELLOW,
         clampToGround: false,
       },

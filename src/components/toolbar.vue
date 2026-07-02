@@ -142,7 +142,8 @@ function handleEditSelect(key) {
     // 标记障碍物
     markerDialog.value?.openDlg()
   } else {
-    // 打开航线管理面板
+    // 打开航线管理面板  这里的stores是staticOptions.js
+    // 里面有一个showRouteManage变量，控制航线管理面板的显示和隐藏
     store.showRouteManage = true
   }
 }
@@ -602,8 +603,10 @@ function startDrawRoute(routeParams) {
       useRouteStore().addRoute(aRoute)
       // 航线不加入图层管理
       // lStore.addLayer(aRoute.name, undefined, undefined, result[1], true)
-      //直接执行勾选航线
-      routeManage.addAirLine(aRoute)
+      //直接绘制显示
+      window.viewer.flyTo(routeManage.addAirLine(aRoute),{
+        duration: 2,
+      })
     })
     .catch((reject) => {
       message.error(reject)
@@ -637,7 +640,7 @@ function startDrawRoute(routeParams) {
         </template>
         <span>添加数据</span>
       </n-tooltip>
-      <!-- 地形分析 -->
+      <!-- 地形分析  这些Options在staticOptions.js中定义 -->
       <n-dropdown
         :options="store.menuOptions.AnalyzeOptions"
         @select="handleAnalyseSelect"
@@ -964,7 +967,7 @@ function startDrawRoute(routeParams) {
 /* 向左移动20个单位 */
 .panel-toolbar989834y34.open {
   position: absolute;
-  left: -20rem;
+  left: -25rem;
 }
 
 #bt_switch {

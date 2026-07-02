@@ -51,7 +51,7 @@ export default class RouteManageViewer {
       polyline: {
         positions: cartesianArr,
         width: 3,
-        material: Cesium.Color.ORANGE,
+        material: Cesium.Color.LIMEGREEN,
         clampToGround: false,
       },
     })

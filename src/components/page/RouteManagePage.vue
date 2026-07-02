@@ -8,7 +8,7 @@ import {
   FolderOpenOutline,
   DownloadOutline,
 } from '@vicons/ionicons5'
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref,watch,computed } from 'vue'
 import { darkTheme, useMessage } from 'naive-ui'
 import { useRouteStore } from '@/store/RouteStore.ts'
 import { Airline } from '@/types/entityoptions.ts'
@@ -33,6 +33,7 @@ import { useStaticStore } from '@/store/staticOptions'
 import { useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { useUavStore } from '@/store/uavStore.ts'
+import { ArrowLeft, ArrowRight } from '@vicons/carbon'//引入又移图标
 
 let myChart: EChartsType = undefined
 let weatherChart: EChartsType = undefined
@@ -41,12 +42,16 @@ let selectedRouteCode = ref(null)
 let selectedLevel = ref(null)
 let showPtList = ref(true)
 let selectedRoute = ref<Airline>(newAirline())
-let routesListRef = ref<{ value: string | number; label: string }[]>(null)
+
 let routeManage = null
 let routePtNumber = ref(1)
 let uiMsg = useMessage()
 let nowTime = ref('')
 let timer = null
+
+// 当前激活的内容页：detail=航点详情 profile=地形剖面 weather=气象信息
+let activeTab = ref<'detail' | 'profile' | 'weather'>('detail')
+
 let PtOptions = [
   { label: '删除航点', key: 'deletePt' },
   { label: '插入航点', key: 'insertPt' },
@@ -88,6 +93,16 @@ const notify = (type: NotificationType, title: string, detail: string) => {
     keepAliveOnHover: true,
   })
 }
+//计算属性获取routesListRef 用于在面板上显示航线列表的信息（应该交给store去管理）
+const routesListRef = computed(() => {
+  return routeStore.flyRoute.map((route) => {
+    return {
+      value: route.unicode,//唯一码就是这个value
+      label: route.name,
+    }
+  })
+})
+
 onBeforeUnmount(() => {
   clearInterval(timer)
 })
@@ -98,12 +113,6 @@ onMounted(() => {
 
   timer = setInterval(getTimesInterval, 1000)
 
-  routesListRef.value = routeStore.flyRoute.map((route) => {
-    return {
-      value: route.unicode,
-      label: route.name,
-    }
-  })
   requireWeatherLevel().then((res) => {
     console.log(res)
     // 查询失败
@@ -129,6 +138,15 @@ onMounted(() => {
     selectedLevel.value = -1
   })
 })
+
+// 切换内容页：切到图表页时 resize，避免在隐藏状态初始化导致的尺寸错乱
+function switchTab(tab: 'detail' | 'profile' | 'weather') {
+  activeTab.value = tab
+  nextTick(() => {
+    if (tab === 'profile') myChart?.resize()
+    if (tab === 'weather') weatherChart?.resize()
+  })
+}
 
 function getTimesInterval() {
   let now = new Date()
@@ -528,14 +546,6 @@ function delRoute(routeUnicode: string | number) {
   // 从 store 中删除
   routeStore.removeRoute(String(routeUnicode))
 
-  // 更新左侧列表数据
-  routesListRef.value = routeStore.flyRoute.map((route) => {
-    return {
-      value: route.unicode,
-      label: route.name,
-    }
-  })
-
   // 如果删除的正是当前选中的航线，清空选中状态与相关图表
   if (String(selectedRouteCode.value) === String(routeUnicode)) {
     selectedRouteCode.value = null
@@ -609,13 +619,7 @@ function parseRouteFile(fileName: string, content: string) {
     newRoute.isClose = lastPt.ch1 === 0
     routeStore.addRoute(newRoute)
 
-    // 刷新航线列表
-    routesListRef.value = routeStore.flyRoute.map((r) => {
-      return {
-        value: r.unicode,
-        label: r.name,
-      }
-    })
+    
     
     //导入航线直接显示缩放显示到航线
     window.viewer.flyTo(routeManage.addAirLine(newRoute), {
@@ -670,7 +674,15 @@ function exportRoute() {
   URL.revokeObjectURL(url)
   uiMsg.success('航线文件已导出')
 }
-
+//点击航线缩放到航线
+function handlePtClick(RouteUnicode?: string | number) {
+  const route = routeStore.flyRoute.filter(
+      (element) => element.unicode === String(RouteUnicode),
+    )[0]
+  window.viewer.flyTo(routeManage.addAirLine(route), {
+      duration: 2,
+    })
+}
 function backToHomePage() {
   sStore.showRouteManage = false
 }
@@ -679,90 +691,85 @@ function backToHomePage() {
 <template>
   <n-config-provider :theme="darkTheme">
     <div class="route-manage-overlay">
-      <div id="left">
+      <div id="right">
         <n-layout style="height: 100%">
+          <!-- 顶部工具栏 -->
           <n-layout-header :bordered="true">
-            <n-popover trigger="hover">
-              <template #trigger>
-                <n-button
-                  quaternary
-                  type="success"
-                  size="large"
-                  @click="backToHomePage"
-                >
-                  <template #icon>
-                    <n-icon><ArrowBackOutline /></n-icon>
+            <n-space justify="space-between" align="center">
+              <n-space>
+                  <n-popover trigger="hover">
+                    <template #trigger>
+                      <n-button
+                        quaternary
+                        type="success"
+                        size="large"
+                        @click="importRoute"
+                      >
+                        <template #icon>
+                          <n-icon><FolderOpenOutline /></n-icon>
+                        </template>
+                      </n-button>
+                    </template>
+                    导入航线
+                  </n-popover>
+                  <n-popover trigger="hover">
+                    <template #trigger>
+                      <n-button
+                        quaternary
+                        type="success"
+                        size="large"
+                        @click="exportRoute"
+                      >
+                        <template #icon>
+                          <n-icon><DownloadOutline /></n-icon>
+                        </template>
+                      </n-button>
+                    </template>
+                    导出航线
+                  </n-popover>
+              </n-space>
+              <!-- 关闭页面 -->
+              <n-space>
+                <n-popover trigger="hover">
+                  <template #trigger>
+                    <n-button
+                      quaternary
+                      type="success"
+                      size="large"
+                      @click="backToHomePage"
+                    >
+                      <template #icon>
+                        <n-icon><ArrowRight /></n-icon>
+                      </template>
+                    </n-button>
                   </template>
-                </n-button>
-              </template>
-              返回
-            </n-popover>
-            <n-popover trigger="hover">
-              <template #trigger>
-                <n-button
-                  quaternary
-                  type="success"
-                  size="large"
-                  @click="savePt"
-                >
-                  <template #icon>
-                    <n-icon><Save /></n-icon>
-                  </template>
-                </n-button>
-              </template>
-              保存编辑
-            </n-popover>
-            <n-popover trigger="hover">
-              <template #trigger>
-                <n-button
-                  quaternary
-                  type="success"
-                  size="large"
-                  @click="importRoute"
-                >
-                  <template #icon>
-                    <n-icon><FolderOpenOutline /></n-icon>
-                  </template>
-                </n-button>
-              </template>
-              导入航线
-            </n-popover>
-            <n-popover trigger="hover">
-              <template #trigger>
-                <n-button
-                  quaternary
-                  type="success"
-                  size="large"
-                  @click="exportRoute"
-                >
-                  <template #icon>
-                    <n-icon><DownloadOutline /></n-icon>
-                  </template>
-                </n-button>
-              </template>
-              导出航线
-            </n-popover>
+                  返回
+                </n-popover>
+              </n-space>
+            </n-space>
           </n-layout-header>
-          <n-layout-content>
-            <n-flex
-              vertical
-              style="margin-top: 0.5rem; margin-left: 1.2rem; overflow: hidden"
-            >
+
+          <n-layout-content style="height: calc(100% - 61px)"
+  content-style="height:100%; padding:0;">
+            <!-- ===== 上部：航线列表 + 航线属性 ===== -->
+            <n-flex vertical style="margin: 0.5rem 1rem; overflow: hidden">
               <n-ellipsis><h3>航线列表</h3></n-ellipsis>
               <n-radio-group
                 v-model:value="selectedRouteCode"
                 name="radiogroup"
                 @update:value="checkRoute"
               >
-                <n-scrollbar style="height: 20vh">
+                <n-scrollbar style="height: 26vh">
                   <n-space vertical>
                     <n-space
                       v-for="r in routesListRef"
+                      :key="r.value"
                       justify="space-between"
                       style="
-                        margin-right: 2rem;
+                        margin-right: 1rem;
                         border-bottom: #383737 1px solid;
                       "
+                      @click="handlePtClick(r.value)"
                     >
                       <n-radio :key="r.value" :value="r.value">
                         {{ r.label }}
@@ -790,11 +797,23 @@ function backToHomePage() {
                     </n-space>
                   </n-space>
                 </n-scrollbar>
+
               </n-radio-group>
 
               <n-divider style="margin: 0.2rem -0.5rem"></n-divider>
-              <n-space vertical style="margin: 0.2rem 1rem">
+              
+              <n-space vertical style="margin: 0.2rem 0.5rem">
+                <!--航线名称  -->
                 <n-space>
+                  <n-ellipsis style="width: 4rem">航线名称</n-ellipsis>
+                  <n-input
+                    size="small"
+                    style="width: 10rem"
+                    v-model:value="selectedRoute.name"
+                  ></n-input>
+                </n-space>
+                <n-space>
+                  <!-- 开闭按钮 -->
                   <n-space>
                     <n-ellipsis>开闭</n-ellipsis>
                     <n-switch
@@ -806,198 +825,223 @@ function backToHomePage() {
                       <template #unchecked>开</template>
                     </n-switch>
                   </n-space>
+                  <!-- 航点数 -->
                   <n-space style="margin-left: 0.5rem">
                     <n-ellipsis>航点数</n-ellipsis>
                     <n-input-number
                       :show-button="false"
                       disabled
-                      size="tiny"
+                      size="small"
                       style="width: 5rem"
                       v-model:value="selectedRoute.PtNum"
                     ></n-input-number>
                   </n-space>
                 </n-space>
-                <n-space>
-                  <n-ellipsis style="width: 4rem">航线名称</n-ellipsis>
-                  <n-input
-                    size="tiny"
-                    style="width: 10rem"
-                    v-model:value="selectedRoute.name"
-                  ></n-input>
-                </n-space>
+
+                
+                <!-- 航线类型 -->
                 <n-space>
                   <n-ellipsis style="width: 4rem">航线类型</n-ellipsis>
                   <n-select
                     style="width: 10rem"
-                    size="tiny"
+                    size="small"
                     v-model:value="selectedRoute.code"
                     :options="routeCode"
                   />
                 </n-space>
               </n-space>
+            </n-flex>
 
-              <n-divider style="margin: 0.2rem -0.5rem"></n-divider>
-              <n-ellipsis><h3>地形剖面图</h3></n-ellipsis>
-              <n-space justify="space-evenly">
+            <n-divider style="margin: 0.2rem -0.5rem"></n-divider>
+
+            <!-- ===== 三个切换按钮 ===== -->
+            <n-space justify="center" style="margin: 0.3rem 0">
+              <n-button-group>
+                <n-button
+                  size="small"
+                  :type="activeTab === 'detail' ? 'primary' : 'default'"
+                  @click="switchTab('detail')"
+                >
+                  航线详情
+                </n-button>
+                <n-button
+                  size="small"
+                  :type="activeTab === 'profile' ? 'primary' : 'default'"
+                  @click="switchTab('profile')"
+                >
+                  地形剖面
+                </n-button>
+                <n-button
+                  size="small"
+                  :type="activeTab === 'weather' ? 'primary' : 'default'"
+                  @click="switchTab('weather')"
+                >
+                  气象信息
+                </n-button>
+              </n-button-group>
+            </n-space>
+
+            <n-divider style="margin: 0.2rem -0.5rem"></n-divider>
+
+            <!-- ===== 内容区：用 v-show 保证 echarts DOM 始终存在 ===== -->
+
+            <!-- 航线详情 -->
+            <div v-show="activeTab === 'detail'">
+              <n-flex vertical>
+                <!-- 列表名字头部 -->
+                <n-space justify="space-around" style="margin-top: 0.5rem">
+                  <n-ellipsis style="width: 2rem; margin-left: 0.2rem">
+                    序号
+                  </n-ellipsis>
+                  <n-ellipsis style="width: 5.5rem">经度</n-ellipsis>
+                  <n-ellipsis style="width: 5.5rem">纬度</n-ellipsis>
+                  <n-ellipsis style="width: 3rem">高度</n-ellipsis>
+                </n-space>
+
+                <!-- 滚动区：只放航点列表动态的，高度调小给按钮腾位置 -->
+                <n-scrollbar style="height: 44vh">
+                  <div v-if="selectedRoute.points.length > 0 && showPtList">
+                    <n-space
+                      justify="space-around"
+                      style="margin: 0.2rem 0"
+                      v-for="(pt, index) in selectedRoute.points"
+                      :key="index"
+                    >
+                   <!-- 悬浮会出来删除和插入航点的下拉菜单 -->
+                      <n-dropdown
+                        trigger="hover"
+                        size="small"
+                        placement="top-start"
+                        :show-arrow="true"
+                        :options="PtOptions"
+                        @select="handlePtSelect($event, index)"
+                      >
+                        <n-button
+                          secondary
+                          type="info"
+                          size="small"
+                          style="width: 1.7rem; margin-left: 0.2rem"
+                        >
+                          {{ pt.nPt }}
+                        </n-button>
+                      </n-dropdown>
+                      <!-- 经度输入框 -->
+                      <n-input-number
+                        size="small"
+                        v-model:value="pt.lon"
+                        :show-button="false"
+                        style="width: 6rem"
+                        placeholder="经度"
+                        max="180"
+                        min="-180"
+                      ></n-input-number>
+                      <!-- 纬度输入框 --> 
+                      <n-input-number
+                        size="small"
+                        v-model:value="pt.lat"
+                        :show-button="false"
+                        style="width: 6rem"
+                        placeholder="纬度"
+                        max="90"
+                        min="-90"
+                      ></n-input-number>
+                      <!-- 高度输入框 -->
+                      <n-input-number
+                        size="small"
+                        v-model:value="pt.alt"
+                        :show-button="false"
+                        style="width: 6rem"
+                        placeholder="高度"
+                        max="12000"
+                        min="-500"
+                      ></n-input-number>
+                    </n-space>
+                  </div>
+
+                  <n-space v-else justify="space-around">
+                    <n-empty
+                      style="margin-top: 3rem"
+                      description="无内容"
+                    ></n-empty>
+                  </n-space>
+                </n-scrollbar>
+
+                <!-- 按钮移到滚动区外，固定在底部 -->
+                <n-space justify="center" style="margin: 0.5rem 0">
+                  <n-button type="info" size="small" @click="addPtToTail">
+                    <template #icon>
+                      <Add />
+                    </template>
+                    添加点
+                  </n-button>
+                  <n-button type="info" size="small" @click="savePt">
+                    <template #icon>
+                      <SaveOutline />
+                    </template>
+                    保存编辑
+                  </n-button>
+                </n-space>
+              </n-flex>
+            </div>
+
+            <!-- 地形剖面 -->
+            <div v-show="activeTab === 'profile'">
+              <n-flex vertical style="margin: 0.5rem 0">
+              <n-space justify="space-evenly" style="padding: 0 0.5rem">
                 <n-ellipsis>采样间隔</n-ellipsis>
                 <n-input-number
-                  size="tiny"
+                  size="small"
                   placeholder="默认1000米"
-                  style="width: 8vw"
+                  style="width: 8rem"
                   :min="100"
                   :step="100"
                 ></n-input-number>
-                <n-button type="success" size="tiny">重新绘图</n-button>
+                <n-button type="success" size="small">重新绘图</n-button>
               </n-space>
-              <div id="echarts-profile">
-                <!--	Echarts地形剖面绘图区	-->
-              </div>
+              <div id="echarts-profile"></div>
             </n-flex>
-          </n-layout-content>
-        </n-layout>
-      </div>
+            </div>
 
-      <div id="map-placeholder"></div>
-
-      <div id="right">
-        <n-layout style="height: 100%">
-          <n-layout-header :bordered="true">
-            <n-space justify="center">
-              <n-button quaternary type="default" size="large">
-                <h4>航点详情 {{ '— ' + selectedRoute.name }}</h4>
-              </n-button>
-            </n-space>
-          </n-layout-header>
-          <n-layout-content>
-            <n-flex vertical>
-              <n-space justify="space-around" style="margin-top: 0.5rem">
-                <n-ellipsis style="width: 2rem; margin-left: 0.2rem">
-                  序号
-                </n-ellipsis>
-                <n-ellipsis style="width: 5.5rem">经度</n-ellipsis>
-                <n-ellipsis style="width: 5.5rem">纬度</n-ellipsis>
-                <n-ellipsis style="width: 3rem">高度</n-ellipsis>
-              </n-space>
-              <n-scrollbar style="height: 30vh">
-                <div v-if="selectedRoute.points.length > 0 && showPtList">
-                  <n-space
-                    justify="space-around"
-                    style="margin: 0.2rem 0"
-                    v-for="(pt, index) in selectedRoute.points"
+            <!-- 气象信息 -->
+            <div v-show="activeTab === 'weather'">
+              <n-flex vertical>
+                <n-space justify="space-around" class="routePtSelector">
+                  <n-button
+                    size="small"
+                    @click="prevPtWeather"
+                    :disabled="routePtNumber <= 1"
                   >
-                    <n-dropdown
-                      trigger="hover"
-                      size="small"
-                      placement="top-start"
-                      :show-arrow="true"
-                      :options="PtOptions"
-                      @select="handlePtSelect($event, index)"
-                    >
-                      <n-button
-                        secondary
-                        type="info"
-                        size="tiny"
-                        style="width: 1.7rem; margin-left: 0.2rem"
-                      >
-                        {{ pt.nPt }}
-                      </n-button>
-                    </n-dropdown>
-                    <n-input-number
-                      size="tiny"
-                      v-model:value="pt.lon"
-                      :show-button="false"
-                      style="width: 5.5rem"
-                      placeholder="经度"
-                      max="180"
-                      min="-180"
-                    ></n-input-number>
-                    <n-input-number
-                      size="tiny"
-                      v-model:value="pt.lat"
-                      :show-button="false"
-                      style="width: 5.5rem"
-                      placeholder="纬度"
-                      max="90"
-                      min="-90"
-                    ></n-input-number>
-                    <n-input-number
-                      size="tiny"
-                      v-model:value="pt.alt"
-                      :show-button="false"
-                      style="width: 3rem"
-                      placeholder="高度"
-                      max="12000"
-                      min="-500"
-                    ></n-input-number>
-                  </n-space>
-
-                  <n-space justify="center" style="margin: 0.5rem 0">
-                    <n-button type="info" size="small" @click="addPtToTail">
-                      <template #icon>
-                        <Add />
-                      </template>
-                      添加点
-                    </n-button>
-                    <n-button type="info" size="small" @click="savePt">
-                      <template #icon>
-                        <SaveOutline />
-                      </template>
-                      保存编辑
-                    </n-button>
-                  </n-space>
-                </div>
-
-                <n-space v-else justify="space-around">
-                  <n-empty
-                    style="margin-top: 3rem"
-                    description="无内容"
-                  ></n-empty>
+                    <template #icon><ArrowBackOutline /></template>
+                  </n-button>
+                  <n-ellipsis>航点 {{ routePtNumber }}</n-ellipsis>
+                  <n-button
+                    size="small"
+                    @click="nextPtWeather"
+                    :disabled="selectedRoute.points.length <= routePtNumber"
+                  >
+                    <template #icon><ArrowForwardOutline /></template>
+                  </n-button>
                 </n-space>
-              </n-scrollbar>
-            </n-flex>
-            <n-divider style="margin: 0.2rem -0.5rem"></n-divider>
 
-            <n-flex vertical>
-              <n-row style="margin-top: 0.5rem; margin-left: 1rem">
-                <n-ellipsis><h3>气象信息</h3></n-ellipsis>
-              </n-row>
-              <n-space justify="space-around" class="routePtSelector">
-                <n-button
-                  size="small"
-                  @click="prevPtWeather"
-                  :disabled="routePtNumber <= 1"
+                <n-space justify="center">
+                  <n-ellipsis>{{ nowTime }}</n-ellipsis>
+                  <n-select
+                    style="width: 10rem"
+                    size="small"
+                    :options="levelOptions"
+                    v-model:value="selectedLevel"
+                    @update:value="levelChanged"
+                    placeholder="选择高度层"
+                  ></n-select>
+                </n-space>
+                <n-scrollbar
+                  x-scrollable
+                  id="weatherChart"
+                  style="width: 100%; height: 44vh"
                 >
-                  <template #icon><ArrowBackOutline /></template>
-                </n-button>
-                <n-ellipsis>航点 {{ routePtNumber }}</n-ellipsis>
-                <n-button
-                  size="small"
-                  @click="nextPtWeather"
-                  :disabled="selectedRoute.points.length <= routePtNumber"
-                >
-                  <template #icon><ArrowForwardOutline /></template>
-                </n-button>
-              </n-space>
-
-              <n-space justify="center">
-                <n-ellipsis>{{ nowTime }}</n-ellipsis>
-                <n-select
-                  style="width: 10rem"
-                  size="tiny"
-                  :options="levelOptions"
-                  v-model:value="selectedLevel"
-                  @update:value="levelChanged"
-                  placeholder="选择高度层"
-                ></n-select>
-              </n-space>
-              <n-scrollbar
-                x-scrollable
-                id="weatherChart"
-                style="width: 100%; height: 41.5vh"
-              >
-                <!--	Echarts气象信息绘图区	-->
-              </n-scrollbar>
-            </n-flex>
+                </n-scrollbar>
+              </n-flex>
+            </div>
           </n-layout-content>
         </n-layout>
       </div>
@@ -1008,6 +1052,7 @@ function backToHomePage() {
 <style scoped>
 .route-manage-overlay {
   display: flex;
+  justify-content: flex-end; /* 面板靠右 */
   position: absolute;
   top: 0;
   left: 0;
@@ -1016,34 +1061,34 @@ function backToHomePage() {
   pointer-events: none;
   z-index: 10;
 }
-#left {
-  width: 22vw;
-  height: 100vh;
-  pointer-events: auto;
-}
-
-#map-placeholder {
-  width: 55vw;
-  height: 100vh;
-  background: transparent;
-  pointer-events: none;
-}
 
 #right {
-  width: 23vw;
+  width: 26vw;
   height: 100vh;
   pointer-events: auto;
+
+  /* 整体半透明 */
+  background: rgba(16, 16, 20, 0.75);
+
+  /* 毛玻璃，可选 */
+  backdrop-filter: blur(6px);
+}
+
+/* 让 Naive UI 的 layout 不再盖住半透明背景 */
+#right :deep(.n-layout),
+#right :deep(.n-layout-scroll-container),
+#right :deep(.n-layout-content),
+#right :deep(.n-layout-header) {
+  background: transparent !important;
 }
 
 #echarts-profile {
-  height: 40vh;
-  margin-top: -0.5rem;
-  margin-left: -1rem;
+  height: 44vh;
+  width: 100%;
 }
 
 .routePtSelector {
-  width: 110%;
-  margin-left: -1rem;
+  width: 100%;
   font-weight: bold;
   color: #63e2b7;
 }
@@ -1052,7 +1097,5 @@ function backToHomePage() {
   background: rgb(24 24 28);
 }
 
-.border {
-  border: #2e2 solid 1px;
-}
+
 </style>
