@@ -1,12 +1,10 @@
-pub mod serial;
-pub mod udp;
-
 use std::time::Instant;
 
 /// 协议类型枚举，决定路由层如何切帧和解析
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub enum ProtocolType {
     /// 32 字节帧，EB90 包头
+    #[default]
     FP981C,
     /// 75 字节帧，无帧头帧尾，整包即帧
     UAVInfo,

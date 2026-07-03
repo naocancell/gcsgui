@@ -5,7 +5,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::connectivity::ProtocolType;
+use crate::comms::ProtocolType;
 use crate::protocol::uav_info::UAVInfo;
 
 /// 代表一条处于活动状态的物理链路句柄
@@ -16,10 +16,8 @@ pub struct ActiveLink {
     pub name: String,
     /// 该链路绑定的协议类型
     pub protocol: ProtocolType,
-    /// 用于向这条物理链路的发送任务(TX Task)发送数据的通道
-    pub tx_channel: mpsc::Sender<Vec<u8>>,
-    /// 用于关闭该链路后台任务的令牌
-    pub cancel_token: CancellationToken,
+    /// 底层真实多态物理传输链路句柄
+    pub transport: Arc<dyn comms_core::TransportLink>,
     /// 健康度：最后一次成功收到合法数据包的时间戳 (用于动态选主)
     pub last_heartbeat: Arc<Mutex<Instant>>,
 }
@@ -37,11 +35,21 @@ pub struct LinkMetrics {
 }
 
 impl LinkMetrics {
-    pub fn inc_ok(&self) { self.frames_ok.fetch_add(1, Ordering::Relaxed); }
-    pub fn inc_crc_fail(&self) { self.frames_crc_fail.fetch_add(1, Ordering::Relaxed); }
-    pub fn inc_dedup(&self) { self.dedup_hit.fetch_add(1, Ordering::Relaxed); }
-    pub fn inc_overflow(&self) { self.buffer_overflow.fetch_add(1, Ordering::Relaxed); }
-    pub fn inc_parse_err(&self) { self.parse_err.fetch_add(1, Ordering::Relaxed); }
+    pub fn inc_ok(&self) {
+        self.frames_ok.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn inc_crc_fail(&self) {
+        self.frames_crc_fail.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn inc_dedup(&self) {
+        self.dedup_hit.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn inc_overflow(&self) {
+        self.buffer_overflow.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn inc_parse_err(&self) {
+        self.parse_err.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 #[derive(Clone)]

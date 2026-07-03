@@ -1,0 +1,13 @@
+[package]
+name = "comms-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.52.3", features = ["full"] }
+tokio-serial = "5.5.0"
+tokio-util = { version = "0.7.13", features = ["rt"] }
+serde = { version = "1.0.228", features = ["derive"] }
+thiserror = "2"
+async-trait = "0.1"
+log = "0.4"

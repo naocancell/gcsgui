@@ -1,6 +1,6 @@
 [workspace]
 members = [
     "src-tauri",
-    "gcs-macros"
+    "crates/*"
 ]
 resolver = "2"
