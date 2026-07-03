@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields, LitInt, LitStr, parse_macro_input};
 
-#[proc_macro_derive(FPPacketParser, attributes(frame, scale, bits, subframe))]
+#[proc_macro_derive(FPPacketParser, attributes(frame, scale, bits, subframe, bitflags))]
 pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
     let struct_name = &ast.ident;
@@ -54,6 +54,7 @@ pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
         let mut scale_offset: Option<String> = None;
         let mut is_subframe = false;
         let mut subframe_size: Option<usize> = None;
+        let mut bitflags_raw_type: Option<String> = None;
 
         for attr in &f.attrs {
             if attr.path().is_ident("bits") {
@@ -84,6 +85,15 @@ pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
                         let value = meta.value()?;
                         let lit: LitInt = value.parse()?;
                         subframe_size = Some(lit.base10_parse::<usize>().unwrap());
+                    }
+                    Ok(())
+                });
+            } else if attr.path().is_ident("bitflags") {
+                let _ = attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("raw_type") {
+                        let value = meta.value()?;
+                        let lit: LitStr = value.parse()?;
+                        bitflags_raw_type = Some(lit.value());
                     }
                     Ok(())
                 });
@@ -148,7 +158,19 @@ pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
                 compile_time_bit_acc = 0;
             }
 
-            if let Some(raw_type_str) = scale_raw_type {
+            if let Some(raw_type_str) = bitflags_raw_type {
+                let raw_type: proc_macro2::TokenStream = raw_type_str.parse().unwrap();
+                parse_quotes.push(quote! {
+                    let size = std::mem::size_of::<#raw_type>();
+                    let slice = data.get(offset..offset + size)
+                        .ok_or_else(|| format!("解析 {} 字段越界", stringify!(#field_name)))?;
+                    let raw_val = <#raw_type>::from_le_bytes(slice.try_into().unwrap());
+                    let #field_name = <#field_type>::from_raw(raw_val);
+                    offset += size;
+                });
+                compile_time_size_expr =
+                    quote! { #compile_time_size_expr + std::mem::size_of::<#raw_type>() };
+            } else if let Some(raw_type_str) = scale_raw_type {
                 // 带缩放的字段
                 let factor: proc_macro2::TokenStream = scale_factor
                     .unwrap_or_else(|| "1.0".to_string())
@@ -311,6 +333,208 @@ pub fn derive_sub_frame(input: TokenStream) -> TokenStream {
                 match id {
                     #(#match_arms)*
                     other => Err(format!("未知子帧编号: {}", other)),
+                }
+            }
+        }
+    };
+
+    TokenStream::from(expanded)
+}
+
+/// 为结构体生成按位解析 `from_raw(val: T) -> Self` 方法
+#[proc_macro_derive(FPBitFlags, attributes(skip, bits))]
+pub fn derive_bit_flags(input: TokenStream) -> TokenStream {
+    let ast = parse_macro_input!(input as DeriveInput);
+    let struct_name = &ast.ident;
+
+    let fields = if let Data::Struct(data_struct) = &ast.data {
+        if let Fields::Named(named_fields) = &data_struct.fields {
+            &named_fields.named
+        } else {
+            panic!("FPBitFlags 只能用于带命名字段的结构体");
+        }
+    } else {
+        panic!("FPBitFlags 只能用于结构体");
+    };
+
+    let mut field_assigns = Vec::new();
+    let mut bit_cursor: usize = 0;
+
+    for f in fields.iter() {
+        let field_name = &f.ident;
+        let field_type = &f.ty;
+
+        let mut skip_count: usize = 0;
+        let mut bits_count: Option<usize> = None;
+
+        for attr in &f.attrs {
+            if attr.path().is_ident("skip") {
+                let lit: LitInt = attr.parse_args().unwrap();
+                skip_count += lit.base10_parse::<usize>().unwrap();
+            } else if attr.path().is_ident("bits") {
+                let lit: LitInt = attr.parse_args().unwrap();
+                bits_count = Some(lit.base10_parse::<usize>().unwrap());
+            }
+        }
+
+        if skip_count > 0 {
+            bit_cursor += skip_count;
+        }
+
+        if let Some(n) = bits_count {
+            let mask = if n >= 64 { !0u64 } else { (1u64 << n) - 1 };
+            field_assigns.push(quote! {
+                #field_name: ((val >> #bit_cursor) & #mask) as #field_type
+            });
+            bit_cursor += n;
+        } else {
+            field_assigns.push(quote! {
+                #field_name: ((val >> #bit_cursor) & 1) != 0
+            });
+            bit_cursor += 1;
+        }
+    }
+
+    let expanded = quote! {
+        impl #struct_name {
+            pub fn from_raw<T: Into<u64>>(val: T) -> Self {
+                let val: u64 = val.into();
+                Self {
+                    #(#field_assigns),*
+                }
+            }
+        }
+    };
+
+    TokenStream::from(expanded)
+}
+
+/// 自动生成数据聚合结构体及 `merge` 分发方法
+#[proc_macro_derive(FPAggregate, attributes(aggregate_struct, aggregate))]
+pub fn derive_aggregate(input: TokenStream) -> TokenStream {
+    let ast = parse_macro_input!(input as DeriveInput);
+    let enum_name = &ast.ident;
+
+    let mut agg_struct_name = syn::Ident::new("FP981CAggregate", enum_name.span());
+    for attr in &ast.attrs {
+        if attr.path().is_ident("aggregate_struct") {
+            let _ = attr.parse_nested_meta(|meta| {
+                if let Some(ident) = meta.path.get_ident() {
+                    agg_struct_name = ident.clone();
+                }
+                Ok(())
+            });
+        }
+    }
+
+    let variants = if let Data::Enum(data_enum) = &ast.data {
+        &data_enum.variants
+    } else {
+        panic!("FPAggregate 只能用于枚举");
+    };
+
+    let mut struct_fields: Vec<proc_macro2::TokenStream> = Vec::new();
+    struct_fields.push(quote! { pub uav_id: u8 });
+
+    let mut merge_arms: Vec<proc_macro2::TokenStream> = Vec::new();
+
+    for variant in variants {
+        let variant_ident = &variant.ident;
+        let field_name = syn::Ident::new(
+            &variant_ident.to_string().to_lowercase(),
+            variant_ident.span(),
+        );
+
+        let inner_ty = if let Fields::Unnamed(fields) = &variant.fields {
+            &fields.unnamed.first().expect("变体必须包含一个内部类型").ty
+        } else {
+            panic!("变体必须是元组形式");
+        };
+
+        struct_fields.push(quote! { pub #field_name: Option<#inner_ty> });
+
+        let mut sub_enum_ident: Option<syn::Ident> = None;
+        let mut sub_field_ident: Option<syn::Ident> = None;
+        let mut sub_items: Vec<(syn::Ident, syn::Ident, syn::Ident)> = Vec::new(); // (sub_variant, sub_ty, sub_field_name)
+
+        for attr in &variant.attrs {
+            if attr.path().is_ident("aggregate") {
+                let _ = attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("sub_enum") {
+                        let value = meta.value()?;
+                        let lit: LitStr = value.parse()?;
+                        sub_enum_ident = Some(syn::Ident::new(
+                            &lit.value(),
+                            proc_macro2::Span::call_site(),
+                        ));
+                    } else if meta.path.is_ident("sub_field") {
+                        let value = meta.value()?;
+                        let lit: LitStr = value.parse()?;
+                        sub_field_ident = Some(syn::Ident::new(
+                            &lit.value(),
+                            proc_macro2::Span::call_site(),
+                        ));
+                    } else if meta.path.is_ident("subs") {
+                        let _ = meta.parse_nested_meta(|sub_meta| {
+                            let sub_variant = sub_meta.path.get_ident().unwrap().clone();
+                            let mut sub_ty: Option<syn::Ident> = None;
+                            let _ = sub_meta.parse_nested_meta(|inner_meta| {
+                                sub_ty = Some(inner_meta.path.get_ident().unwrap().clone());
+                                Ok(())
+                            });
+                            if let Some(ty) = sub_ty {
+                                let sub_field_name = syn::Ident::new(
+                                    &format!(
+                                        "{}_{}",
+                                        variant_ident.to_string().to_lowercase(),
+                                        sub_variant.to_string().to_lowercase()
+                                    ),
+                                    sub_variant.span(),
+                                );
+                                sub_items.push((sub_variant, ty, sub_field_name));
+                            }
+                            Ok(())
+                        });
+                    }
+                    Ok(())
+                });
+            }
+        }
+
+        if let (Some(s_enum), Some(s_field)) = (sub_enum_ident, sub_field_ident) {
+            let mut sub_matches = Vec::new();
+            for (sub_variant, sub_ty, sub_field_name) in &sub_items {
+                struct_fields.push(quote! { pub #sub_field_name: Option<#sub_ty> });
+                sub_matches.push(quote! {
+                    #s_enum::#sub_variant(s) => self.#sub_field_name = Some(s.clone()),
+                });
+            }
+
+            merge_arms.push(quote! {
+                #enum_name::#variant_ident(val) => {
+                    match &val.#s_field {
+                        #(#sub_matches)*
+                    }
+                    self.#field_name = Some(val);
+                }
+            });
+        } else {
+            merge_arms.push(quote! {
+                #enum_name::#variant_ident(val) => self.#field_name = Some(val),
+            });
+        }
+    }
+
+    let expanded = quote! {
+        #[derive(Debug, Default, Clone, serde::Serialize)]
+        pub struct #agg_struct_name {
+            #(#struct_fields),*
+        }
+
+        impl #agg_struct_name {
+            pub fn merge(&mut self, parsed: #enum_name) {
+                match parsed {
+                    #(#merge_arms)*
                 }
             }
         }

@@ -4,11 +4,9 @@ use crate::state;
 #[tauri::command]
 pub async fn upload_route(
     state: tauri::State<'_, state::AppState>,
-    ip: String,
-    port: u16,
+    link_name: String,
     route: protocol::route_info::RouteUpload,
 ) -> Result<String, String> {
-    let link_name = format!("UDP_{}:{}", ip, port);
     if let Some(link) = state.active_links.get(&link_name) {
         let mut success_count = 0;
         for pt in &route.points {
@@ -18,6 +16,6 @@ pub async fn upload_route(
         }
         Ok(format!("航线数据下发成功：{}", success_count))
     } else {
-        Err("找不到指定的 UDP 链路进行下发".to_string())
+        Err(format!("找不到指定的通信链路 [{}] 进行下发", link_name))
     }
 }

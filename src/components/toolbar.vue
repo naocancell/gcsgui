@@ -357,8 +357,18 @@ async function openUdpSettings() {
   showUdpModal.value = true
   try {
     await uavStore.fetchNetworkInterfaces()
+    await uavStore.loadCommsConfig()
   } catch (err) {
-    message.error('获取本地网卡列表失败: ' + err)
+    message.error('获取本地网卡或读取配置失败: ' + err)
+  }
+}
+
+async function handleSaveConfig() {
+  try {
+    await uavStore.saveCommsConfig()
+    message.success('配置已保存并成功应用热重载！')
+  } catch (err) {
+    message.error('保存配置失败: ' + err)
   }
 }
 
@@ -941,6 +951,12 @@ function startDrawRoute(routeParams) {
           </n-space>
         </n-tab-pane>
       </n-tabs>
+      <n-divider style="margin: 1rem 0 0.8rem 0" />
+      <n-space justify="center" style="margin-bottom: 0.8rem">
+        <n-button @click="handleSaveConfig" type="success" size="small">
+          保存配置
+        </n-button>
+      </n-space>
     </div>
   </n-modal>
 

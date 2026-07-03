@@ -15,6 +15,7 @@ export const useUavStore = defineStore('uav', () => {
   const uavInfo = ref<UAVInfo | null>(null)
   
   // UAVInfo 通道参数
+  const udpName = ref('UAVInfo_UDP')
   const udpIp = ref('226.0.1.9')
   const udpPort = ref(8999)
   const udpTargetPort = ref(9001)
@@ -22,6 +23,7 @@ export const useUavStore = defineStore('uav', () => {
   const isServiceRunning = ref(false)
 
   // FP95 通道参数 (默认 0.0.0.0:0)
+  const fp95Name = ref('FP95_UDP')
   const fp95Ip = ref('226.0.1.9')
   const fp95Port = ref(8999)
   const fp95Interface = ref('0.0.0.0')
@@ -71,17 +73,13 @@ export const useUavStore = defineStore('uav', () => {
   // 启动 UAVInfo 接收服务
   async function startUavService() {
     try {
-      const status = await invoke<string>('start_udp_listener', {
-        ip: udpIp.value,
-        port: udpPort.value,
-        interfaceIp: udpInterface.value,
-        protocol: Protocol.UAVInfo,
-      })
-      console.log(status)
       isServiceRunning.value = true
+      const status = await saveCommsConfig()
+      console.log(status)
       await startListening()
     } catch (err) {
-      console.error('启动 UAVInfo UDP 后台接收失败', err)
+      isServiceRunning.value = false
+      console.error('启动并保存 UAVInfo UDP 后台接收失败', err)
       throw err
     }
   }
@@ -89,22 +87,19 @@ export const useUavStore = defineStore('uav', () => {
   // 停止 UAVInfo 接收服务
   async function stopUavService() {
     try {
-      const status = await invoke<string>('stop_udp_listener', {
-        ip: udpIp.value,
-        port: udpPort.value,
-      })
+      isServiceRunning.value = false
+      const status = await saveCommsConfig()
       console.log(status)
       stopListening()
-      isServiceRunning.value = false
-       uavInfoMap.value = new Map()   // 清空真正渲染用的数据
-       //关闭定时器
+      uavInfoMap.value = new Map()   // 清空真正渲染用的数据
+      //关闭定时器
       if (uavWatchdog) {
         clearTimeout(uavWatchdog)
         uavWatchdog = null
       }
       uavInfo.value = null
     } catch (err) {
-      console.error('停止 UAVInfo UDP 后台接收失败', err)
+      console.error('停止并保存 UAVInfo UDP 后台接收失败', err)
       throw err
     }
   }
@@ -112,17 +107,13 @@ export const useUavStore = defineStore('uav', () => {
   // 启动 FP95 接收服务
   async function startFp95Service() {
     try {
-      const status = await invoke<string>('start_udp_listener', {
-        ip: fp95Ip.value,
-        port: fp95Port.value,
-        interfaceIp: fp95Interface.value,
-        protocol: Protocol.FP95,
-      })
-      console.log(status)
       isFp95Running.value = true
+      const status = await saveCommsConfig()
+      console.log(status)
       await startFp95Listening()//启动服务时候开启数据监听
     } catch (err) {
-      console.error('启动 FP95 UDP 后台接收失败', err)
+      isFp95Running.value = false
+      console.error('启动并保存 FP95 UDP 后台接收失败', err)
       throw err
     }
   }
@@ -130,21 +121,18 @@ export const useUavStore = defineStore('uav', () => {
   // 停止 FP95 接收服务
   async function stopFp95Service() {
     try {
-      const status = await invoke<string>('stop_udp_listener', {
-        ip: fp95Ip.value,
-        port: fp95Port.value,
-      })
+      isFp95Running.value = false
+      const status = await saveCommsConfig()
       console.log(status)
       stopFp95Listening()//停止监听
-            //计时器
-      isFp95Running.value = false
-       if (fp95Watchdog) {
-      clearTimeout(fp95Watchdog)
-      fp95Watchdog = null
-    }
+      //计时器
+      if (fp95Watchdog) {
+        clearTimeout(fp95Watchdog)
+        fp95Watchdog = null
+      }
       fp95Map.value = new Map()      // 清空残留的 FP95 飞机
     } catch (err) {
-      console.error('停止 FP95 UDP 后台接收失败', err)
+      console.error('停止并保存 FP95 UDP 后台接收失败', err)
       throw err
     }
   }
@@ -157,6 +145,66 @@ export const useUavStore = defineStore('uav', () => {
       networkInterfaces.value = list
     } catch (err) {
       console.error('获取网卡列表失败', err)
+      throw err
+    }
+  }
+
+  // 从文件读取通信配置
+  async function loadCommsConfig() {
+    try {
+      const config = await invoke<any>('get_comms_config')
+      console.log('读取到本地通信配置:', config)
+      if (config && Array.isArray(config.udp)) {
+        for (const item of config.udp) {
+          if (item.name === udpName.value || item.protocol === Protocol.UAVInfo) {
+            if (item.ip) udpIp.value = item.ip
+            if (item.port) udpPort.value = item.port
+            if (item.interface_ip) udpInterface.value = item.interface_ip
+          } else if (item.name === fp95Name.value || item.protocol === Protocol.FP95) {
+            if (item.ip) fp95Ip.value = item.ip
+            if (item.port) fp95Port.value = item.port
+            if (item.interface_ip) fp95Interface.value = item.interface_ip
+          }
+        }
+      }
+      return config
+    } catch (err) {
+      console.error('从文件读取配置失败', err)
+      throw err
+    }
+  }
+
+  // 保存通信配置到文件并应用热重载
+  async function saveCommsConfig() {
+    try {
+      const config = {
+        udp: [
+          {
+            name: udpName.value,
+            ip: udpIp.value,
+            port: udpPort.value,
+            interface_ip: udpInterface.value,
+            protocol: Protocol.UAVInfo,
+            enabled: isServiceRunning.value,
+            auto_connect: true
+          },
+          {
+            name: fp95Name.value,
+            ip: fp95Ip.value,
+            port: fp95Port.value,
+            interface_ip: fp95Interface.value,
+            protocol: Protocol.FP95,
+            enabled: isFp95Running.value,
+            auto_connect: true
+          }
+        ],
+        serial: []
+      }
+      const res = await invoke<string>('save_comms_config', { config })
+      console.log('保存配置成功:', res)
+      return res
+    } catch (err) {
+      console.error('保存通信配置失败', err)
       throw err
     }
   }
@@ -303,11 +351,13 @@ export const useUavStore = defineStore('uav', () => {
 
   return {
     uavInfo,
+    udpName,
     udpIp,
     udpPort,
     udpTargetPort,
     udpInterface,
     isServiceRunning,
+    fp95Name,
     fp95Ip,
     fp95Port,
     fp95Interface,
@@ -318,6 +368,8 @@ export const useUavStore = defineStore('uav', () => {
     startFp95Service,
     stopFp95Service,
     fetchNetworkInterfaces,
+    loadCommsConfig,
+    saveCommsConfig,
     //uavInfo更新方法和数据
     updateUavInfoList,
     uavInfoMap,

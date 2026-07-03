@@ -2,8 +2,7 @@ use dashmap::DashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
-use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
+
 
 use crate::comms::ProtocolType;
 use crate::protocol::uav_info::UAVInfo;
@@ -12,8 +11,10 @@ use crate::protocol::uav_info::UAVInfo;
 pub struct ActiveLink {
     /// 链路类型，如 "Serial", "UDP"
     pub link_type: String,
-    /// 链路名称，如 "COM3", "224.0.0.1:14550"
+    /// 链路名称（作为主键标识）
     pub name: String,
+    /// 物理端点参数摘要（用于热重载判断物理配置是否变更）
+    pub endpoint_info: String,
     /// 该链路绑定的协议类型
     pub protocol: ProtocolType,
     /// 底层真实多态物理传输链路句柄

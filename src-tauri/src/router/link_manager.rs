@@ -128,29 +128,7 @@ fn process_fp981c_frame(frame: &[u8], dedup_cache: &Cache<String, ()>, app_state
             });
             agg.uav_id = uav_id;
 
-            match parsed {
-                ParsedSubFrame::C0(c0) => agg.c0 = Some(c0),
-                ParsedSubFrame::C1(c1) => agg.c1 = Some(c1),
-                ParsedSubFrame::C2(c2) => agg.c2 = Some(c2),
-                ParsedSubFrame::C3(c3) => {
-                    match &c3.sub_frames {
-                        crate::protocol::fp981c::C3SubFrames::Sub0(s) => {
-                            agg.c3_sub0 = Some(s.clone())
-                        }
-                        crate::protocol::fp981c::C3SubFrames::Sub1(s) => {
-                            agg.c3_sub1 = Some(s.clone())
-                        }
-                        crate::protocol::fp981c::C3SubFrames::Sub2(s) => {
-                            agg.c3_sub2 = Some(s.clone())
-                        }
-                        crate::protocol::fp981c::C3SubFrames::Sub3(s) => {
-                            agg.c3_sub3 = Some(s.clone())
-                        }
-                    }
-                    agg.c3 = Some(c3);
-                }
-                ParsedSubFrame::C5(c5) => agg.c5 = Some(c5),
-            }
+            agg.merge(parsed);
             app_state.fp981c_seen.insert(uav_id, Instant::now());
         }
         Err(_) => {

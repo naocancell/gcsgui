@@ -7,15 +7,16 @@ use tokio::sync::mpsc;
 pub async fn start_udp_internal(
     state: &state::AppState,
     router_tx: &crate::comms::RouterTx,
+    name: String,
     ip: String,
     port: u16,
     interface_ip: String,
     protocol_type: crate::comms::ProtocolType,
 ) -> Result<String, String> {
-    let link_name = format!("UDP_{}:{}", ip, port);
+    let link_name = name.clone();
 
     if state.active_links.contains_key(&link_name) {
-        return Err("该 UDP 链路已存在".to_string());
+        return Err(format!("该 UDP 链路 [{}] 已存在", link_name));
     }
 
     let bind_addr = format!("0.0.0.0:{}", port)
@@ -40,9 +41,12 @@ pub async fn start_udp_internal(
         .await
         .map_err(|e| format!("启动 UDP 内核失败: {}", e))?;
 
+    let endpoint_info = format!("{}:{}:{}", ip, port, interface_ip);
+
     let active_link = state::ActiveLink {
         link_type: "UDP".to_string(),
         name: link_name.clone(),
+        endpoint_info,
         protocol: protocol_type,
         transport,
         last_heartbeat: Arc::new(Mutex::new(Instant::now())),
@@ -56,7 +60,11 @@ pub async fn start_udp_internal(
     tauri::async_runtime::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             match event {
-                comms_core::LinkEvent::Data { payload, received_at, .. } => {
+                comms_core::LinkEvent::Data {
+                    payload,
+                    received_at,
+                    ..
+                } => {
                     let _ = router_tx_clone
                         .send(crate::comms::RawData {
                             source_link: ln_clone.clone(),
@@ -80,26 +88,34 @@ pub async fn start_udp_internal(
 pub async fn start_udp_listener(
     state: tauri::State<'_, state::AppState>,
     router_tx: tauri::State<'_, crate::comms::RouterTx>,
+    name: String,
     ip: String,
     port: u16,
     interface_ip: String,
     protocol: String,
 ) -> Result<String, String> {
     let protocol_type = parse_protocol(&protocol)?;
-    start_udp_internal(&state, &router_tx, ip, port, interface_ip, protocol_type).await
+    start_udp_internal(
+        &state,
+        &router_tx,
+        name,
+        ip,
+        port,
+        interface_ip,
+        protocol_type,
+    )
+    .await
 }
 
 #[tauri::command]
 pub fn stop_udp_listener(
     state: tauri::State<'_, state::AppState>,
-    ip: String,
-    port: u16,
+    name: String,
 ) -> Result<String, String> {
-    let link_name = format!("UDP_{}:{}", ip, port);
-    if let Some((_, link)) = state.active_links.remove(&link_name) {
+    if let Some((_, link)) = state.active_links.remove(&name) {
         link.transport.stop();
-        Ok(format!("UDP 监听服务 ({}:{}) 已停止", ip, port))
+        Ok(format!("UDP 监听服务 [{}] 已停止", name))
     } else {
-        Err(format!("未找到指定的 UDP 链路 ({}:{})", ip, port))
+        Err(format!("未找到指定的 UDP 链路 [{}]", name))
     }
 }

@@ -515,8 +515,7 @@ async function sendRouteToQT(routeUnicode: string | number) {
       console.log('发送的具体特征字2(ch2)：', selectedRouteToUpload.points.map(pt => pt.ch2).join(', '))
 
       const res = await invoke<string>('upload_route', {
-        ip: uavStore.udpIp,
-        port: uavStore.udpTargetPort,
+        linkName: uavStore.udpName,
         route: selectedRouteToUpload,
       })
       uiMsg.info('航线' + selectedRouteToUpload.name + '已下发: ' + res)
