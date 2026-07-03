@@ -1,7 +1,7 @@
 use bytes::BytesMut;
 use std::collections::HashMap;
 
-use crate::connectivity::{ProtocolType, RawData};
+use crate::comms::{ProtocolType, RawData};
 use crate::protocol::uav_info::UAVInfo;
 use crate::state::AppState;
 
@@ -39,10 +39,6 @@ pub async fn start_router(mut rx: tokio::sync::mpsc::Receiver<RawData>, app_stat
                 *lock = raw.received_at;
                 link.protocol
             } else {
-                println!(
-                    "[路由层警告] 收到来自 {} 的数据，但在 active_links 中未找到该链路记录",
-                    raw.source_link
-                );
                 continue;
             }
         };
@@ -206,14 +202,12 @@ fn extract_and_process_fp95(
     dedup_cache: &Cache<String, ()>,
     app_state: &AppState,
 ) {
-    let mut processed = false;
     while let Some(header_idx) = find_fp95_header(buffer) {
         if header_idx > 0 {
             let _ = buffer.split_to(header_idx);
         }
         if buffer.len() >= 32 {
             let frame = buffer.split_to(32);
-            processed = true;
             process_fp95_frame(&frame, dedup_cache, app_state);
         } else {
             break;
@@ -238,7 +232,6 @@ fn process_fp95_frame(frame: &[u8], dedup_cache: &Cache<String, ()>, app_state: 
 
     let dedup_key = format!("95-{}-{}-{}", uav_id, frame_id, seq_num);
     if dedup_cache.contains_key(&dedup_key) {
-        println!("[FP95 去重] 重复包被丢弃: {}", dedup_key);
         app_state.metrics.inc_dedup();
         return;
     }
@@ -254,21 +247,14 @@ fn process_fp95_frame(frame: &[u8], dedup_cache: &Cache<String, ()>, app_state: 
                 if frame_94_sub1.raw_s_address == [0, 0, 0] {
                     return;
                 }
-                println!(
-                    "[FP95 成功] 存入内存池 s_address: {}, 经纬度: ({}, {}, {})",
-                    frame_94_sub1.s_address,
-                    frame_94_sub1.ads_lon,
-                    frame_94_sub1.ads_lat,
-                    frame_94_sub1.ads_alt
-                );
+
                 app_state.metrics.inc_ok();
                 let s_address = frame_94_sub1.raw_s_address;
                 app_state.fp95_pool.insert(s_address, frame_94_sub1);
                 app_state.fp95_seen.insert(s_address, Instant::now());
             }
         },
-        Err(err) => {
-            // println!("[FP95 失败] 子帧解析异常 frame_id: {}, 报错: {:?}", frame_id, err);
+        Err(_err) => {
             app_state.metrics.inc_parse_err();
         }
     }

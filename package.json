@@ -14,7 +14,13 @@
     "lint:style": "stylelint src/**/*.{css,scss,vue} --cache --fix",
     "preinstall": "node ./scripts/preinstall.js",
     "tauri": "tauri",
-    "tauri:dev": "node scripts/dev.js"
+    "tauri:dev": "node scripts/dev.js",
+    "release-version": "node scripts/release-version.mjs",
+    "release:autobuild": "pnpm release-version autobuild",
+    "release:deploytest": "pnpm release-version deploytest",
+    "publish-version": "node scripts/publish-version.mjs",
+    "i18n:generate": "node scripts/generate-i18n-keys.mjs",
+    "i18n:cleanup": "node scripts/cleanup-unused-i18n.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
@@ -39,12 +45,16 @@
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
+    "@actions/github": "^9.1.1",
     "@babel/eslint-parser": "^7.23.10",
     "@tauri-apps/cli": "^2.11.2",
     "@types/node": "^20.11.25",
     "@typescript-eslint/eslint-plugin": "^7.1.1",
     "@typescript-eslint/parser": "^7.1.1",
     "@vitejs/plugin-vue": "^5.0.4",
+    "adm-zip": "^0.5.18",
+    "cli-color": "^2.0.4",
+    "commander": "^15.0.0",
     "eslint": "^8.57.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-import": "^2.29.1",
