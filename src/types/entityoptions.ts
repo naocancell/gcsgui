@@ -101,7 +101,7 @@ export interface UAVInfo {
   distanceNext: number // 待飞距
 }
 
- export type FP95Frame94Sub1 = {
+export type FP95Frame94Sub1 = {
     addressType: string;       // 地址类型 ("ICAO地址"|"临时地址")
     sAddress: string;          // S模式地址十六进制字符串
     adsLon: number;            // 经度 (double / f64)
@@ -118,9 +118,37 @@ export interface UAVInfo {
 
   // 后端推送的是所有在线无人机状态的数组
   export type FP95EventPayload = FP95Frame94Sub1[];
+
+  export interface FP981CFrameC1 {
+    fy_angle?: number;
+    gz_angle?: number;
+    head_angle?: number;
+  }
+
+  export interface FP981CFrameC2 {
+    gps_longitude: number;
+    gps_latitude: number;
+    hb_height: number;
+    air_height?: number;
+    rel_height?: number;
+    ground_speed?: number;
+    ground_speed_direct?: number;
+    ve_speed?: number;
+    air_speed?: number;
+    real_air_spped?: number;
+    head_given?: number;
+  }
+
+  export interface FP981CAggregate {
+    uav_id: number;
+    c1?: FP981CFrameC1 | null;
+    c2?: FP981CFrameC2 | null;
+  }
+
+  export type FP981CEventPayload = FP981CAggregate[];
   
   //将不同的飞机结构体统一用于渲染
-  export type PlaneType = "uavInfo" | "fp95";;
+  export type PlaneType = "uavInfo" | "fp95" | "fp981c";;
 
   // 渲染层结构
   export interface PlaneState {
@@ -134,7 +162,7 @@ export interface UAVInfo {
     roll?: number;// 滚转角
     groundSpeed?: number;// 地速
     verticalSpeed: number // 垂直速度 m/s
-    raw: UAVInfo | FP95Frame94Sub1; // 保留原始数据，点击时用
+    raw: UAVInfo | FP95Frame94Sub1 | FP981CAggregate; // 保留原始数据，点击时用
     showTrail?: boolean;// 是否显示轨迹
   }
 

@@ -31,4 +31,12 @@ export const PLANE_CONFIG: Record<PlaneType, PlaneConfig> = {
     color: Cesium.Color.LIME,
     colorBlendAmount: 0.7,
   },
+  fp981c: {
+    url: fp98,
+    scale: 0.1,
+    minimumPixelSize: 64,
+    maximumScale: 20000,
+    color: Cesium.Color.RED,
+    colorBlendAmount: 0.8,
+  },
 };

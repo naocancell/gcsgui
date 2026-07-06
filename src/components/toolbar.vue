@@ -367,6 +367,7 @@ async function openUdpSettings() {
   try {
     await uavStore.fetchNetworkInterfaces()
     await uavStore.loadCommsConfig()
+    await uavStore.startPortsMonitoring()
   } catch (err) {
     message.error('获取本地网卡或读取配置失败: ' + err)
   }
@@ -394,6 +395,57 @@ const interfaceOptions = computed(() => {
   })
   return options
 })
+
+const portOptions = computed(() => {
+  return uavStore.availablePorts.map((port) => ({
+    label: port,
+    value: port,
+  }))
+})
+
+const baudRateOptions = [
+  { label: '9600', value: 9600 },
+  { label: '19200', value: 19200 },
+  { label: '38400', value: 38400 },
+  { label: '57600', value: 57600 },
+  { label: '115200', value: 115200 },
+]
+
+async function startMainSerialService() {
+  try {
+    await uavStore.startMainSerialService()
+    message.success('主链路串口接收服务已启动')
+  } catch (err) {
+    message.error('启动主链路串口接收服务失败: ' + err)
+  }
+}
+
+async function stopMainSerialService() {
+  try {
+    await uavStore.stopMainSerialService()
+    message.success('主链路串口接收服务已停止')
+  } catch (err) {
+    message.error('停止主链路串口接收服务失败: ' + err)
+  }
+}
+
+async function startSubSerialService() {
+  try {
+    await uavStore.startSubSerialService()
+    message.success('副链路串口接收服务已启动')
+  } catch (err) {
+    message.error('启动副链路串口接收服务失败: ' + err)
+  }
+}
+
+async function stopSubSerialService() {
+  try {
+    await uavStore.stopSubSerialService()
+    message.success('副链路串口接收服务已停止')
+  } catch (err) {
+    message.error('停止副链路串口接收服务失败: ' + err)
+  }
+}
 
 async function startUavInfoService() {
   try {
@@ -876,7 +928,7 @@ function toggleSelectedPlaneTerrainWarning() {
             </template>
           </n-button>
         </template>
-        <span>UDP设置</span>
+        <span>通信设置</span>
       </n-tooltip>
 
       <!-- 模拟uavinfo -->
@@ -1032,13 +1084,13 @@ function toggleSelectedPlaneTerrainWarning() {
 <!-- 控制是否展示Udp界面 -->
   <n-modal
     v-model:show="showUdpModal"
-    style="width: 36%"
+    style="width: 48%; min-width: 550px"
     :mask-closable="false"
     preset="dialog"
     title=""
   >
     <template #header>
-      <div style="font-weight: bold; font-size: 16px;">多通道组播通信配置</div>
+      <div style="font-weight: bold; font-size: 16px;">多通道通信配置</div>
     </template>
     <div style="margin: 1rem 1rem 0.5rem 1rem">
       <n-tabs type="segment" animated>
@@ -1126,6 +1178,82 @@ function toggleSelectedPlaneTerrainWarning() {
               开启通信
             </n-button>
             <n-button @click="stopFp95Service" type="warning" size="small">
+              关闭通信
+            </n-button>
+          </n-space>
+        </n-tab-pane>
+
+        <!-- 通道三：主链路 (串口) -->
+        <n-tab-pane name="main_serial" tab="主链路 (串口)">
+          <n-form
+            :model="uavStore"
+            label-placement="left"
+            label-width="auto"
+            style="margin-top: 1.2rem;"
+          >
+            <n-form-item label="串口号">
+              <n-select
+                v-model:value="uavStore.mainSerialPort"
+                :options="portOptions"
+                placeholder="请选择串口号"
+              />
+            </n-form-item>
+            <n-form-item label="波特率">
+              <n-select
+                v-model:value="uavStore.mainSerialBaud"
+                :options="baudRateOptions"
+                placeholder="请选择波特率"
+              />
+            </n-form-item>
+            <n-form-item label="运行状态">
+              <n-tag :type="uavStore.isMainSerialRunning ? 'success' : 'error'">
+                {{ uavStore.isMainSerialRunning ? '监听中' : '已停止' }}
+              </n-tag>
+            </n-form-item>
+          </n-form>
+          <n-space justify="center" style="margin-top: 1rem">
+            <n-button @click="startMainSerialService" type="primary" size="small">
+              开启通信
+            </n-button>
+            <n-button @click="stopMainSerialService" type="warning" size="small">
+              关闭通信
+            </n-button>
+          </n-space>
+        </n-tab-pane>
+
+        <!-- 通道四：副链路 (串口) -->
+        <n-tab-pane name="sub_serial" tab="副链路 (串口)">
+          <n-form
+            :model="uavStore"
+            label-placement="left"
+            label-width="auto"
+            style="margin-top: 1.2rem;"
+          >
+            <n-form-item label="串口号">
+              <n-select
+                v-model:value="uavStore.subSerialPort"
+                :options="portOptions"
+                placeholder="请选择串口号"
+              />
+            </n-form-item>
+            <n-form-item label="波特率">
+              <n-select
+                v-model:value="uavStore.subSerialBaud"
+                :options="baudRateOptions"
+                placeholder="请选择波特率"
+              />
+            </n-form-item>
+            <n-form-item label="运行状态">
+              <n-tag :type="uavStore.isSubSerialRunning ? 'success' : 'error'">
+                {{ uavStore.isSubSerialRunning ? '监听中' : '已停止' }}
+              </n-tag>
+            </n-form-item>
+          </n-form>
+          <n-space justify="center" style="margin-top: 1rem">
+            <n-button @click="startSubSerialService" type="primary" size="small">
+              开启通信
+            </n-button>
+            <n-button @click="stopSubSerialService" type="warning" size="small">
               关闭通信
             </n-button>
           </n-space>

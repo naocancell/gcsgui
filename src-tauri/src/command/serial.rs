@@ -119,6 +119,8 @@ pub fn start_port_monitor(app: tauri::AppHandle) {
                     ports.into_iter().map(|p| p.port_name).collect();
                 current_ports.sort();
 
+                // println!("{:?}", current_ports);
+
                 if current_ports != last_ports {
                     last_ports = current_ports.clone();
                     let _ = app.emit("ports-changed", current_ports);
@@ -127,4 +129,15 @@ pub fn start_port_monitor(app: tauri::AppHandle) {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
     });
+}
+
+#[tauri::command]
+pub fn get_available_ports() -> Result<Vec<String>, String> {
+    comms_core::list_available_ports()
+        .map(|ports| {
+            let mut p: Vec<String> = ports.into_iter().map(|p| p.port_name).collect();
+            p.sort();
+            p
+        })
+        .map_err(|e| format!("获取串口列表失败: {}", e))
 }

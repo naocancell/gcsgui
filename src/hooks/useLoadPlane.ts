@@ -3,8 +3,8 @@ import { watch } from "vue";
 import { useUavStore } from "@/store/uavStore.ts";
 import { PlaneState } from "@/types/entityoptions";
 import { PLANE_CONFIG } from "@/utils/plane/planeConfig";
-import {UAVInfo, FP95Frame94Sub1} from "@/types/entityoptions";
-import {normalizeUAVInfo, normalizeFP95} from "@/utils/plane/planeAdapter";
+import {UAVInfo, FP95Frame94Sub1, FP981CAggregate} from "@/types/entityoptions";
+import {normalizeUAVInfo, normalizeFP95, normalizeFP981C} from "@/utils/plane/planeAdapter";
 export function useLoadPlane() {
   //获取飞机的状态管理store
   const store = useUavStore();
@@ -329,6 +329,7 @@ const TAIL_OVERLAP = 10;
       () => [
         store.uavInfoMap,
         store.fp95Map,
+        store.fp981cMap,
       ],//同时监听
       () => {
         //将UAVInfo和FP95数据转换成统一格式 用于加载飞机
@@ -341,6 +342,9 @@ const TAIL_OVERLAP = 10;
         //将 FP95 类型数据转换成统一 PlaneState
         store.fp95Map?.forEach((item: FP95Frame94Sub1) => {
           planes.push(normalizeFP95(item));
+        });
+        store.fp981cMap?.forEach((item: FP981CAggregate) => {
+          planes.push(normalizeFP981C(item));
         });
         // 用统一后的飞机列表更新 Cesium 模型
         updatePlanes(viewer, planes);

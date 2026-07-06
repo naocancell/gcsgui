@@ -70,6 +70,21 @@ pub fn run() {
                         .build(),
                 )?;
             }
+
+            // 目前不确定是否需要修改热重载逻辑 先这样改
+            // 软件开启时，把本地配置中的 enabled 全部重置为 false，避免前后端状态不一致
+            let mut comms_config = config::comms::CommsConfig::load(app.handle());
+            for udp in &mut comms_config.udp {
+                if udp.enabled {
+                    udp.enabled = false;
+                }
+            }
+            for serial in &mut comms_config.serial {
+                if serial.enabled {
+                    serial.enabled = false;
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -77,6 +92,7 @@ pub fn run() {
             stop_udp_listener,
             start_serial_listener,
             stop_serial_listener,
+            get_available_ports,
             get_network_interfaces,
             upload_route,
             close_app,

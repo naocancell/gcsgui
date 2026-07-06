@@ -36,17 +36,20 @@ pub struct FrameC1 {
 #[derive(FPPacketParser, Debug, Clone, Serialize)]
 #[frame(id = 0xC2, payload_size = 25)]
 pub struct FrameC2 {
-    pub gps_longitude: i32,       // 经度
-    pub gps_latitude: i32,        // 纬度
-    pub hb_height: u16,           // 海拔高度
-    pub air_height: u16,          // 气压高度
-    pub rel_height: u16,          // 相对海拔高度
-    pub ground_speed: u16,        // 地速
+    pub gps_longitude: i32, // 经度
+    pub gps_latitude: i32,  // 纬度
+    #[scale(raw_type = "u16", factor = "0.1", offset = "-500.0")]
+    pub hb_height: f32, // 海拔高度
+    #[scale(raw_type = "u16", factor = "0.1", offset = "-500.0")]
+    pub air_height: f32, // 气压高度
+    #[scale(raw_type = "u16", factor = "0.1", offset = "-500.0")]
+    pub rel_height: f32, // 相对海拔高度
+    pub ground_speed: u16,  // 地速
     pub ground_speed_direct: u16, // 地速方向
-    pub ve_speed: i16,            // 垂速
-    pub air_speed: i16,           // 空速
-    pub real_air_spped: u8,       // 真空速
-    pub head_given: u16,          // 旋翼航向角给定
+    pub ve_speed: i16,      // 垂速
+    pub air_speed: i16,     // 空速
+    pub real_air_spped: u8, // 真空速
+    pub head_given: u16,    // 旋翼航向角给定
 }
 
 // ================= C3 状态帧 (带子帧结构) =================
