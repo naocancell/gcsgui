@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref,shallowRef } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
-import type {UAVInfo, FP95Frame94Sub1,FP95EventPayload } from '@/types/entityoptions'//引入类型
+import type {UAVInfo, FP95Frame94Sub1,FP95EventPayload, FP981CAggregate, FP981CEventPayload } from '@/types/entityoptions'//引入类型
 
 // 协议解包类型枚举
 const enum Protocol {
@@ -29,10 +29,27 @@ export const useUavStore = defineStore('uav', () => {
   const fp95Interface = ref('0.0.0.0')
   const isFp95Running = ref(false)
 
+  // 主链路串口参数 (默认绑定 FP981C)
+  const mainSerialName = ref('主链路')
+  const mainSerialPort = ref('')
+  const mainSerialBaud = ref(115200)
+  const isMainSerialRunning = ref(false)
+
+  // 副链路串口参数 (默认绑定 FP981C)
+  const subSerialName = ref('副链路')
+  const subSerialPort = ref('')
+  const subSerialBaud = ref(115200)
+  const isSubSerialRunning = ref(false)
+
+  // 可用串口号列表
+  const availablePorts = ref<string[]>([])
+
   const networkInterfaces = ref<{ name: string; ip: string }[]>([])
 
   let unlisten: UnlistenFn | null = null
   let fp95Unlisten: UnlistenFn | null = null
+  let fp981cUnlisten: UnlistenFn | null = null
+  let portsUnlisten: UnlistenFn | null = null
 
   // 监听 uav-info-event 事件
   async function startListening() {
@@ -53,6 +70,15 @@ export const useUavStore = defineStore('uav', () => {
     })
     console.log('前端已挂载 FP95 数据监听服务')
   }
+
+  async function startFp981cListening() {
+    if (fp981cUnlisten) return
+
+    fp981cUnlisten = await listen<FP981CEventPayload>("fp981c-event", (event) => {
+      updateFp981cList(event.payload)
+    })
+    console.log('前端已挂载 FP981C 数据监听服务')
+  }
   // 停止监听 uav-info-event 事件
   function stopListening() {
     if (unlisten) {
@@ -67,6 +93,14 @@ export const useUavStore = defineStore('uav', () => {
       fp95Unlisten()
       fp95Unlisten = null
       console.log('前端已取消挂载 FP95 数据监听服务')
+    }
+  }
+
+  function stopFp981cListening() {
+    if (fp981cUnlisten) {
+      fp981cUnlisten()
+      fp981cUnlisten = null
+      console.log('前端已取消挂载 FP981C 数据监听服务')
     }
   }
 
@@ -137,6 +171,97 @@ export const useUavStore = defineStore('uav', () => {
     }
   }
 
+  // 监听串口热插拔事件并主动获取初始串口列表
+  async function startPortsMonitoring() {
+    try {
+      const ports = await invoke<string[]>('get_available_ports')
+      if (ports && Array.isArray(ports)) {
+        availablePorts.value = ports
+        if (!mainSerialPort.value && availablePorts.value.length > 0) {
+          mainSerialPort.value = availablePorts.value[0]
+        }
+        if (!subSerialPort.value && availablePorts.value.length > 0) {
+          subSerialPort.value = availablePorts.value[0]
+        }
+      }
+    } catch (err) {
+      console.error('主动拉取串口列表失败:', err)
+    }
+
+    if (portsUnlisten) return
+    portsUnlisten = await listen<string[]>('ports-changed', (event) => {
+      availablePorts.value = event.payload
+      // 如果当前未选中串口，或者选中串口不再列表中且列表不为空，可选第一个默认填充
+      if (!mainSerialPort.value && availablePorts.value.length > 0) {
+        mainSerialPort.value = availablePorts.value[0]
+      }
+      if (!subSerialPort.value && availablePorts.value.length > 0) {
+        subSerialPort.value = availablePorts.value[0]
+      }
+    })
+    console.log('前端已挂载串口热插拔监测服务并完成初始拉取')
+  }
+
+  // 启动主链路接收服务
+  async function startMainSerialService() {
+    try {
+      isMainSerialRunning.value = true
+      const status = await saveCommsConfig()
+      console.log(status)
+      await startFp981cListening()
+    } catch (err) {
+      isMainSerialRunning.value = false
+      console.error('启动并保存主链路串口接收失败', err)
+      throw err
+    }
+  }
+
+  // 停止主链路接收服务
+  async function stopMainSerialService() {
+    try {
+      isMainSerialRunning.value = false
+      const status = await saveCommsConfig()
+      console.log(status)
+      if (!isSubSerialRunning.value) {
+        stopFp981cListening()
+        fp981cMap.value = new Map()
+      }
+    } catch (err) {
+      console.error('停止并保存主链路串口接收失败', err)
+      throw err
+    }
+  }
+
+  // 启动副链路接收服务
+  async function startSubSerialService() {
+    try {
+      isSubSerialRunning.value = true
+      const status = await saveCommsConfig()
+      console.log(status)
+      await startFp981cListening()
+    } catch (err) {
+      isSubSerialRunning.value = false
+      console.error('启动并保存副链路串口接收失败', err)
+      throw err
+    }
+  }
+
+  // 停止副链路接收服务
+  async function stopSubSerialService() {
+    try {
+      isSubSerialRunning.value = false
+      const status = await saveCommsConfig()
+      console.log(status)
+      if (!isMainSerialRunning.value) {
+        stopFp981cListening()
+        fp981cMap.value = new Map()
+      }
+    } catch (err) {
+      console.error('停止并保存副链路串口接收失败', err)
+      throw err
+    }
+  }
+
   async function fetchNetworkInterfaces() {
     try {
       const list = await invoke<{ name: string; ip: string }[]>(
@@ -166,6 +291,22 @@ export const useUavStore = defineStore('uav', () => {
             if (item.interface_ip) fp95Interface.value = item.interface_ip
           }
         }
+      }
+      if (config && Array.isArray(config.serial)) {
+        for (const item of config.serial) {
+          if (item.name === mainSerialName.value || item.name === '主链路') {
+            if (item.port_name) mainSerialPort.value = item.port_name
+            if (item.baud_rate) mainSerialBaud.value = item.baud_rate
+            if (item.enabled !== undefined) isMainSerialRunning.value = item.enabled
+          } else if (item.name === subSerialName.value || item.name === '副链路') {
+            if (item.port_name) subSerialPort.value = item.port_name
+            if (item.baud_rate) subSerialBaud.value = item.baud_rate
+            if (item.enabled !== undefined) isSubSerialRunning.value = item.enabled
+          }
+        }
+      }
+      if (isMainSerialRunning.value || isSubSerialRunning.value) {
+        await startFp981cListening()
       }
       return config
     } catch (err) {
@@ -198,7 +339,30 @@ export const useUavStore = defineStore('uav', () => {
             auto_connect: true
           }
         ],
-        serial: []
+        serial: [
+          {
+            name: mainSerialName.value,
+            port_name: mainSerialPort.value,
+            baud_rate: mainSerialBaud.value,
+            data_bits: 8,
+            stop_bits: 1,
+            parity: 'none',
+            protocol: Protocol.FP981C,
+            enabled: isMainSerialRunning.value,
+            auto_connect: true
+          },
+          {
+            name: subSerialName.value,
+            port_name: subSerialPort.value,
+            baud_rate: subSerialBaud.value,
+            data_bits: 8,
+            stop_bits: 1,
+            parity: 'none',
+            protocol: Protocol.FP981C,
+            enabled: isSubSerialRunning.value,
+            auto_connect: true
+          }
+        ]
       }
       const res = await invoke<string>('save_comms_config', { config })
       console.log('保存配置成功:', res)
@@ -212,6 +376,7 @@ export const useUavStore = defineStore('uav', () => {
   const uavInfoMap = shallowRef<Map<string, UAVInfo>>(new Map());
    //  fp95无人机数据的数组
   const fp95Map = shallowRef<Map<string, FP95Frame94Sub1>>(new Map());
+  const fp981cMap = shallowRef<Map<string, FP981CAggregate>>(new Map());
  
   let uavWatchdog: ReturnType<typeof setTimeout> | null = null
   const UAV_TIMEOUT = 1000   // 定时器的 1000ms
@@ -248,6 +413,17 @@ export const useUavStore = defineStore('uav', () => {
       fp95Map.value = new Map()   // 超时无新数据，从源头清掉残帧
       fp95Watchdog = null
     }, FP95_TIMEOUT)
+  }
+
+  function updateFp981cList(list: FP981CAggregate[]) {
+    const map = new Map<string, FP981CAggregate>();
+    for (const item of list) {
+      if (!item.c2) {
+        continue
+      }
+      map.set(String(item.uav_id), item);
+    }
+    fp981cMap.value = map;
   }
  // 模拟数据服务
   const isMock = ref(false)
@@ -361,11 +537,25 @@ export const useUavStore = defineStore('uav', () => {
     fp95Port,
     fp95Interface,
     isFp95Running,
+    mainSerialName,
+    mainSerialPort,
+    mainSerialBaud,
+    isMainSerialRunning,
+    subSerialName,
+    subSerialPort,
+    subSerialBaud,
+    isSubSerialRunning,
+    availablePorts,
     networkInterfaces,
     startUavService,
     stopUavService,
     startFp95Service,
     stopFp95Service,
+    startMainSerialService,
+    stopMainSerialService,
+    startSubSerialService,
+    stopSubSerialService,
+    startPortsMonitoring,
     fetchNetworkInterfaces,
     loadCommsConfig,
     saveCommsConfig,
@@ -375,6 +565,8 @@ export const useUavStore = defineStore('uav', () => {
     //fp95更新方法和数据
     updateFp95List,
     fp95Map,
+    updateFp981cList,
+    fp981cMap,
     //模拟
     toggleMockUavInfoService
   }

@@ -28,9 +28,9 @@ import * as Cesium from "cesium";
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useUavStore } from "@/store/uavStore";
 
-import type { UAVInfo, FP95Frame94Sub1,PlaneType, PlaneState } from "@/types/entityoptions";
+import type { UAVInfo, FP95Frame94Sub1, FP981CAggregate, PlaneType, PlaneState } from "@/types/entityoptions";
 
-import { normalizeUAVInfo, normalizeFP95 } from "@/utils/plane/planeAdapter";
+import { normalizeUAVInfo, normalizeFP95, normalizeFP981C } from "@/utils/plane/planeAdapter";
 import { PLANE_CONFIG } from "@/utils/plane/planeConfig";
 
 import { useSelectedPlaneStore } from '@/store/selectedPlaneStore'
@@ -82,6 +82,10 @@ const allPlaneMap = computed(() => {
     const plane = normalizeFP95(item);
     map.set(plane.id, plane);
   });
+  store.fp981cMap?.forEach((item: FP981CAggregate) => {
+    const plane = normalizeFP981C(item);
+    map.set(plane.id, plane);
+  });
   return map;
 });
 
@@ -108,6 +112,11 @@ const panelTitle = computed(() => {
   if (plane.type === "fp95") {
     const raw = plane.raw as FP95Frame94Sub1;//飞机原始信息
     return `ADS-B ${raw.sAddress}`;
+  }
+
+  if (plane.type === "fp981c") {
+    const raw = plane.raw as FP981CAggregate;
+    return `FP981C ${raw.uav_id}`;
   }
 
   return "飞机信息";
@@ -234,6 +243,41 @@ const infoRows = computed<InfoRow[]>(() => {
       {
         label: "垂直速度",
         value: `${raw.adsVu.toFixed(1)} m/s`,
+      },
+    ];
+  }
+
+  if (plane.type === "fp981c") {
+    const raw = plane.raw as FP981CAggregate;
+
+    return [
+      {
+        label: "FP981C ID",
+        value: raw.uav_id,
+      },
+      {
+        label: "Longitude",
+        value: plane.lon.toFixed(6),
+      },
+      {
+        label: "Latitude",
+        value: plane.lat.toFixed(6),
+      },
+      {
+        label: "Altitude",
+        value: `${plane.alt.toFixed(1)} m`,
+      },
+      {
+        label: "Heading",
+        value: `${plane.heading.toFixed(1)} deg`,
+      },
+      {
+        label: "Pitch",
+        value: `${(plane.pitch ?? 0).toFixed(1)} deg`,
+      },
+      {
+        label: "Roll",
+        value: `${(plane.roll ?? 0).toFixed(1)} deg`,
       },
     ];
   }
