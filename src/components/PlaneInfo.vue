@@ -32,20 +32,24 @@ import type { UAVInfo, FP95Frame94Sub1,PlaneType, PlaneState } from "@/types/ent
 
 import { normalizeUAVInfo, normalizeFP95 } from "@/utils/plane/planeAdapter";
 import { PLANE_CONFIG } from "@/utils/plane/planeConfig";
-//飞机模型的的id和类型
+
+import { useSelectedPlaneStore } from '@/store/selectedPlaneStore'
+//选中飞机的信息状态管理
+const selectedPlaneStore = useSelectedPlaneStore()
+//飞机模型的的id和类型的对象
 type PlaneModelId = {
   key: string;
   kind: PlaneType;
 };
-//飞机信息的字段和值
+//飞机信息的字段和值(展示面板上用)
 type InfoRow = {
   label: string;
   value: string | number;
 };
-//飞机的状态管理store
+//真实飞机数据的状态管理store
 const store = useUavStore();
 
-//当前选中的飞机 key
+//用于存储当前选中的飞机 key
 const selectedKey = ref<string | null>(null);
 
 //飞机信息框位置（屏幕坐标）
@@ -57,20 +61,18 @@ const panelPos = ref({
 //飞机在视野内时才显示面板
 const visible = ref(false);
 
-//当前高亮的模型
+//当前高亮的模型(Cesium.Model)
 let highlighted: Cesium.Model | null = null;
 
 // Cesium 点击事件处理器
 let handler: Cesium.ScreenSpaceEventHandler | null = null;
 
-//移除 postRender 监听的函数
+//移除 postRender(因为飞机位置是实时变化的所以要一直渲染监听) 监听的函数
 let removeRender: (() => void) | null = null;
 
-// 把 store 里的两种飞机数据统一转换成 PlaneState
- 
+// 把 store 里的两种飞机数据统一转换成 PlaneState格式，并存储在 allPlaneMap 里
 const allPlaneMap = computed(() => {
   const map = new Map<string, PlaneState>();
-
   store.uavInfoMap?.forEach((uav: UAVInfo) => {
     const plane = normalizeUAVInfo(uav);
     map.set(plane.id, plane);
@@ -83,7 +85,7 @@ const allPlaneMap = computed(() => {
   return map;
 });
 
-//当前选中的飞机完整信息计算属性
+//当前选中的飞机完整信息(拿到这个PlaneState对象，就可以拿到飞机的原始数据)计算属性
 const selectedPlane = computed(() => {
   if (!selectedKey.value) {
     return null;
@@ -100,7 +102,7 @@ const panelTitle = computed(() => {
 
   if (plane.type === "uavInfo") {
     const raw = plane.raw as UAVInfo;//飞机原始信息
-    return `无人机 ${raw.uavId}`;
+    return `UAV ${raw.uavId}`;
   }
 
   if (plane.type === "fp95") {
@@ -292,11 +294,12 @@ const removeHighlight = (model: Cesium.Model | null) => {
 
 // 清空当前选中状态
 const clearSelected = () => {
-  selectedKey.value = null;
-  visible.value = false;
-  removeHighlight(highlighted);
-  highlighted = null;
-};
+  selectedKey.value = null
+  visible.value = false
+  removeHighlight(highlighted)
+  highlighted = null
+  selectedPlaneStore.clearSelectedPlane()
+}
 
 onMounted(() => {
   const viewer = window.viewer as Cesium.Viewer;
@@ -314,6 +317,7 @@ onMounted(() => {
       Cesium.defined(picked) &&
       picked.primitive instanceof Cesium.Model//点中的是模型
     ) {
+      //拿到飞机模型
       const model = picked.primitive as Cesium.Model;
       const modelId = getPlaneModelId(model);
       //飞机是否还存在
@@ -325,6 +329,11 @@ onMounted(() => {
         // 高亮当前模型
         highlighted = model;
         addHighlight(highlighted);
+
+        selectedPlaneStore.setSelectedPlane(model, {
+          key: modelId.key,
+          kind: modelId.kind,
+        })
         return;
       }
     }

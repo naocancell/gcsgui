@@ -6,13 +6,14 @@ import type { UAVInfo, FP95Frame94Sub1,PlaneState } from "@/types/entityoptions"
 
 export function normalizeUAVInfo(uav: UAVInfo): PlaneState {
   return {
-    id: `uavInfo:${uav.uavSeries}:${uav.uavId}`,
+    id: `${uav.uavSeries}:${uav.uavId}`,
     type: "uavInfo",
 
     lon: uav.longitude,
     lat: uav.latitude,
     alt: uav.altitude,
-
+    groundSpeed: uav.groundSpeed, // 水平地速 m/s
+    verticalSpeed: uav.verticalSpeed, // 垂直速度 m/s
     heading: uav.headingAngle,
     pitch: uav.pitchAngle,
     roll: uav.rollAngle,
@@ -23,13 +24,14 @@ export function normalizeUAVInfo(uav: UAVInfo): PlaneState {
 
 export function normalizeFP95(item: FP95Frame94Sub1): PlaneState {
   return {
-    id: `fp95:${item.sAddress}`,
+    id: `${item.sAddress}`,
     type: "fp95",
 
     lon: item.adsLon,
     lat: item.adsLat,
     alt: item.adsAlt,
-
+    groundSpeed: item.adsVl, // 地速 m/s
+    verticalSpeed: item.adsVu, // 垂直速度 m/s
     heading: item.adsYaw,
     pitch: 0,
     roll: 0,

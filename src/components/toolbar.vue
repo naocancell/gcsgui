@@ -3,7 +3,7 @@
   创建时间：2024/4/16 10:54
   创建人：Zhaipeixiu
 -->
-<script setup>
+<script setup lang="ts">
 import {
   ChevronBack,
   ChevronForward,
@@ -25,7 +25,7 @@ import { RulerAlt } from '@vicons/carbon'
 import { TerrainSharp } from '@vicons/material'
 import { DrawPolygon } from '@vicons/fa'
 import { useMessage } from 'naive-ui'
-import { ref, defineEmits, watch, computed } from 'vue'
+import { ref, watch, computed,onBeforeUnmount, onMounted} from 'vue'
 import { useStaticStore } from '@/store/staticOptions.js'
 import { useUavStore } from '@/store/uavStore'
 import {
@@ -38,6 +38,7 @@ import CollisionDetection from './CollisionDetection.vue'
 import AltitudeWarning from './AltitudeWarning.vue'
 import { useLayerStore } from '@/store/layerManagerStore.ts'
 import { Cartesian3, Cartographic } from 'cesium'
+import * as Cesium from 'cesium'
 import {
   ByDirectionAndLen,
   getDistance,
@@ -53,6 +54,14 @@ import { useRouter } from 'vue-router'
 import { getUnicode } from '@/types/entityoptions.ts'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { storeToRefs } from 'pinia'
+//选中飞机以及高度预警
+import { useSelectedPlaneStore } from '@/store/selectedPlaneStore'
+import { useTerrainWarning } from '@/hooks/useTerrainWarning'
+const selectedPlaneStore = useSelectedPlaneStore()
+const { selectedModel, selectedMeta } = storeToRefs(selectedPlaneStore)
+const terrainWarningApi = ref<ReturnType<typeof useTerrainWarning> | null>(null)
+
 
 const router = useRouter()
 
@@ -622,6 +631,158 @@ function startDrawRoute(routeParams) {
       message.error(reject)
     })
 }
+//拿到选中的飞机模型的世界坐标
+function getSelectedAircraftPosition() {
+  const model = selectedModel.value
+  if (!model || model.isDestroyed()) return undefined
+
+  return Cesium.Matrix4.getTranslation(
+    model.modelMatrix,
+    new Cesium.Cartesian3(),
+  )
+}
+//拿到选中的飞机模型的heading
+function getSelectedAircraftHeading() {
+  const meta = selectedMeta.value
+  if (!meta) return undefined
+
+  if (meta.kind === 'uavInfo') {
+    return uavStore.uavInfoMap.get(meta.key)?.headingAngle
+  }
+
+  if (meta.kind === 'fp95') {
+    return uavStore.fp95Map.get(meta.key)?.adsYaw
+  }
+
+  return undefined
+}
+
+
+const profileWidth = 340
+const profileHeight = 180
+const profilePadding = 28
+
+const profileRange = computed(() => {
+  const points = terrainProfilePoints.value
+
+  if (!points.length) return null
+
+  const heights = points.flatMap((p) => [p.terrainHeight, p.flightHeight])
+  const min = Math.min(...heights)
+  const max = Math.max(...heights)
+
+  const padding = Math.max(20, (max - min) * 0.15)
+
+  return {
+    min: min - padding,
+    max: max + padding,
+  }
+})
+
+function profileX(distanceM: number) {
+  const usableWidth = profileWidth - profilePadding * 2
+  return profilePadding + (distanceM / terrainWarningDistance.value) * usableWidth
+}
+
+function profileY(height: number) {
+  const range = profileRange.value
+
+  if (!range) return profileHeight - profilePadding
+
+  const usableHeight = profileHeight - profilePadding * 2
+  const ratio = (height - range.min) / (range.max - range.min)
+
+  return profileHeight - profilePadding - ratio * usableHeight
+}
+//
+const terrainPolylinePoints = computed(() => {
+  return terrainProfilePoints.value
+    .map((p) => `${profileX(p.distance)},${profileY(p.terrainHeight)}`)
+    .join(' ')
+})
+
+const flightPolylinePoints = computed(() => {
+  return terrainProfilePoints.value
+    .map((p) => `${profileX(p.distance)},${profileY(p.flightHeight)}`)
+    .join(' ')
+})
+
+const profileMinHeightLabel = computed(() => {
+  if (!profileRange.value) return '--'
+  return profileRange.value.min.toFixed(0)
+})
+
+const profileMaxHeightLabel = computed(() => {
+  if (!profileRange.value) return '--'
+  return profileRange.value.max.toFixed(0)
+})
+
+onMounted(() => {
+  if (!window.viewer) return
+
+  terrainWarningApi.value = useTerrainWarning(
+    window.viewer,
+    getSelectedAircraftPosition,
+    getSelectedAircraftHeading,
+    {
+      distance: 1000,
+      steps: 20,
+      intervalMs: 500,
+      warnClearance: 100,
+    },//传递的参数
+  )
+})
+
+onBeforeUnmount(() => {
+  terrainWarningApi.value?.stop()
+})
+
+
+const terrainWarningActive = computed(
+  () => terrainWarningApi.value?.active ?? false,
+)
+
+const terrainWarningIsDanger = computed(
+  () => terrainWarningApi.value?.isWarning ?? false,
+)
+
+const terrainWarningMinClearance = computed(
+  () => terrainWarningApi.value?.minClearance ?? Infinity,
+)
+
+const terrainProfilePoints = computed(
+  () => terrainWarningApi.value?.profilePoints?? [],
+)
+
+const terrainWarningDistance = computed(
+  () => terrainWarningApi.value?.distance ?? 1000,
+)
+
+const terrainWarningStatusText = computed(() => {
+  if (!terrainWarningActive.value) return '未开启'
+
+  if (terrainWarningMinClearance.value === Infinity) {
+    return '地形采样中'
+  }
+
+  const clearance = terrainWarningMinClearance.value.toFixed(0)
+
+  return terrainWarningIsDanger.value
+    ? `危险：最小离地高度 ${clearance} m`
+    : `安全：最小离地高度 ${clearance} m`
+})
+
+
+function toggleSelectedPlaneTerrainWarning() {
+  
+  if (!selectedModel.value || !selectedMeta.value) {
+    message.warning('请先选中一架飞机')
+    return
+  }
+
+  terrainWarningApi.value?.toggle()
+}
+
 
 </script>
 
@@ -729,6 +890,25 @@ function startDrawRoute(routeParams) {
         </template>
         <span>飞机实时位置</span>
       </n-tooltip>
+
+    <n-tooltip placement="bottom" trigger="hover">
+      <template #trigger>
+        <n-button
+          tertiary
+          circle
+          :type="terrainWarningActive ? 'error' : 'warning'"
+          @click="toggleSelectedPlaneTerrainWarning"
+        >
+          <template #icon>
+            <n-icon><Airplane /></n-icon>
+          </template>
+        </n-button>
+      </template>
+      <span>
+        {{ terrainWarningActive ? '关闭高度预警' : '开启高度预警' }}
+      </span>
+    </n-tooltip>
+
        <!-- 通视和剖面 -->
       <n-popselect
         v-model:value="SceneValue"
@@ -959,7 +1139,112 @@ function startDrawRoute(routeParams) {
       </n-space>
     </div>
   </n-modal>
+<!-- 高度预警是否显示 -->
+<div v-if="terrainWarningActive" class="terrain-warning-panel">
+  <div class="terrain-warning-panel__header">
+    <div>
+      <div class="terrain-warning-panel__title">高度预警</div>
+      <div class="terrain-warning-panel__sub-title">
+        前方 {{ terrainWarningDistance }} m 地形剖面
+      </div>
+    </div>
 
+    <n-tag :type="terrainWarningIsDanger ? 'error' : 'success'" size="small">
+      {{ terrainWarningIsDanger ? '预警' : '正常' }}
+    </n-tag>
+  </div>
+
+  <div class="terrain-warning-panel__status">
+    {{ terrainWarningStatusText }}
+  </div>
+
+  <svg
+    class="terrain-profile-svg"
+    :viewBox="`0 0 ${profileWidth} ${profileHeight}`"
+  >
+    <!-- 坐标轴 -->
+    <line
+      :x1="profilePadding"
+      :y1="profileHeight - profilePadding"
+      :x2="profileWidth - profilePadding"
+      :y2="profileHeight - profilePadding"
+      class="profile-axis"
+    />
+    <line
+      :x1="profilePadding"
+      :y1="profilePadding"
+      :x2="profilePadding"
+      :y2="profileHeight - profilePadding"
+      class="profile-axis"
+    />
+
+    <!-- 地形线 -->
+    <polyline
+      v-if="terrainPolylinePoints"
+      :points="terrainPolylinePoints"
+      class="profile-terrain-line"
+    />
+
+    <!-- 飞机预计飞行轨迹线 -->
+    <polyline
+      v-if="flightPolylinePoints"
+      :points="flightPolylinePoints"
+      class="profile-flight-line"
+    />
+
+    <!-- 文本标注 -->
+    <text
+      :x="profilePadding"
+      :y="profileHeight - 6"
+      class="profile-label"
+    >
+      0m
+    </text>
+
+    <text
+      :x="profileWidth - profilePadding - 34"
+      :y="profileHeight - 6"
+      class="profile-label"
+    >
+      {{ terrainWarningDistance }}m
+    </text>
+
+    <text
+      :x="4"
+      :y="profilePadding + 4"
+      class="profile-label"
+    >
+      {{ profileMaxHeightLabel }}m
+    </text>
+
+    <text
+      :x="4"
+      :y="profileHeight - profilePadding"
+      class="profile-label"
+    >
+      {{ profileMinHeightLabel }}m
+    </text>
+  </svg>
+
+  <div class="terrain-warning-panel__legend">
+    <span>
+      <i class="legend-line legend-line--flight"></i>
+      预计轨迹
+    </span>
+
+    <span>
+      <i
+        class="legend-line"
+        :class="
+          terrainWarningIsDanger
+            ? 'legend-line--terrain-danger'
+            : 'legend-line--terrain-safe'
+        "
+      ></i>
+      地形剖面
+    </span>
+  </div>
+</div>
   <SpatialAnalysis ref="spatialAnalyse"></SpatialAnalysis>
   <LayerManager ref="layerManager"></LayerManager>
   <RouteOptions
@@ -997,5 +1282,109 @@ function startDrawRoute(routeParams) {
   width: 100vw;
   background: rgb(255 255 255 / 80%);
   border-radius: 7px;
+}
+
+.terrain-warning-panel {
+  position: absolute;
+  top: 60px;
+  left: 12px;
+  z-index: 9999;
+  width: 380px;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgb(21 21 21 / 94%);
+  color: #fff;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 35%);
+}
+
+.terrain-warning-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.terrain-warning-panel__title {
+  font-size: 16px;
+  font-weight: bold;
+}
+
+.terrain-warning-panel__sub-title {
+  margin-top: 2px;
+  font-size: 12px;
+  color: rgb(255 255 255 / 65%);
+}
+
+.terrain-warning-panel__status {
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.terrain-profile-svg {
+  width: 100%;
+  height: 180px;
+  border-radius: 6px;
+  background: rgb(255 255 255 / 8%);
+}
+
+.profile-axis {
+  stroke: rgb(255 255 255 / 45%);
+  stroke-width: 1;
+}
+
+.profile-terrain-line {
+  fill: none;
+  stroke: #67c23a;
+  stroke-width: 2.5;
+}
+
+.terrain-warning-panel:has(.n-tag--error) .profile-terrain-line {
+  stroke: #f56c6c;
+}
+
+.profile-flight-line {
+  fill: none;
+  stroke: #00d5ff;
+  stroke-width: 2.5;
+  stroke-dasharray: 6 4;
+}
+
+.profile-label {
+  fill: rgb(255 255 255 / 70%);
+  font-size: 10px;
+}
+
+.terrain-warning-panel__legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: rgb(255 255 255 / 78%);
+}
+
+.terrain-warning-panel__legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-line {
+  display: inline-block;
+  width: 22px;
+  height: 0;
+  border-top: 3px solid;
+}
+
+.legend-line--flight {
+  border-color: #00d5ff;
+  border-style: dashed;
+}
+
+.legend-line--terrain-safe {
+  border-color: #67c23a;
+}
+
+.legend-line--terrain-danger {
+  border-color: #f56c6c;
 }
 </style>

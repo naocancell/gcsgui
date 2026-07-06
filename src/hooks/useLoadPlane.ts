@@ -46,7 +46,7 @@ export function useLoadPlane() {
   const lastTrailUpdateMap = new Map<string, number>()
 
   // 轨迹刷新间隔：1000ms = 1秒
-  const TRAIL_UPDATE_INTERVAL = 5000
+  const TRAIL_UPDATE_INTERVAL = 300
 
   // 动态尾巴保留的点数，到这个数量就把这段封存成静态历史段
   const TAIL_SIZE = 50;
@@ -91,8 +91,8 @@ const TAIL_OVERLAP = 10;
     // Cesium 使用弧度，所以角度需要转弧度
     const hpr = new Cesium.HeadingPitchRoll(
       Cesium.Math.toRadians(p.heading),
-      Cesium.Math.toRadians(p.pitch),
-      Cesium.Math.toRadians(p.roll)
+      Cesium.Math.toRadians(p.roll),
+      Cesium.Math.toRadians(p.pitch)//由于这个模型问题 这里反过来设置
     );
     // 根据位置和姿态生成模型矩阵
     return Cesium.Transforms.headingPitchRollToFixedFrame(position, hpr);
@@ -156,7 +156,7 @@ const TAIL_OVERLAP = 10;
     const frozen = viewer.entities.add({
       polyline: {
         positions: frozenPositions,
-        width: 2,
+        width: 5,
         material: Cesium.Color.YELLOW,
         clampToGround: false,
       },

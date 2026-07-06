@@ -17,15 +17,15 @@ export interface PlaneConfig {
 export const PLANE_CONFIG: Record<PlaneType, PlaneConfig> = {
   uavInfo: {
     url: fp98,
-    scale: 0.1,
-    minimumPixelSize: 64,
+    scale: 0.003,
+    minimumPixelSize: 60,
     maximumScale: 20000,
     color: Cesium.Color.RED,
     colorBlendAmount: 0.8,
   },
   fp95: {
     url: fp98,
-    scale: 0.15,
+    scale: 0.003,
     minimumPixelSize: 64,
     maximumScale: 20000,
     color: Cesium.Color.LIME,

@@ -132,6 +132,8 @@ export interface UAVInfo {
     heading: number;// 航向角
     pitch?: number;// 俯仰角
     roll?: number;// 滚转角
+    groundSpeed?: number;// 地速
+    verticalSpeed: number // 垂直速度 m/s
     raw: UAVInfo | FP95Frame94Sub1; // 保留原始数据，点击时用
     showTrail?: boolean;// 是否显示轨迹
   }
