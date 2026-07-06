@@ -319,14 +319,14 @@ export const useUavStore = defineStore('uav', () => {
       mockUavList[0].groundSpeedDirection = 90
       mockUavList[0].distanceNext = Math.max(0, mockUavList[0].distanceNext - 25)
 
-      mockUavList[1].longitude += 0.00005
-      mockUavList[1].latitude += 0.00005
+      mockUavList[1].longitude += 0.000015
+      mockUavList[1].latitude += 0.000015
       mockUavList[1].groundSpeedDirection = 45
       mockUavList[1].distanceNext = Math.max(0, mockUavList[1].distanceNext - 30)
 
 
       updateUavInfoList(mockUavList.map((item) => ({ ...item })))
-    }, 100)
+    }, 50)
 
     console.log('已启动 UAVInfo 模拟数据服务')
   }

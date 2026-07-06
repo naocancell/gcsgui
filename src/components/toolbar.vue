@@ -726,8 +726,8 @@ onMounted(() => {
     getSelectedAircraftHeading,
     {
       distance: 1000,
-      steps: 20,
-      intervalMs: 500,
+      steps: 10,//每1000米采样10个点
+      intervalMs: 50,
       warnClearance: 100,
     },//传递的参数
   )
