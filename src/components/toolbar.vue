@@ -135,6 +135,7 @@ function openCloseBar() {
   // 判断工具条的class是否包含open，如果包含则移除，否则添加
   if (toolbar?.classList.contains('open')) {
     //关闭
+    
     toolbar?.classList.remove('open')
   } else {
     // 打开
