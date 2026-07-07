@@ -210,7 +210,7 @@ export function useTerrainWarning(
 
         /*
         * 把节流放到最前面。
-        * 避免Cesium每一帧都重新计算21个前向点。
+        * 避免Cesium每一帧都重新计算前向点。
         */
         if (
             sampling ||

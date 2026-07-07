@@ -33,7 +33,7 @@ export const PLANE_CONFIG: Record<PlaneType, PlaneConfig> = {
   },
   fp981c: {
     url: fp98,
-    scale: 0.1,
+    scale: 0.003,
     minimumPixelSize: 64,
     maximumScale: 20000,
     color: Cesium.Color.RED,
