@@ -169,6 +169,12 @@ export default class RouteManageViewer {
       this.cancelDraw('绘制已取消')
       return
     }
+    //Delete删除重画
+    if (event.key === 'Delete') {
+      event.preventDefault()
+      this.clearCurrentDrawing()
+      return
+    }
   }
 
   window.addEventListener('keydown', this.keydownHandler)
@@ -282,7 +288,7 @@ showDrawMenu(screenPosition) {
 
   menu.appendChild(
     createItem(
-      '撤销上一个航点',
+      '回撤一步',
       () => this.undoLastPoint(),
       this.positions.length === 0,
     ),
@@ -293,6 +299,13 @@ showDrawMenu(screenPosition) {
       '清空重画',
       () => this.clearCurrentDrawing(),
       this.positions.length === 0,
+    ),
+  )
+  menu.appendChild(
+    createItem(
+      '取消绘制',
+      () => this.cancelDraw('绘制已取消'),
+      false,
     ),
   )
 
