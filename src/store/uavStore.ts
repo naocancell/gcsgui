@@ -502,7 +502,7 @@ export const useUavStore = defineStore('uav', () => {
 
 
       updateUavInfoList(mockUavList.map((item) => ({ ...item })))
-    }, 50)
+    }, 20)
 
     console.log('已启动 UAVInfo 模拟数据服务')
   }

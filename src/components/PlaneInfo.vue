@@ -324,7 +324,7 @@ const applyDefaultColor = (model: Cesium.Model) => {
 
 //增加高亮
 const addHighlight = (model: Cesium.Model) => {
-  model.color = Cesium.Color.YELLOW.withAlpha(0.7);
+  model.color = Cesium.Color.RED.withAlpha(0.7);
   model.colorBlendMode = Cesium.ColorBlendMode.MIX;
   model.colorBlendAmount = 1;
 };

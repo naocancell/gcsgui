@@ -20,7 +20,7 @@ export const PLANE_CONFIG: Record<PlaneType, PlaneConfig> = {
     scale: 0.003,
     minimumPixelSize: 60,
     maximumScale: 20000,
-    color: Cesium.Color.RED,
+    color: Cesium.Color.DODGERBLUE,
     colorBlendAmount: 0.8,
   },
   fp95: {
@@ -36,7 +36,7 @@ export const PLANE_CONFIG: Record<PlaneType, PlaneConfig> = {
     scale: 0.003,
     minimumPixelSize: 64,
     maximumScale: 20000,
-    color: Cesium.Color.RED,
+    color: Cesium.Color.PINK,
     colorBlendAmount: 0.8,
   },
 };
