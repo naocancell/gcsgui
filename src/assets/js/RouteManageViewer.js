@@ -481,7 +481,12 @@ export default class RouteManageViewer {
       const picked = this.viewer.scene.pick(movement.position)
       const entity = picked && picked.id
 
-      if (!entity || !entity._routeId) return
+      if (!entity || entity._entityType !== 'routeVertex') return
+
+      // 只允许拖拽当前正在编辑的航线航点
+      if (String(entity._routeId) !== String(this.selectedRouteId)) {
+        return
+      }
 
       this.selectRoute(entity._routeId)
 
@@ -640,6 +645,11 @@ registerEditEvents() {
 
     if (!entity || entity._entityType !== 'routeVertex') return
 
+    // 只允许编辑当前选中航线的航点
+    if (String(entity._routeId) !== String(this.selectedRouteId)) {
+      return
+    }
+
     const startCartesian = this.getEntityCartesian(entity)
 
     if (!startCartesian) return
@@ -664,7 +674,7 @@ registerEditEvents() {
       vertexIndex: entity._vertexIndex,
       entity,
     }
-
+    this.hideEditVertexMenu()
     this.disableCameraControls()
     this.viewer._element.style.cursor = 'move'
   }, Cesium.ScreenSpaceEventType.LEFT_DOWN)
@@ -700,7 +710,32 @@ registerEditEvents() {
     const picked = this.viewer.scene.pick(movement.position)
     const entity = picked && picked.id
 
-    if (!entity || entity._entityType !== 'routeVertex') return
+        const isCurrentRouteVertex =
+      entity &&
+      entity._entityType === 'routeVertex' &&
+      String(entity._routeId) === String(this.selectedRouteId)
+
+    if (!isCurrentRouteVertex) {
+      this.hideEditVertexMenu()
+    }
+  }, Cesium.ScreenSpaceEventType.LEFT_CLICK)
+
+  // 右键航点：弹出编辑菜单；右键空白处：隐藏菜单
+  this.editHandler.setInputAction((movement) => {
+    if (this.mode !== 'editing') return
+
+    const picked = this.viewer.scene.pick(movement.position)
+    const entity = picked && picked.id
+
+    const isCurrentRouteVertex =
+      entity &&
+      entity._entityType === 'routeVertex' &&
+      String(entity._routeId) === String(this.selectedRouteId)
+
+    if (!isCurrentRouteVertex) {
+      this.hideEditVertexMenu()
+      return
+    }
 
     this.activeVertexInfo = {
       routeId: String(entity._routeId),
@@ -749,6 +784,12 @@ getPointAlt(routeId, vertexIndex) {
    * 拖拽航点。
    */
 moveVertex(routeId, vertexIndex, cartesian) {
+
+  if (this.mode !== 'editing') return
+
+  // 不是当前编辑航线，不允许移动
+  if (String(routeId) !== String(this.selectedRouteId)) return
+
   const routeItem = this.routesMap.get(String(routeId))
   if (!routeItem) return
 
@@ -1461,31 +1502,34 @@ createPointAfter(line, vertexIndex) {
    * 结束绘制。
    */
 finishDraw() {
-  if (!this.isDrawing) return
+  if (!this.isDrawing) return false
 
   if (this.positions.length < 3) {
     console.warn('航线不得少于3个航点！')
-    return
+    return false
   }
-  // 结束绘制，将临时点线转为正式点线resultCoords这是外面真正有用的
+  
   const resultCoords = this._Cartesian_degrees(this.positions)
-
   const resultEntities = [...this.vertexEntities, this.lineEntity].filter(Boolean)
 
-  // 清除绘制阶段的临时点线，避免地面残留
-  resultEntities.forEach((entity) => {
-    this.viewer.entities.remove(entity)
-  })
-  //将
-  this.unRegisterEvents()
-
+  // 先保存 resolve
   const resolve = this.drawResolve
 
+  // 先切状态
   this.isDrawing = false
   this.mode = 'idle'
   this.drawResolve = undefined
   this.drawReject = undefined
 
+  // 再移除临时实体
+  resultEntities.forEach((entity) => {
+    this.viewer.entities.remove(entity)
+  })
+
+  // 再解绑事件
+  this.unRegisterEvents()
+
+  // 最后清空临时数据
   this.positions = []
   this.temPositions = []
   this.vertexEntities = []
@@ -1493,10 +1537,12 @@ finishDraw() {
   this.lineEntitys = []
 
   this.viewer.scene.requestRender()
-  //结束的时候返回结果
+
   if (resolve) {
     resolve([resultCoords, resultEntities])
   }
+
+  return true
 }
 //拖拽
 getEntityCartesian(entity) {

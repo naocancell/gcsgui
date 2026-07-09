@@ -436,7 +436,11 @@ function updateMapRoute(options?: {
     entity = routeManage.addAirLine(selectedRoute.value)
   }
 
-  routeManage.selectRoute?.(selectedRoute.value.unicode)
+// 编辑状态下不要 selectRoute，否则会把 mode 从 editing 打回 selected，
+  // 导致地图失去拖拽/右键/高亮，
+  if (!isRouteEditing.value) {
+    routeManage.selectRoute?.(selectedRoute.value.unicode)
+  }
 
   const routeItem = routeManage.routesMap?.get?.(
     String(selectedRoute.value.unicode),
@@ -553,7 +557,10 @@ function startEditSelectedRoute() {
     uiMsg.warning('请先选择一条航线')
     return
   }
-
+  if (!routeStore.startEditing()) {
+      uiMsg.warning('请先结束当前航线绘制或编辑操作')
+      return
+    }
   routeManage.addAirLine(selectedRoute.value)
 
   const ok = routeManage.startEditRoute?.(selectedRoute.value.unicode)
@@ -587,7 +594,7 @@ async function saveRouteEdit() {
 
   isRouteEditing.value = false
   routeDirty.value = false
-
+  routeStore.endRouteAction()
 refreshSelectedRouteView({
   refreshWeather: true,
   forceRefreshPtList: true,
@@ -623,6 +630,7 @@ function cancelRouteEdit() {
 
   isRouteEditing.value = false
   routeDirty.value = false
+  routeStore.endRouteAction()
 
   refreshSelectedRouteView({
     refreshWeather: true,

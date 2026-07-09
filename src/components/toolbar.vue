@@ -89,6 +89,9 @@ let lastPos = undefined //飞机上一时点的坐标
 let companionMode = ref(false) // 是否处于伴飞模式
 const altitudeWarningResult = ref(null) // 高度预警结果
 
+let routeDrawViewer: RouteManageViewer | null = null
+const isDrawingRoute = ref(false)
+
 let nfzViewer = null
 let showNFZ = ref(false)
 
@@ -143,9 +146,18 @@ function openCloseBar() {
   }
   barIsOpen.value = !barIsOpen.value
 }
-
+//防止上一次绘制没结束
 function handleEditSelect(key) {
-  if (key === 'createLine') {
+   const routeStore = useRouteStore()
+   if (key === 'createLine') {
+    if (isDrawingRoute.value) {
+      message.warning('请先结束上一次航线绘制：Esc 取消绘制，Enter 结束绘制')
+      return
+    }
+    if (routeStore.routeActionMode !== 'idle') {
+      message.warning('请先结束当前航线绘制或编辑操作')
+      return
+    }
     // 绘制航线
     showRouteModal.value = true
   } else if (key === 'marker') {
@@ -638,18 +650,44 @@ async function minimizeApp() {
  * 绘制航线，目前只绘制任务航线
  * @param routeParams 航线属性，type:{name: string,code: number,isOpen: bool,height: number,routePts: []}
  */
+/**
+ * 绘制航线，目前只绘制任务航线
+ * @param routeParams 航线属性，type:{name: string,code: number,isOpen: bool,height: number,routePts: []}
+ */
 function startDrawRoute(routeParams) {
-  showRouteModal.value = false// 关闭航线参数窗口
-  let routeManage = new RouteManageViewer(window.viewer)// 航线绘制类
-  routeManage.routeParams.isClose = routeParams.isClose//是否闭合
-  routeManage.routeParams.height = routeParams.height//高度
-  routeManage
+  const routeStore = useRouteStore()
+  if (isDrawingRoute.value) {
+    message.warning('请先结束上一次航线绘制')
+    return
+  }
+  if (!routeStore.startDrawing()) {
+    message.warning('请先结束当前航线绘制或编辑操作')
+    return
+  }
+
+  showRouteModal.value = false
+
+  if (!window.viewer) {
+    message.error('地图尚未初始化')
+    return
+  }
+
+  if (!routeDrawViewer) {
+    routeDrawViewer = new RouteManageViewer(window.viewer)
+  }
+
+  isDrawingRoute.value = true
+
+  routeDrawViewer.routeParams.isClose = routeParams.isClose
+  routeDrawViewer.routeParams.height = routeParams.height
+
+  routeDrawViewer
     .start()
     .then((result) => {
-      // result[0]是经纬度坐标数组，需转换为 AirlinePoint数组
-      let AirlinePoints = []
+      const AirlinePoints = []
+
       result[0].forEach((pt, index) => {
-        let AirlinePoint = {
+        const AirlinePoint = {
           lon: pt.lon,
           lat: pt.lat,
           alt: pt.alt,
@@ -658,11 +696,13 @@ function startDrawRoute(routeParams) {
           speed: 0,
           nPt: index + 1,
         }
-        AirlinePoints.push(AirlinePoint) //航点数组
+
+        AirlinePoints.push(AirlinePoint)
       })
-      AirlinePoints.at(-1).ch2 = 0x01 //最后一个航点的ch2字段设置未0x01
-      //这是航线 航线加入store
-      let aRoute = {
+
+      AirlinePoints.at(-1).ch2 = 0x01
+
+      const aRoute = {
         code: routeParams.code,
         PtNum: result[0].length,
         isClose: routeParams.isClose,
@@ -670,18 +710,29 @@ function startDrawRoute(routeParams) {
         name: routeParams.name,
         points: AirlinePoints,
         totalDistance: 0,
-        isDesignRoute: true, // 标记为设计航线
+        isDesignRoute: true,
       }
+
       useRouteStore().addRoute(aRoute)
-      // 航线不加入图层管理
-      // lStore.addLayer(aRoute.name, undefined, undefined, result[1], true)
-      //直接绘制显示
-      window.viewer.flyTo(routeManage.addAirLine(aRoute),{
-        duration: 2,
-      })
+
+      lStore.addLayer(aRoute.name, undefined, undefined, result[1], true)
+
+      const entity = routeDrawViewer?.addAirLine(aRoute)
+
+      if (entity) {
+        window.viewer.flyTo(entity, {
+          duration: 2,
+        })
+      }
     })
     .catch((reject) => {
-      message.error(reject)
+      if (reject) {
+        message.warning(reject)
+      }
+    })
+    .finally(() => {
+      isDrawingRoute.value = false
+      routeStore.endRouteAction()
     })
 }
 //拿到选中的飞机模型的世界坐标
