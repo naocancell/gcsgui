@@ -13,9 +13,10 @@ export default class RouteManageViewer {
 
     this.dragPlane = undefined
 
+    // false 表示拖拽时允许高度跟随鼠标变化，点会更跟手。
     // true 表示拖拽只改经纬度，高度不变，但在倾斜视角下会有点不完全跟手。
     this.keepAltitudeOnDrag = true
-    // -------- 绘制状态 ---------
+    // ---------------- 绘制状态 ----------------
     //绘制过程中的临时变量(显示地面线)
     this.positions = [] // 绘制过程中的左键点击的点
     this.temPositions = [] // [点1, 点2, 鼠标当前位置]
@@ -23,19 +24,19 @@ export default class RouteManageViewer {
     this.lineEntity = undefined //临时线的实体
     this.lineEntitys = [] //临时线的实体数组
 
-    this.handler = undefined //绘制过程中的鼠标事件处理器
-    this.isDrawing = false //是否正在绘制
-    this.drawResolve = undefined //promise resolve
-    this.drawReject = undefined  //promise reject
-    this.keydownHandler = undefined //键盘事件处理器
-    this.preventContextMenu = undefined //阻止浏览器右键
-    this.drawMenuEl = undefined //右键绘制菜单
+    this.handler = undefined
+    this.isDrawing = false
+    this.drawResolve = undefined
+    this.drawReject = undefined
+    this.keydownHandler = undefined
+    this.preventContextMenu = undefined
+    this.drawMenuEl = undefined
 
-    // ------ 航线编辑状态 ---------
+    // ---------------- 航线编辑状态 ----------------
     this.mode = 'idle'
     // idle | drawing | selected | editing
 
-    //正式航线管理map  key: routeId（唯一值）变量存储
+    //正式航线管理变量 存储
     /**
      * routeId -> {
      *   line, 原始业务数据 line
@@ -60,10 +61,12 @@ export default class RouteManageViewer {
 
     this.cameraControllerBackup = undefined
 
-    // 给 Vue 页面使用的回调
+    // Vue 页面使用的回调
     this.onRouteSelected = undefined
     this.onRouteChanged = undefined
     this.onEditStateChanged = undefined
+    // 当前编辑航点选中回调，可给 Vue 页面用
+    this.onVertexSelected = undefined
 
     // 航线样式
     this.normalLineMaterial = Cesium.Color.ORANGE
@@ -71,15 +74,18 @@ export default class RouteManageViewer {
     this.editingLineMaterial = Cesium.Color.YELLOW
 
     this.enableRouteSelect()
+
+    //编辑状态下当前选中的航点
+    this.selectedEditVertexEntity = undefined
+    this.selectedEditVertexInfo = undefined
   }
 
- /**
- * 绘制航线  航点、并存储记录到routeMap中
- * 导入航线、绘制航线、已有航线统一采用该方法加载到地图上。
- * @param {Airline} line - 航线数据对象
- * @param {Object} [options] - 可选配置项
- * @returns {Cesium.Entity} airlineEntity - 航线实体
- */
+  /**
+   * 显示并注册航线。
+   * 导入航线、绘制航线、已有航线统一采用该方法加载到地图上。
+   * @param line Airline
+   * @param options
+   */
   addAirLine(line, options = {}) {
     if (!line || !line.unicode || !Array.isArray(line.points)) {
       return undefined
@@ -94,7 +100,7 @@ export default class RouteManageViewer {
     this.normalizeRoutePoints(line)
     //获取所需要的航点用于绘制航线
     const renderPositions = this.getRouteRenderPositions(line)
-    //绘制航线实体（id是 '航线' + routeId,）
+    //绘制航线实体
     const airlineEntity = new Cesium.Entity({
       name: line.name,
       id: '航线' + routeId,
@@ -109,8 +115,8 @@ export default class RouteManageViewer {
       },
     })
 
-    airlineEntity._routeId = routeId //航线唯一id
-    airlineEntity._entityType = 'routeLine' //用于区分不同实体是航线还是航点
+    airlineEntity._routeId = routeId
+    airlineEntity._entityType = 'routeLine'
 
     this.viewer.entities.add(airlineEntity)
 
@@ -119,7 +125,7 @@ export default class RouteManageViewer {
     const vertexEntities = line.points.map((_, index) => {
       return this.createRouteVertexEntity(line, index, showVertex)
     })
-    //
+
     this.routesMap.set(routeId, {
       line,
       entity: airlineEntity,
@@ -134,38 +140,35 @@ export default class RouteManageViewer {
   }
 
   /**
-   * 删除航线 删除实体航线 航点 以及对应得记录得数据。
-   * @param line 
+   * 删除航线。
+   * @param line Airline
    */
   removeRoute(line) {
     if (!line || !line.unicode) return
 
     const routeId = String(line.unicode)
-    //如果删除得是正在编辑得航线, 解除编辑
+
     if (this.selectedRouteId === routeId && this.mode === 'editing') {
       this.unregisterEditEvents()
     }
 
-    //移除航线和航点
     this.removeRouteEntities(routeId)
-    //删除map中航线记录
     this.routesMap.delete(routeId)
 
-    //改变编辑状态
     if (this.selectedRouteId === routeId) {
-      //删除得是正在编辑的航线  设置为空闲模式
       this.selectedRouteId = undefined
       this.mode = 'idle'
-      // 删除被选中的航线后，通知页面现在不是编辑状态,
+
       if (this.onEditStateChanged) {
         this.onEditStateChanged(false)
       }
     }
+
     this.viewer.scene.requestRender()
   }
 
   /**
-   * 根据Id移除地图实体entities.removeById，数据由routeMap管理移除。
+   * 只移除地图实体，不删除业务数据。
    */
   removeRouteEntities(routeId) {
     this.viewer.entities.removeById('航线' + routeId)
@@ -198,14 +201,14 @@ export default class RouteManageViewer {
     this.normalizeRoutePoints(line)
 
     let routeItem = this.routesMap.get(routeId)
-    //不存在就添加到管理页面和地图中
+
     if (!routeItem) {
       this.addAirLine(line)
       routeItem = this.routesMap.get(routeId)
     }
 
     if (!routeItem) return
-    // 存在就更新线的数据
+
     routeItem.line = line
 
     if (routeItem.entity && routeItem.entity.polyline) {
@@ -231,29 +234,26 @@ export default class RouteManageViewer {
       rebuildVertex || routeItem.vertexEntities.length !== line.points.length
 
     if (shouldRebuild) {
-      //移除原来绘制的航点
+
+      //重建航点前，清理旧的选中实体引用
+      this.clearSelectedEditVertex()
       routeItem.vertexEntities.forEach((entity) => {
         this.viewer.entities.remove(entity)
       })
 
       const showVertex =
         this.selectedRouteId === routeId || this.mode === 'editing'
-      //重新绘制航点
+
       routeItem.vertexEntities = line.points.map((_, index) => {
         return this.createRouteVertexEntity(line, index, showVertex)
       })
 
       if (this.mode === 'editing' && this.selectedRouteId === routeId) {
         routeItem.vertexEntities.forEach((entity) => {
-          if (entity.point) {
-            entity.point.color = Cesium.Color.FUCHSIA
-            entity.point.outlineColor = Cesium.Color.WHITE
-            entity.point.pixelSize = 9
-          }
+          this.setEditVertexNormalStyle(entity)
         })
       }
     } else {
-      //不重建热更新航点 只修改位置
       routeItem.vertexEntities.forEach((entity, index) => {
         const pt = line.points[index]
         if (!pt) return
@@ -282,7 +282,6 @@ export default class RouteManageViewer {
   /**
    * 规范化航线点数据。
    * 闭合航线不要把首点重复保存到 points 里。
-   * @param line Airline
    */
   normalizeRoutePoints(line) {
     if (!line || !Array.isArray(line.points)) return
@@ -352,78 +351,79 @@ export default class RouteManageViewer {
  * 缩放至指定航线。
  * 比 viewer.flyTo(entity) 更稳定，直接根据航线坐标计算包围球。
  */
-  flyToRoute(line, duration = 1.5) {
-    if (!line || !Array.isArray(line.points) || line.points.length === 0) {
-      console.warn('[RouteManageViewer.flyToRoute] 航线无有效航点', line)
-      return false
-    }
-
-    const validPoints = line.points.filter((pt) => {
-      const lon = Number(pt.lon)
-      const lat = Number(pt.lat)
-      const alt = Number(pt.alt || 0)
-
-      return (
-        Number.isFinite(lon) &&
-        Number.isFinite(lat) &&
-        Number.isFinite(alt) &&
-        lon >= -180 &&
-        lon <= 180 &&
-        lat >= -90 &&
-        lat <= 90
-      )
-    })
-
-    if (validPoints.length === 0) {
-      console.warn('[RouteManageViewer.flyToRoute] 航点经纬度无效', line.points)
-      return false
-    }
-
-    const positions = validPoints.map((pt) => {
-      return Cesium.Cartesian3.fromDegrees(
-        Number(pt.lon),
-        Number(pt.lat),
-        Number(pt.alt || 0),
-      )
-    })
-
-    const boundingSphere = Cesium.BoundingSphere.fromPoints(positions)
-
-    if (
-      !boundingSphere ||
-      !boundingSphere.center ||
-      !Number.isFinite(boundingSphere.radius)
-    ) {
-      console.warn('[RouteManageViewer.flyToRoute] 包围球计算失败', {
-        positions,
-        boundingSphere,
-      })
-      return false
-    }
-
-    const radius = Math.max(boundingSphere.radius, 300)
-    const range = Math.max(radius * 4, 1200)
-
-    this.viewer.camera.flyToBoundingSphere(boundingSphere, {
-      duration,
-      offset: new Cesium.HeadingPitchRange(
-        Cesium.Math.toRadians(0),
-        Cesium.Math.toRadians(-60),
-        range,
-      ),
-    })
-
-    this.viewer.scene.requestRender()
-
-    return true
+flyToRoute(line, duration = 1.5) {
+  if (!line || !Array.isArray(line.points) || line.points.length === 0) {
+    console.warn('[RouteManageViewer.flyToRoute] 航线无有效航点', line)
+    return false
   }
+
+  const validPoints = line.points.filter((pt) => {
+    const lon = Number(pt.lon)
+    const lat = Number(pt.lat)
+    const alt = Number(pt.alt || 0)
+
+    return (
+      Number.isFinite(lon) &&
+      Number.isFinite(lat) &&
+      Number.isFinite(alt) &&
+      lon >= -180 &&
+      lon <= 180 &&
+      lat >= -90 &&
+      lat <= 90
+    )
+  })
+
+  if (validPoints.length === 0) {
+    console.warn('[RouteManageViewer.flyToRoute] 航点经纬度无效', line.points)
+    return false
+  }
+
+  const positions = validPoints.map((pt) => {
+    return Cesium.Cartesian3.fromDegrees(
+      Number(pt.lon),
+      Number(pt.lat),
+      Number(pt.alt || 0),
+    )
+  })
+
+  const boundingSphere = Cesium.BoundingSphere.fromPoints(positions)
+
+  if (
+    !boundingSphere ||
+    !boundingSphere.center ||
+    !Number.isFinite(boundingSphere.radius)
+  ) {
+    console.warn('[RouteManageViewer.flyToRoute] 包围球计算失败', {
+      positions,
+      boundingSphere,
+    })
+    return false
+  }
+
+  const radius = Math.max(boundingSphere.radius, 300)
+  const range = Math.max(radius * 4, 1200)
+
+  this.viewer.camera.flyToBoundingSphere(boundingSphere, {
+    duration,
+    offset: new Cesium.HeadingPitchRange(
+      Cesium.Math.toRadians(0),
+      Cesium.Math.toRadians(-60),
+      range,
+    ),
+  })
+
+  this.viewer.scene.requestRender()
+
+  return true
+}
+
 
   /**
    * 创建正式航线航点实体。
    */
   createRouteVertexEntity(line, index, show = true) {
     const routeId = String(line.unicode)
-    const pt = line.points[index]//经度纬度高度
+    const pt = line.points[index]
 
     const vertexEntity = new Cesium.Entity({
       id: `${routeId}-航点${index + 1}`,
@@ -453,14 +453,16 @@ export default class RouteManageViewer {
 
     vertexEntity._routeId = routeId
     vertexEntity._entityType = 'routeVertex'
-    vertexEntity._vertexIndex = index //航点索引 0开始
+    vertexEntity._vertexIndex = index
 
     this.viewer.entities.add(vertexEntity)
 
     return vertexEntity
   }
 
-  // 航线选中
+  // ============================================================
+  // 二、航线选中
+  // ============================================================
 
   /**
    * 注册地图点击选中航线。
@@ -569,9 +571,9 @@ export default class RouteManageViewer {
     this.viewer.scene.requestRender()
   }
 
-  //
-  // 航线编辑
-  //
+  // ============================================================
+  // 三、航线编辑
+  // ============================================================
 
   /**
    * 进入航线编辑模式。
@@ -607,6 +609,7 @@ export default class RouteManageViewer {
     })
 
     this.registerEditEvents()
+
 
     if (this.onEditStateChanged) {
       this.onEditStateChanged(true)
@@ -645,17 +648,14 @@ registerEditEvents() {
 
     if (!entity || entity._entityType !== 'routeVertex') return
 
-    // 只允许编辑当前选中航线的航点
-    if (String(entity._routeId) !== String(this.selectedRouteId)) {
-      return
-    }
+    // 只允许拖拽当前编辑航线的航点
+    if (String(entity._routeId) !== String(this.selectedRouteId)) return
 
+    //左键按下航点时，立即高亮当前航点
+    this.selectEditVertex(entity)
     const startCartesian = this.getEntityCartesian(entity)
-
     if (!startCartesian) return
 
-    // 用一个垂直于相机视线、穿过当前航点的平面做拖拽平面
-    // 这样鼠标移动到哪里，点就能跟到哪里
     const normal = Cesium.Cartesian3.clone(this.viewer.camera.directionWC)
     Cesium.Cartesian3.normalize(normal, normal)
 
@@ -674,6 +674,7 @@ registerEditEvents() {
       vertexIndex: entity._vertexIndex,
       entity,
     }
+
     this.hideEditVertexMenu()
     this.disableCameraControls()
     this.viewer._element.style.cursor = 'move'
@@ -703,51 +704,76 @@ registerEditEvents() {
     this.endVertexDrag()
   }, Cesium.ScreenSpaceEventType.LEFT_UP)
 
-  // 右键航点：弹出编辑菜单
+  // 左键单击空白处/非航点：隐藏右键菜单
+ // 左键单击：点中航点则高亮，点中其他地方则取消高亮
   this.editHandler.setInputAction((movement) => {
     if (this.mode !== 'editing') return
 
     const picked = this.viewer.scene.pick(movement.position)
     const entity = picked && picked.id
 
-        const isCurrentRouteVertex =
-      entity &&
-      entity._entityType === 'routeVertex' &&
-      String(entity._routeId) === String(this.selectedRouteId)
-
-    if (!isCurrentRouteVertex) {
-      this.hideEditVertexMenu()
-    }
-  }, Cesium.ScreenSpaceEventType.LEFT_CLICK)
-
-  // 右键航点：弹出编辑菜单；右键空白处：隐藏菜单
-  this.editHandler.setInputAction((movement) => {
-    if (this.mode !== 'editing') return
-
-    const picked = this.viewer.scene.pick(movement.position)
-    const entity = picked && picked.id
-
-    const isCurrentRouteVertex =
-      entity &&
-      entity._entityType === 'routeVertex' &&
-      String(entity._routeId) === String(this.selectedRouteId)
-
-    if (!isCurrentRouteVertex) {
+    // 点中当前编辑航线的航点：选中并高亮
+    if (this.isCurrentEditingVertex(entity)) {
+      this.selectEditVertex(entity)
       this.hideEditVertexMenu()
       return
     }
 
-    this.activeVertexInfo = {
-      routeId: String(entity._routeId),
-      vertexIndex: entity._vertexIndex,
-      entity,
+    // 点中空白、航线、其他实体：取消航点高亮
+    this.clearSelectedEditVertex()
+    this.hideEditVertexMenu()
+  }, Cesium.ScreenSpaceEventType.LEFT_CLICK)
+
+  // 右键航点：弹出编辑菜单；右键空白处：隐藏菜单
+  // 右键：
+  // 1）点中航点 -> 弹航点菜单
+  // 2）点中当前编辑航线 -> 弹“添加航点”菜单
+  // 3）点中空白 -> 隐藏菜单
+  this.editHandler.setInputAction((movement) => {
+    if (this.mode !== 'editing') return
+
+    const picked = this.viewer.scene.pick(movement.position)
+    const entity = picked && picked.id
+
+    this.hideEditVertexMenu()
+
+    if (!entity) return
+
+    // 右键航点：弹原来的航点菜单
+    if (
+      entity._entityType === 'routeVertex' &&
+      String(entity._routeId) === String(this.selectedRouteId)
+    ) {
+      //右键航点时也高亮
+      this.selectEditVertex(entity)
+      this.activeVertexInfo = {
+        routeId: String(entity._routeId),
+        vertexIndex: entity._vertexIndex,
+        entity,
+      }
+
+      this.showEditVertexMenu(
+        movement.position,
+        String(entity._routeId),
+        entity._vertexIndex,
+      )
+      return
     }
 
-    this.showEditVertexMenu(
-      movement.position,
-      String(entity._routeId),
-      entity._vertexIndex,
-    )
+    // 右键当前编辑航线：弹“添加航点”菜单
+    if (
+      entity._entityType === 'routeLine' &&
+      String(entity._routeId) === String(this.selectedRouteId)
+    ) {
+      const clickedCartesian = this.getCartesianFromScreen(movement.position)
+      if (!clickedCartesian) return
+
+      this.showLineInsertMenu(
+        movement.position,
+        String(entity._routeId),
+        clickedCartesian,
+      )
+    }
   }, Cesium.ScreenSpaceEventType.RIGHT_CLICK)
 
   // Delete 删除当前航点
@@ -784,10 +810,9 @@ getPointAlt(routeId, vertexIndex) {
    * 拖拽航点。
    */
 moveVertex(routeId, vertexIndex, cartesian) {
-
   if (this.mode !== 'editing') return
 
-  // 不是当前编辑航线，不允许移动
+  // 保险：不是当前编辑航线，不允许移动
   if (String(routeId) !== String(this.selectedRouteId)) return
 
   const routeItem = this.routesMap.get(String(routeId))
@@ -921,6 +946,53 @@ showEditVertexMenu(screenPosition, routeId, vertexIndex) {
   document.body.appendChild(menu)
   this.editMenuEl = menu
 }
+showLineInsertMenu(screenPosition, routeId, clickedCartesian) {
+  this.hideEditVertexMenu()
+
+  const routeItem = this.routesMap.get(String(routeId))
+  const line = routeItem?.line
+  if (!line) return
+
+  const rect = this.viewer.scene.canvas.getBoundingClientRect()
+
+  const menu = document.createElement('div')
+  menu.style.position = 'fixed'
+  menu.style.left = `${rect.left + screenPosition.x}px`
+  menu.style.top = `${rect.top + screenPosition.y}px`
+  menu.style.zIndex = 9999
+  menu.style.minWidth = '140px'
+  menu.style.background = '#1f1f1f'
+  menu.style.border = '1px solid #555'
+  menu.style.borderRadius = '4px'
+  menu.style.padding = '4px 0'
+  menu.style.boxShadow = '0 2px 8px rgba(0,0,0,0.35)'
+  menu.style.fontSize = '14px'
+  menu.style.color = '#fff'
+
+  const item = document.createElement('div')
+  item.innerText = '添加航点'
+  item.style.padding = '8px 12px'
+  item.style.cursor = 'pointer'
+
+  item.onmouseenter = () => {
+    item.style.background = '#333'
+  }
+
+  item.onmouseleave = () => {
+    item.style.background = 'transparent'
+  }
+
+  item.onclick = () => {
+    this.hideEditVertexMenu()
+    this.insertVertexOnLine(routeId, clickedCartesian)
+  }
+
+  menu.appendChild(item)
+
+  document.body.appendChild(menu)
+  this.editMenuEl = menu
+}
+
 insertVertexAfter(routeId, vertexIndex) {
   const routeItem = this.routesMap.get(String(routeId))
   if (!routeItem) return false
@@ -950,7 +1022,139 @@ insertVertexAfter(routeId, vertexIndex) {
   return true
 }
 
+insertVertexOnLine(routeId, clickedCartesian) {
+  const routeItem = this.routesMap.get(String(routeId))
+  if (!routeItem) return false
 
+  const line = routeItem.line
+  if (!line?.points || line.points.length < 2) return false
+
+  const projectionInfo = this.findNearestSegmentProjection(line, clickedCartesian)
+  if (!projectionInfo) return false
+
+  const {
+    insertAfterIndex,
+    projectionCartesian,
+    t,
+  } = projectionInfo
+
+  const ptA = line.points[insertAfterIndex]
+  const ptB = line.points[(insertAfterIndex + 1) % line.points.length]
+
+  const cartographic = Cesium.Cartographic.fromCartesian(
+    projectionCartesian,
+    Cesium.Ellipsoid.WGS84,
+  )
+
+  const altA = Number(ptA.alt || 0)
+  const altB = Number(ptB.alt || 0)
+
+  const newPt = {
+    ...ptA,
+    lon: Cesium.Math.toDegrees(cartographic.longitude),
+    lat: Cesium.Math.toDegrees(cartographic.latitude),
+    alt: altA + (altB - altA) * t,
+    speed: ptA.speed ?? ptB.speed ?? 0,
+    ch1: 0,
+    ch2: 3,
+  }
+
+  line.points.splice(insertAfterIndex + 1, 0, newPt)
+
+  this.normalizeRoutePoints(line)
+
+  this.activeVertexInfo = {
+    routeId: String(routeId),
+    vertexIndex: insertAfterIndex + 1,
+    entity: undefined,
+  }
+
+  this.updateRouteEntity(line, {
+    rebuildVertex: true,
+  })
+
+  return true
+}
+
+
+findNearestSegmentProjection(line, clickedCartesian) {
+  if (!line?.points || line.points.length < 2) return undefined
+
+  const points = line.points
+  const segmentCount = line.isClose ? points.length : points.length - 1
+
+  let minDistance = Number.POSITIVE_INFINITY
+  let bestResult = undefined
+
+  for (let i = 0; i < segmentCount; i++) {
+    const ptA = points[i]
+    const ptB = points[(i + 1) % points.length]
+
+    const aCartesian = Cesium.Cartesian3.fromDegrees(
+      Number(ptA.lon),
+      Number(ptA.lat),
+      Number(ptA.alt || 0),
+    )
+
+    const bCartesian = Cesium.Cartesian3.fromDegrees(
+      Number(ptB.lon),
+      Number(ptB.lat),
+      Number(ptB.alt || 0),
+    )
+
+    const projectionResult = this.pointToSegmentProjection(
+      clickedCartesian,
+      aCartesian,
+      bCartesian,
+    )
+
+    if (!projectionResult) continue
+
+    if (projectionResult.distance < minDistance) {
+      minDistance = projectionResult.distance
+      bestResult = {
+        insertAfterIndex: i,
+        projectionCartesian: projectionResult.projection,
+        t: projectionResult.t,
+      }
+    }
+  }
+
+  return bestResult
+}
+
+pointToSegmentProjection(point, segStart, segEnd) {
+  const ab = new Cesium.Cartesian3()
+  const ap = new Cesium.Cartesian3()
+
+  Cesium.Cartesian3.subtract(segEnd, segStart, ab)
+  Cesium.Cartesian3.subtract(point, segStart, ap)
+
+  const abLenSq = Cesium.Cartesian3.magnitudeSquared(ab)
+
+  if (abLenSq === 0) {
+    return {
+      projection: Cesium.Cartesian3.clone(segStart),
+      t: 0,
+      distance: Cesium.Cartesian3.distance(point, segStart),
+    }
+  }
+
+  let t = Cesium.Cartesian3.dot(ap, ab) / abLenSq
+  t = Math.max(0, Math.min(1, t))
+
+  const projection = new Cesium.Cartesian3(
+    segStart.x + ab.x * t,
+    segStart.y + ab.y * t,
+    segStart.z + ab.z * t,
+  )
+
+  return {
+    projection,
+    t,
+    distance: Cesium.Cartesian3.distance(point, projection),
+  }
+}
 createPointAfter(line, vertexIndex) {
   const points = line.points
   const current = points[vertexIndex]
@@ -1024,6 +1228,7 @@ createPointAfter(line, vertexIndex) {
    * 删除航点。
    */
   deleteVertex(routeId, vertexIndex) {
+    this.clearSelectedEditVertex()
     const routeItem = this.routesMap.get(String(routeId))
     if (!routeItem) return false
 
@@ -1155,6 +1360,8 @@ createPointAfter(line, vertexIndex) {
    * 解除编辑事件。
    */
   unregisterEditEvents() {
+    // 退出编辑时清除航点选中高亮
+    this.clearSelectedEditVertex()
     this.hideEditVertexMenu()
     this.endVertexDrag()
 
@@ -1200,7 +1407,7 @@ createPointAfter(line, vertexIndex) {
 
     controller.enableRotate = false
     controller.enableTranslate = false
-    controller.enableTilt = false
+    controller.enableTilt = true
     controller.enableLook = false
   }
 
@@ -1508,7 +1715,7 @@ finishDraw() {
     console.warn('航线不得少于3个航点！')
     return false
   }
-  
+
   const resultCoords = this._Cartesian_degrees(this.positions)
   const resultEntities = [...this.vertexEntities, this.lineEntity].filter(Boolean)
 
@@ -1727,10 +1934,7 @@ getDragCartesianFromScreen(screenPosition, dragPlane) {
     return coords
   }
 
-  // ============================================================
   // 五、销毁
-  // ============================================================
-
   destroy() {
     if (this.isDrawing) {
       this.cancelDraw('绘制已取消')
@@ -1770,4 +1974,120 @@ getDragCartesianFromScreen(screenPosition, dragPlane) {
     this.viewer._element.style.cursor = 'default'
     this.viewer.enableCursorStyle = true
   }
+
+  /**
+ * 判断实体是否是当前编辑航线的航点。
+ */
+isCurrentEditingVertex(entity) {
+  if (!entity) return false
+  if (this.mode !== 'editing') return false
+  if (!this.selectedRouteId) return false
+
+  return (
+    entity._entityType === 'routeVertex' &&
+    String(entity._routeId) === String(this.selectedRouteId)
+  )
+}
+
+/**
+ * 编辑状态下普通航点样式。
+ */
+setEditVertexNormalStyle(entity) {
+  if (!entity) return
+
+  if (entity.point) {
+    entity.point.color = Cesium.Color.FUCHSIA
+    entity.point.outlineColor = Cesium.Color.WHITE
+    entity.point.outlineWidth = 2
+    entity.point.pixelSize = 9
+  }
+
+  if (entity.label) {
+    entity.label.fillColor = Cesium.Color.WHITE
+    entity.label.backgroundColor = new Cesium.Color(0.165, 0.165, 0.165, 0.99)
+  }
+}
+
+/**
+ * 编辑状态下选中航点样式。
+ */
+setEditVertexSelectedStyle(entity) {
+  if (!entity) return
+
+  if (entity.point) {
+    entity.point.color = Cesium.Color.YELLOW
+    entity.point.outlineColor = Cesium.Color.RED
+    entity.point.outlineWidth = 3
+    entity.point.pixelSize = 15
+  }
+
+  if (entity.label) {
+    entity.label.fillColor = Cesium.Color.YELLOW
+    entity.label.backgroundColor = new Cesium.Color(0.45, 0.18, 0.05, 0.99)
+  }
+}
+
+/**
+ * 选中编辑状态下的航点，并高亮。
+ */
+selectEditVertex(entity) {
+  if (!this.isCurrentEditingVertex(entity)) return false
+
+  // 如果之前选中了其他航点，先恢复旧航点样式
+  if (
+    this.selectedEditVertexEntity &&
+    this.selectedEditVertexEntity !== entity
+  ) {
+    this.setEditVertexNormalStyle(this.selectedEditVertexEntity)
+  }
+
+  this.selectedEditVertexEntity = entity
+  this.selectedEditVertexInfo = {
+    routeId: String(entity._routeId),
+    vertexIndex: entity._vertexIndex,
+    entity,
+  }
+
+  // 同步给 Delete 删除逻辑用
+  this.activeVertexInfo = {
+    routeId: String(entity._routeId),
+    vertexIndex: entity._vertexIndex,
+    entity,
+  }
+
+  this.setEditVertexSelectedStyle(entity)
+
+  if (this.onVertexSelected) {
+    this.onVertexSelected({
+      routeId: String(entity._routeId),
+      vertexIndex: entity._vertexIndex,
+      entity,
+    })
+  }
+
+  this.viewer.scene.requestRender()
+
+  return true
+}
+
+/**
+ * 取消当前选中的航点高亮。
+ */
+clearSelectedEditVertex() {
+  if (this.selectedEditVertexEntity) {
+    this.setEditVertexNormalStyle(this.selectedEditVertexEntity)
+  }
+
+  this.selectedEditVertexEntity = undefined
+  this.selectedEditVertexInfo = undefined
+
+  // 点击空白处时，也取消 Delete 当前航点
+  this.activeVertexInfo = undefined
+
+  if (this.onVertexSelected) {
+    this.onVertexSelected(null)
+  }
+
+  this.viewer.scene.requestRender()
+}
 }
