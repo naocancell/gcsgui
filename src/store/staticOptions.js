@@ -17,6 +17,10 @@ export const useStaticStore = defineStore('staticOptions', {
       showRouteManage: false, // 是否显示航线管理页面
 
       menuOptions: {
+        obstacleOptions: [
+          { label: '加载障碍物', key: 'loadObstacle' },
+          { label: '隐藏/显示', key: 'showObstacle' },
+        ],
         EditOptions: [
           { label: '绘制航线', key: 'createLine' },
           { label: '航线管理', key: 'manage' },

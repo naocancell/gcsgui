@@ -13,6 +13,8 @@ import {
   Layers,
   Settings,
   ReloadSharp,
+  BuildSharp,
+  HomeSharp,
   CloseOutline,
   ShieldCheckmark,
   ShieldOutline,
@@ -58,11 +60,11 @@ import { storeToRefs } from 'pinia'
 //选中飞机以及高度预警
 import { useSelectedPlaneStore } from '@/store/selectedPlaneStore'
 import { useTerrainWarning } from '@/hooks/useTerrainWarning'
+import { useMarkObstacle } from '@/hooks/useMarkObstacle.ts'
 const selectedPlaneStore = useSelectedPlaneStore()
 const { selectedModel, selectedMeta } = storeToRefs(selectedPlaneStore)
 const terrainWarningApi = ref<ReturnType<typeof useTerrainWarning> | null>(null)
-
-
+ 
 const router = useRouter()
 
 const emit = defineEmits(['resizeMap'])
@@ -127,6 +129,15 @@ function handleSceneSelect(key) {
       route.isDesignRoute = true
       window.measureViewer.showDesignRoute3D(route)
     })
+  }
+}
+
+function handleObstacleSelect(key){
+  if (key === 'loadObstacle') {
+    addAllObstacles()
+  }
+  if (key === 'showObstacle') {
+    toggleObstaclesVisible()
   }
 }
 //用于控制显示关闭工具条按钮或打开工具条按钮
@@ -887,6 +898,7 @@ function toggleSelectedPlaneTerrainWarning() {
   terrainWarningApi.value?.toggle()
 }
 
+const {addAllObstacles,toggleObstaclesVisible} = useMarkObstacle() 
 
 </script>
 
@@ -1026,7 +1038,19 @@ function toggleSelectedPlaneTerrainWarning() {
           </template>
         </n-button>
       </n-popselect>
-    <!-- 刷新页面 -->
+    <!-- 有用户选择加载机场建筑物-->
+           <n-dropdown
+        :options="store.menuOptions.obstacleOptions"
+        @select="handleObstacleSelect"
+      >
+        <n-button tertiary circle type="warning">
+          <!--加载机场周边障碍物-->
+          <template #icon>
+            <n-icon><HomeSharp /></n-icon>
+          </template>
+        </n-button>
+      </n-dropdown>
+      <!-- 刷新页面 -->
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
           <n-button tertiary type="warning" @click="refreshPage">

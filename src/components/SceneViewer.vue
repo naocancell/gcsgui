@@ -30,6 +30,7 @@ import {
 import { flyToDefault } from '@/utils/map/camera.ts'
 import MeasureViewer from '@/assets/js/measureViewer.js'
 import { useLoadPlane } from "@/hooks/useLoadPlane";
+import { useMarkObstacle } from "@/hooks/useMarkObstacle";
 
 const viewerDivRef = ref<HTMLDivElement>()
 let viewer: Viewer
@@ -57,7 +58,13 @@ onMounted(() => {
 
   viewer.camera.flyTo({
   // 西经, 南纬, 东经, 北纬，大致框住海南岛
-    destination: Cesium.Rectangle.fromDegrees(108.6, 18.1, 111.1, 20.2),
+    destination: Cesium.Cartesian3.fromDegrees(
+            110.376662306,   // 经度
+            19.6727238,    // 纬度
+            5000     // 高度，米
+        ),
+
+    // Cesium.Rectangle.fromDegrees(110.376662306, 19.6727238, 111.1, 20.2),
     duration: 2,
 });
   // 显示罗盘和比例尺
@@ -85,6 +92,11 @@ onMounted(() => {
   // 标记点图层，存储所有地标点
   const markerLayer = new CustomDataSource('Marker')
   viewer.dataSources.add(markerLayer)
+
+  //加载建筑物图标
+  // const markObstacle = useMarkObstacle(viewer)
+  // markObstacle.addAllObstacles()
+
 })
 
 onUnmounted(() => {
