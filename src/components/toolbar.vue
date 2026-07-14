@@ -19,7 +19,9 @@ import {
   ShieldCheckmark,
   ShieldOutline,
   Airplane,
-  RemoveOutline
+  RemoveOutline,
+  InformationSharp,
+  InformationCircleOutline
 } from '@vicons/ionicons5'
 //引入监听hooks和飞机数据状态管理
 
@@ -61,6 +63,7 @@ import { storeToRefs } from 'pinia'
 import { useSelectedPlaneStore } from '@/store/selectedPlaneStore'
 import { useTerrainWarning } from '@/hooks/useTerrainWarning'
 import { useMarkObstacle } from '@/hooks/useMarkObstacle.ts'
+import UavTelemetryPanel from '@/components/UavTelemetryPanel.vue'
 const selectedPlaneStore = useSelectedPlaneStore()
 const { selectedModel, selectedMeta } = storeToRefs(selectedPlaneStore)
 const terrainWarningApi = ref<ReturnType<typeof useTerrainWarning> | null>(null)
@@ -97,6 +100,8 @@ const isDrawingRoute = ref(false)
 let nfzViewer = null
 let showNFZ = ref(false)
 
+//是否显示航电信息
+const isShowTelemetryInfo = ref<Boolean>(false)
 function toggleNFZ() {
   if (!nfzViewer && window.viewer) {
     nfzViewer = new NFZViewer(window.viewer)
@@ -900,6 +905,9 @@ function toggleSelectedPlaneTerrainWarning() {
 
 const {addAllObstacles,toggleObstaclesVisible} = useMarkObstacle() 
 
+function showTelemetryInfo(){
+  isShowTelemetryInfo.value = !isShowTelemetryInfo.value
+}
 </script>
 
 <template>
@@ -1050,6 +1058,19 @@ const {addAllObstacles,toggleObstaclesVisible} = useMarkObstacle()
           </template>
         </n-button>
       </n-dropdown>
+
+        <!-- 航电信息 -->
+       <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
+          <n-button tertiary type="warning" @click="showTelemetryInfo">
+            <template #icon>
+              <n-icon><InformationCircleOutline /></n-icon>
+            </template>
+          </n-button>
+        </template>
+        <span>航电信息</span>
+      </n-tooltip>
+
       <!-- 刷新页面 -->
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
@@ -1458,6 +1479,7 @@ const {addAllObstacles,toggleObstaclesVisible} = useMarkObstacle()
   />
   <MarkerDialog ref="markerDialog"></MarkerDialog>
   <AltitudeWarning :warningResult="altitudeWarningResult" />
+  <UavTelemetryPanel v-if="isShowTelemetryInfo"/>
 </template>
 
 <style>

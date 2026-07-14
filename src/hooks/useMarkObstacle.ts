@@ -231,13 +231,14 @@ export function useMarkObstacle() {
         let latitude 
         //磁偏角
         let magVar 
+        let type//json文件类型
     
         const fileInput = document.createElement('input')
 
         fileInput.type = 'file'
         fileInput.accept = '.json,application/json'
         fileInput.multiple = false
-
+        //用户点击打开后执行
         fileInput.addEventListener(
             'change',
             async () => {
@@ -261,12 +262,78 @@ export function useMarkObstacle() {
                     parsedData.forEach(
                         (item: any, index: number) => {
                             if(index === 0){
-                                longitude = Number(item.baseLon)
-                                latitude = Number(item.baseLat)
-                                magVar = Number(item.magVar)
+                                type = item.type
+                                if (type === "relative_bearing") {
+                                    longitude = Number(item.baseLon)
+                                    latitude = Number(item.baseLat)
+                                    magVar = Number(item.magVar)
+                                }
                                 return   
                             }
-                            try {
+                            if (type === "relative_bearing") {
+                               try {
+                                    if (
+                                        typeof item !== 'object' ||
+                                        item === null
+                                    ) {
+                                        throw new Error(
+                                            '障碍物数据必须是对象'
+                                        )
+                                    }
+
+                                    const obstacle = item as any
+
+                                    const magneticAzimuth =
+                                        Number(
+                                            obstacle.magneticAzimuth
+                                        )
+
+                                    const distance =
+                                        Number(obstacle.distance)
+
+                                    if (
+                                        !Number.isFinite(
+                                            magneticAzimuth
+                                        )
+                                    ) {
+                                        throw new Error(
+                                            'magneticAzimuth 不是有效数字'
+                                        )
+                                    }
+
+                                    if (
+                                        !Number.isFinite(distance) ||
+                                        distance < 0
+                                    ) {
+                                        throw new Error(
+                                            'distance 不是有效的非负数字'
+                                        )
+                                    }
+
+                                    const position =
+                                        getLonLatByMagneticBearingDistance(
+                                            longitude,
+                                            latitude,
+                                            magneticAzimuth,
+                                            distance,
+                                            magVar
+                                        )
+
+                                    addObstacle(
+                                        obstacle,
+                                        position.longitude,
+                                        position.latitude
+                                    )
+                               } catch (error) {
+                                console.error(
+                                    `第 ${index + 1} 条数据加载失败：`,
+                                    error,
+                                    item
+                                )
+                               }
+                            }
+                            if(type === "absolute_coord"){
+                                try {
                                 if (
                                     typeof item !== 'object' ||
                                     item === null
@@ -278,54 +345,47 @@ export function useMarkObstacle() {
 
                                 const obstacle = item as any
 
-                                const magneticAzimuth =
+                                const longitude =
                                     Number(
-                                        obstacle.magneticAzimuth
+                                        obstacle.longitude
                                     )
 
-                                const distance =
-                                    Number(obstacle.distance)
+                                const latitude =
+                                    Number(obstacle.latitude)
 
                                 if (
                                     !Number.isFinite(
-                                        magneticAzimuth
+                                        longitude
                                     )
                                 ) {
                                     throw new Error(
-                                        'magneticAzimuth 不是有效数字'
+                                        'longitude 不是有效数字'
                                     )
                                 }
 
                                 if (
-                                    !Number.isFinite(distance) ||
-                                    distance < 0
+                                    !Number.isFinite(latitude) ||
+                                    latitude < 0
                                 ) {
                                     throw new Error(
                                         'distance 不是有效的非负数字'
                                     )
-                                }
-
-                                const position =
-                                    getLonLatByMagneticBearingDistance(
-                                        longitude,
-                                        latitude,
-                                        magneticAzimuth,
-                                        distance,
-                                        magVar
-                                    )
-
+                                }                   
                                 addObstacle(
                                     obstacle,
-                                    position.longitude,
-                                    position.latitude
+                                    longitude,
+                                    latitude
                                 )
-                            } catch (error) {
+                               } catch (error) {
                                 console.error(
                                     `第 ${index + 1} 条数据加载失败：`,
                                     error,
                                     item
                                 )
+                               }
+                                
                             }
+                            
                         }
                     )
                 } catch (error) {

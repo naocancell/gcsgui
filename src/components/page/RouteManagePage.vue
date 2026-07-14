@@ -8,7 +8,7 @@ import {
   DownloadOutline,
 } from '@vicons/ionicons5'
 import { nextTick, onBeforeUnmount, onMounted, ref, computed } from 'vue'
-import { darkTheme, useMessage } from 'naive-ui'
+import { darkTheme, useMessage, useDialog } from 'naive-ui'
 import { useRouteStore } from '@/store/RouteStore.ts'
 import type { Airline } from '@/types/entityoptions.ts'
 import { newAirline, newAirlinePt } from '@/assets/js/TypeInitial.ts'
@@ -57,6 +57,7 @@ let selectedRoute = ref<Airline>(newAirline())
 let routeManage: any = null
 let routePtNumber = ref(1)
 let uiMsg = useMessage()
+const dialog = useDialog()
 let nowTime = ref('')
 let timer: ReturnType<typeof setInterval> | null = null
 let profileRefreshTimer: ReturnType<typeof setTimeout> | null = null
@@ -575,36 +576,46 @@ function startEditSelectedRoute() {
   uiMsg.info('已进入航线编辑模式，可拖拽航点')
 }
 
-async function saveRouteEdit() {
+async function saveRouteEdit(): Promise<boolean> {
   if (!selectedRoute.value?.unicode || !selectedRoute.value.points?.length) {
     uiMsg.warning('请先选择一条有效的航线')
-    return
+    return false
   }
 
-  normalizeRouteForBiz(selectedRoute.value)
+  try {
+    normalizeRouteForBiz(selectedRoute.value)
 
-  routeStore.addRoute(selectedRoute.value)
+    routeStore.addRoute(selectedRoute.value)
 
-  updateMapRoute({
-    rebuildVertex: true,
-  })
+    updateMapRoute({
+      rebuildVertex: true,
+    })
 
-  routeManage.saveEditRoute?.(selectedRoute.value.unicode)
-  routeManage.selectRoute?.(selectedRoute.value.unicode)
+    routeManage.saveEditRoute?.(selectedRoute.value.unicode)
+    routeManage.selectRoute?.(selectedRoute.value.unicode)
 
-  isRouteEditing.value = false
-  routeDirty.value = false
-  routeStore.endRouteAction()
-refreshSelectedRouteView({
-  refreshWeather: true,
-  forceRefreshPtList: true,
-})
+    isRouteEditing.value = false
+    routeDirty.value = false
+    routeStore.endRouteAction()
 
-await nextTick()
+    refreshSelectedRouteView({
+      refreshWeather: true,
+      forceRefreshPtList: true,
+    })
 
-flyToRoute(selectedRoute.value, 1.5)
+    await nextTick()
 
-uiMsg.success('保存编辑成功')
+    flyToRoute(selectedRoute.value, 1.5)
+
+    uiMsg.success('保存编辑成功')
+
+    return true
+  } catch (error) {
+    console.error('[saveRouteEdit] 保存编辑失败：', error)
+    uiMsg.error('保存编辑失败')
+
+    return false
+  }
 }
 
 function cancelRouteEdit() {
@@ -638,6 +649,7 @@ function cancelRouteEdit() {
   })
 
   uiMsg.info('已取消编辑')
+  return true
 }
 
 /**
@@ -1136,7 +1148,65 @@ function exportRoute() {
 }
 
 function backToHomePage() {
-  sStore.showRouteManage = false
+  /**
+   * 非编辑状态：
+   * 直接关闭航线管理页面。
+   */
+  if (!isRouteEditing.value) {
+    sStore.showRouteManage = false
+    return
+  }
+
+  /**
+   * 编辑状态：
+   * 询问用户是否保存。
+   */
+  dialog.warning({
+    title: '退出航线编辑',
+    content: '当前航线正在编辑，是否保存本次修改？',
+
+    positiveText: '保存',
+    negativeText: '不保存',
+
+    closable: true,
+    maskClosable: false,
+
+    /**
+     * 保存编辑
+     */
+    onPositiveClick: async () => {
+      const success = await saveRouteEdit()
+
+      /**
+       * 保存失败时不关闭航线管理页面。
+       */
+      if (!success) {
+        return false
+      }
+
+      sStore.showRouteManage = false
+
+      return true
+    },
+
+    /**
+     * 放弃编辑
+     */
+    onNegativeClick: () => {
+      const success = cancelRouteEdit()
+
+      /**
+       * 取消编辑失败时不关闭页面。
+       */
+      if (!success) {
+        return false
+      }
+
+      sStore.showRouteManage = false
+
+      return true
+    },
+  })
 }
 
 //点击航线缩放到航线
