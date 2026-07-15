@@ -8,10 +8,10 @@ import { defineEmits, ref } from 'vue'
 
 let emit = defineEmits(['routeDraw', 'cancelDraw'])
 let routeParams = ref({
-  name: '',
+  name: '示例航线',
   code: 1,
   isClose: false,
-  height: 100,
+  height: 500,
   routePts: [],
 })
 let routeCode = [

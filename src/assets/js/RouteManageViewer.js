@@ -25,7 +25,6 @@ export default class RouteManageViewer {
     this.lineEntitys = [] //临时线的实体数组
 
     this.handler = undefined
-    this.isDrawing = false
     this.drawResolve = undefined
     this.drawReject = undefined
     this.keydownHandler = undefined
@@ -78,6 +77,15 @@ export default class RouteManageViewer {
     //编辑状态下当前选中的航点
     this.selectedEditVertexEntity = undefined
     this.selectedEditVertexInfo = undefined
+
+    this.segmentLabelMaxCameraDistance = 300000
+    this.segmentLabelMinPixelLength = 64
+    this.segmentLabelLayer = undefined
+    this.routeSegmentLabelEls = new Map()
+    this.drawSegmentLabelEls = []
+    this.updateSegmentLabels = this.updateSegmentLabels.bind(this)
+    this.createSegmentLabelLayer()
+    this.viewer.scene.postRender.addEventListener(this.updateSegmentLabels)
   }
 
   /**
@@ -96,7 +104,7 @@ export default class RouteManageViewer {
 
     // 避免旧实体和新数据不同步，先移除旧实体
     this.removeRouteEntities(routeId)
-
+    
     this.normalizeRoutePoints(line)
     //获取所需要的航点用于绘制航线
     const renderPositions = this.getRouteRenderPositions(line)
@@ -125,13 +133,17 @@ export default class RouteManageViewer {
     const vertexEntities = line.points.map((_, index) => {
       return this.createRouteVertexEntity(line, index, showVertex)
     })
-
+    //所有航线都会保存一份再map中
     this.routesMap.set(routeId, {
-      line,
-      entity: airlineEntity,
-      vertexEntities,
+      line, //航线本身原始数据（AirLine）
+      entity: airlineEntity, //航线实体
+      vertexEntities, //航点实体
       backupPoints: undefined,
-      dirty: false,
+      dirty: false, //是否修改过
+      backupPoints: undefined,
+
+      // 编辑拖拽时给 CallbackProperty 用
+      editPositions: undefined,
     })
 
     this.viewer.scene.requestRender()
@@ -172,6 +184,7 @@ export default class RouteManageViewer {
    */
   removeRouteEntities(routeId) {
     this.viewer.entities.removeById('航线' + routeId)
+    this.removeRouteSegmentLabels(routeId)
 
     const entities = this.viewer.entities.values
     const prefix = routeId + '-航点'
@@ -460,6 +473,346 @@ flyToRoute(line, duration = 1.5) {
     return vertexEntity
   }
 
+  createSegmentLabelLayer() {
+    if (typeof document === 'undefined') return
+
+    const container = this.viewer.container || this.viewer._element
+    if (!container) return
+
+    const computedStyle = window.getComputedStyle(container)
+    if (computedStyle.position === 'static') {
+      container.style.position = 'relative'
+    }
+
+    const layer = document.createElement('div')
+    layer.className = 'route-segment-label-layer'
+    layer.style.position = 'absolute'
+    layer.style.left = '0'
+    layer.style.top = '0'
+    layer.style.width = '100%'
+    layer.style.height = '100%'
+    layer.style.overflow = 'hidden'
+    layer.style.pointerEvents = 'none'
+    layer.style.zIndex = '4'
+
+    container.appendChild(layer)
+    this.segmentLabelLayer = layer
+  }
+
+  createSegmentLabelElement() {
+    if (!this.segmentLabelLayer) return undefined
+
+    const label = document.createElement('div')
+    label.className = 'route-segment-label'
+    label.style.position = 'absolute'
+    label.style.left = '0'
+    label.style.top = '0'
+    label.style.display = 'none'
+    label.style.whiteSpace = 'nowrap'
+    label.style.pointerEvents = 'none'
+    label.style.userSelect = 'none'
+    label.style.transformOrigin = 'center center'
+    label.style.padding = '2px 6px'
+    label.style.borderRadius = '3px'
+    label.style.background = 'rgba(18, 18, 18, 0.78)'
+    label.style.border = '1px solid rgba(255, 255, 255, 0.24)'
+    label.style.color = '#ffffff'
+    label.style.font = '600 12px/1.2 sans-serif'
+    label.style.textShadow = '0 1px 2px rgba(0, 0, 0, 0.9)'
+    label.style.boxSizing = 'border-box'
+    label.style.willChange = 'transform, left, top'
+
+    this.segmentLabelLayer.appendChild(label)
+    return label
+  }
+
+  ensureLabelElements(labels, count) {
+    while (labels.length < count) {
+      const label = this.createSegmentLabelElement()
+      if (!label) break
+      labels.push(label)
+    }
+
+    while (labels.length > count) {
+      const label = labels.pop()
+      if (label && label.parentNode) {
+        label.parentNode.removeChild(label)
+      }
+    }
+
+    return labels
+  }
+
+  ensureRouteSegmentLabels(routeId, count) {
+    let labels = this.routeSegmentLabelEls.get(routeId)
+
+    if (!labels) {
+      labels = []
+      this.routeSegmentLabelEls.set(routeId, labels)
+    }
+
+    return this.ensureLabelElements(labels, count)
+  }
+
+  ensureDrawSegmentLabels(count) {
+    this.drawSegmentLabelEls = this.ensureLabelElements(
+      this.drawSegmentLabelEls,
+      count,
+    )
+
+    return this.drawSegmentLabelEls
+  }
+
+  removeRouteSegmentLabels(routeId) {
+    const labels = this.routeSegmentLabelEls.get(String(routeId))
+    if (!labels) return
+
+    labels.forEach((label) => {
+      if (label && label.parentNode) {
+        label.parentNode.removeChild(label)
+      }
+    })
+
+    this.routeSegmentLabelEls.delete(String(routeId))
+  }
+
+  clearSegmentLabels() {
+    this.routeSegmentLabelEls.forEach((labels) => {
+      labels.forEach((label) => {
+        if (label && label.parentNode) {
+          label.parentNode.removeChild(label)
+        }
+      })
+    })
+
+    this.routeSegmentLabelEls.clear()
+
+    this.drawSegmentLabelEls.forEach((label) => {
+      if (label && label.parentNode) {
+        label.parentNode.removeChild(label)
+      }
+    })
+
+    this.drawSegmentLabelEls = []
+
+    if (this.segmentLabelLayer && this.segmentLabelLayer.parentNode) {
+      this.segmentLabelLayer.parentNode.removeChild(this.segmentLabelLayer)
+    }
+
+    this.segmentLabelLayer = undefined
+  }
+
+  updateSegmentLabels() {
+    if (!this.segmentLabelLayer) return
+
+    const activeRouteIds = new Set()
+
+    this.routesMap.forEach((routeItem, routeId) => {
+      activeRouteIds.add(String(routeId))
+
+      const segments = this.getLineSegmentLabelData(routeItem.line)
+      const labels = this.ensureRouteSegmentLabels(
+        String(routeId),
+        segments.length,
+      )
+
+      this.renderSegmentLabels(segments, labels)
+    })
+
+    Array.from(this.routeSegmentLabelEls.keys()).forEach((routeId) => {
+      if (!activeRouteIds.has(String(routeId))) {
+        this.removeRouteSegmentLabels(routeId)
+      }
+    })
+
+    const drawSegments = 
+    this.mode === 'drawing'
+      ? this.getPositionsSegmentLabelData(this.temPositions)
+      : []
+    const drawLabels = this.ensureDrawSegmentLabels(drawSegments.length)
+
+    this.renderSegmentLabels(drawSegments, drawLabels)
+  }
+
+  getLineSegmentLabelData(line) {
+    if (!line?.points || line.points.length < 2) return []
+
+    return this.getPositionsSegmentLabelData(this.getRouteRenderPositions(line))
+  }
+
+  getPositionsSegmentLabelData(positions) {
+    if (!Array.isArray(positions) || positions.length < 2) return []
+
+    const segments = []
+    let totalKm = 0
+
+    for (let i = 0; i < positions.length - 1; i++) {
+      const start = positions[i]
+      const end = positions[i + 1]
+
+      if (!start || !end) continue
+
+      const metrics = this.computeSegmentMetrics(start, end)
+      if (!metrics || metrics.distanceKm <= 0) continue
+
+      totalKm += metrics.distanceKm
+
+      segments.push({
+        start,
+        end,
+        distanceKm: metrics.distanceKm,
+        bearingDeg: metrics.bearingDeg,
+        totalKm: undefined,
+      })
+    }
+
+    if (segments.length > 0) {
+      segments[segments.length - 1].totalKm = totalKm
+    }
+
+    return segments
+  }
+
+  computeSegmentMetrics(start, end) {
+    try {
+      const startCartographic = Cesium.Cartographic.fromCartesian(
+        start,
+        Cesium.Ellipsoid.WGS84,
+      )
+      const endCartographic = Cesium.Cartographic.fromCartesian(
+        end,
+        Cesium.Ellipsoid.WGS84,
+      )
+      const geodesic = new Cesium.EllipsoidGeodesic(
+        startCartographic,
+        endCartographic,
+        Cesium.Ellipsoid.WGS84,
+      )
+      const distanceKm = geodesic.surfaceDistance / 1000
+      const bearingDeg =
+        (Cesium.Math.toDegrees(geodesic.startHeading) + 360) % 360
+
+      return {
+        distanceKm,
+        bearingDeg,
+      }
+    } catch (error) {
+      return undefined
+    }
+  }
+
+  formatDistanceKm(value) {
+    return Number(value || 0).toFixed(2)
+  }
+
+  formatBearingDeg(value) {
+    return String(Math.round(Number(value || 0)) % 360)
+  }
+
+  formatSegmentLabel(segment) {
+    const baseText =
+      `${this.formatDistanceKm(segment.distanceKm)} km, ` +
+      `${this.formatBearingDeg(segment.bearingDeg)}°`
+
+    if (segment.totalKm == null) return baseText
+
+    return `${baseText} （total：${this.formatDistanceKm(segment.totalKm)} km）`
+  }
+
+  renderSegmentLabels(segments, labels) {
+    labels.forEach((label, index) => {
+      const segment = segments[index]
+
+      if (!segment) {
+        label.style.display = 'none'
+        return
+      }
+
+      this.renderSegmentLabel(segment, label)
+    })
+  }
+
+  renderSegmentLabel(segment, label) {
+    const startWindow = Cesium.SceneTransforms.wgs84ToWindowCoordinates(
+      this.viewer.scene,
+      segment.start,
+    )
+    const endWindow = Cesium.SceneTransforms.wgs84ToWindowCoordinates(
+      this.viewer.scene,
+      segment.end,
+    )
+
+    if (!startWindow || !endWindow) {
+      label.style.display = 'none'
+      return
+    }
+
+    const dx = endWindow.x - startWindow.x
+    const dy = endWindow.y - startWindow.y
+    const pixelLength = Math.sqrt(dx * dx + dy * dy)
+
+    if (
+      !this.shouldShowSegmentLabel(
+        segment,
+        startWindow,
+        endWindow,
+        pixelLength,
+      )
+    ) {
+      label.style.display = 'none'
+      return
+    }
+
+    const midX = (startWindow.x + endWindow.x) / 2
+    const midY = (startWindow.y + endWindow.y) / 2
+    let angle = Cesium.Math.toDegrees(Math.atan2(dy, dx))
+
+    if (angle > 90 || angle < -90) {
+      angle += 180
+    }
+
+    const text = this.formatSegmentLabel(segment)
+    if (label.textContent !== text) {
+      label.textContent = text
+    }
+
+    label.style.display = 'block'
+    label.style.left = `${midX}px`
+    label.style.top = `${midY}px`
+    label.style.transform =
+      `translate(-50%, -50%) rotate(${angle}deg) translateY(-16px)`
+  }
+
+  shouldShowSegmentLabel(segment, startWindow, endWindow, pixelLength) {
+    if (pixelLength < this.segmentLabelMinPixelLength) return false
+
+    const canvas = this.viewer.scene.canvas
+    const midX = (startWindow.x + endWindow.x) / 2
+    const midY = (startWindow.y + endWindow.y) / 2
+    const margin = 80
+
+    if (
+      midX < -margin ||
+      midY < -margin ||
+      midX > canvas.clientWidth + margin ||
+      midY > canvas.clientHeight + margin
+    ) {
+      return false
+    }
+
+    const midpoint = Cesium.Cartesian3.midpoint(
+      segment.start,
+      segment.end,
+      new Cesium.Cartesian3(),
+    )
+    const cameraDistance = Cesium.Cartesian3.distance(
+      this.viewer.camera.positionWC,
+      midpoint,
+    )
+
+    return cameraDistance <= this.segmentLabelMaxCameraDistance
+  }
+  
   // ============================================================
   // 二、航线选中
   // ============================================================
@@ -571,10 +924,7 @@ flyToRoute(line, duration = 1.5) {
     this.viewer.scene.requestRender()
   }
 
-  // ============================================================
   // 三、航线编辑
-  // ============================================================
-
   /**
    * 进入航线编辑模式。
    */
@@ -596,6 +946,13 @@ flyToRoute(line, duration = 1.5) {
     if (routeItem.entity && routeItem.entity.polyline) {
       routeItem.entity.polyline.material = this.editingLineMaterial
       routeItem.entity.polyline.width = 4
+
+      // 编辑时使用动态 positions，让线实时跟随航点
+      routeItem.editPositions = this.getRouteRenderPositions(routeItem.line)
+
+      routeItem.entity.polyline.positions = new Cesium.CallbackProperty(() => {
+        return routeItem.editPositions
+      }, false)
     }
 
     routeItem.vertexEntities.forEach((entity) => {
@@ -696,6 +1053,9 @@ registerEditEvents() {
       this.dragInfo.routeId,
       this.dragInfo.vertexIndex,
       position,
+      {
+        silent: true,
+      },
     )
   }, Cesium.ScreenSpaceEventType.MOUSE_MOVE)
 
@@ -845,7 +1205,20 @@ moveVertex(routeId, vertexIndex, cartesian) {
     vertexEntity.position = new Cesium.ConstantPositionProperty(newCartesian)
   }
 
-  if (routeItem.entity && routeItem.entity.polyline) {
+  // 实时更新动态线数组里的对应点
+  if (routeItem.editPositions) {
+    routeItem.editPositions[vertexIndex] = newCartesian
+
+    // 如果是闭合航线，并且拖动的是第一个点，
+    // 最后一个闭合点也要同步更新
+    if (
+      line.isClose &&
+      vertexIndex === 0 &&
+      routeItem.editPositions.length === line.points.length + 1
+    ) {
+      routeItem.editPositions[routeItem.editPositions.length - 1] = newCartesian
+    }
+  } else if (routeItem.entity && routeItem.entity.polyline) {
     routeItem.entity.polyline.positions = new Cesium.ConstantProperty(
       this.getRouteRenderPositions(line),
     )
@@ -866,12 +1239,21 @@ moveVertex(routeId, vertexIndex, cartesian) {
 endVertexDrag() {
   if (!this.dragInfo) return
 
+  const routeId = this.dragInfo.routeId
+
   this.dragInfo = undefined
   this.dragPlane = undefined
 
   this.restoreCameraControls()
 
   this.viewer._element.style.cursor = 'default'
+
+  const routeItem = this.routesMap.get(String(routeId))
+
+  if (routeItem && this.onRouteChanged) {
+    this.onRouteChanged(routeItem.line)
+  }
+
   this.viewer.scene.requestRender()
 }
 
@@ -1272,6 +1654,12 @@ createPointAfter(line, vertexIndex) {
     this.selectedRouteId = routeId
 
     if (routeItem.entity && routeItem.entity.polyline) {
+      routeItem.editPositions = undefined
+
+      routeItem.entity.polyline.positions = new Cesium.ConstantProperty(
+        this.getRouteRenderPositions(routeItem.line),
+      )
+
       routeItem.entity.polyline.material = this.selectedLineMaterial
       routeItem.entity.polyline.width = 4
     }
@@ -1432,15 +1820,14 @@ createPointAfter(line, vertexIndex) {
    * 绘制航线流程。
    */
   start() {
-    if (this.mode === 'editing') {
-      return Promise.reject('请先保存或取消当前编辑')
-    }
-    if (this.isDrawing) {
-      this.cancelDraw('上一段未完成绘制已取消')
-    }
+    // if (this.mode === 'editing') {
+    //   return Promise.reject('请先保存或取消当前编辑')
+    // }
+    // if (this.isDrawing) {
+    //   this.cancelDraw('上一段未完成绘制已取消')
+    // }
     //将模式改为正在绘制模式
     this.mode = 'drawing'
-    this.isDrawing = true
 
     //清空初始化临时数据
     this.positions = []
@@ -1454,7 +1841,7 @@ createPointAfter(line, vertexIndex) {
 
     this.viewer._element.style.cursor = 'crosshair' //设置鼠标样式
     this.viewer.enableCursorStyle = true
-    //组织浏览器默认的右键菜单
+    //阻止浏览器默认右键菜单的回调函数
     this.preventContextMenu = (event) => {
       event.preventDefault()
     }
@@ -1463,9 +1850,10 @@ createPointAfter(line, vertexIndex) {
       this.preventContextMenu,
     )
 
-    //键盘事件，监听撤销、完成、取消
+    //键盘事件回调函数，监听撤销、完成、取消的
     this.keydownHandler = (event) => {
-      if (!this.isDrawing) return
+      // 不是绘制模式下就不用注册键盘事件
+      if (this.mode !== 'drawing') return
 
       const key = event.key.toLowerCase()
       //“撤销”快捷键（Ctrl+Z 或 Mac 上的 Cmd+Z）
@@ -1484,6 +1872,7 @@ createPointAfter(line, vertexIndex) {
       if (event.key === 'Escape') {
         event.preventDefault()
         this.cancelDraw('绘制已取消')
+        return
       }
       //清空重绘
       if (event.key === 'Delete') {
@@ -1536,7 +1925,7 @@ createPointAfter(line, vertexIndex) {
 
       // 右键弹出绘制菜单
       this.handler.setInputAction((e) => {
-        this.showDrawMenu(e.position)//创建原生dom
+        this.showDrawMenu(e.position)//创建原生dom菜单
       }, Cesium.ScreenSpaceEventType.RIGHT_CLICK)
     })
   }
@@ -1567,7 +1956,7 @@ createPointAfter(line, vertexIndex) {
    * 绘制状态右键菜单。
    */
   showDrawMenu(screenPosition) {
-    this.hideDrawMenu()
+    this.hideDrawMenu()//先清除菜单
 
     const rect = this.viewer.scene.canvas.getBoundingClientRect()
     //创建菜单以及菜单风格
@@ -1576,10 +1965,10 @@ createPointAfter(line, vertexIndex) {
     menu.style.left = `${rect.left + screenPosition.x}px`
     menu.style.top = `${rect.top + screenPosition.y}px`
     menu.style.zIndex = 9999
-    menu.style.minWidth = '120px'
+    menu.style.minWidth = '88px'
     menu.style.background = '#1f1f1f'
     menu.style.border = '1px solid #555'
-    menu.style.borderRadius = '4px'
+    menu.style.borderRadius = '8px'
     menu.style.padding = '4px 0'
     menu.style.boxShadow = '0 2px 8px rgba(0,0,0,0.35)'
     menu.style.fontSize = '14px'
@@ -1603,11 +1992,10 @@ createPointAfter(line, vertexIndex) {
         }
 
         item.onclick = () => {
-          this.hideDrawMenu()
-          callback()
+          this.hideDrawMenu()//点击后隐藏菜单
+          callback()//调用回调函数
         }
       }
-
       return item
     }
 
@@ -1657,7 +2045,7 @@ createPointAfter(line, vertexIndex) {
    * 撤销上一个绘制航点。
    */
   undoLastPoint() {
-    if (!this.isDrawing) return
+    if (this.mode !== 'drawing') return
     if (this.positions.length === 0) return
 
     this.positions.pop()
@@ -1686,7 +2074,7 @@ createPointAfter(line, vertexIndex) {
    * 清空当前绘制，但不退出绘制状态。
    */
   clearCurrentDrawing() {
-    if (!this.isDrawing) return
+    if (this.mode !== 'drawing') return
 
     if (this.lineEntity) {
       this.viewer.entities.remove(this.lineEntity)
@@ -1706,10 +2094,10 @@ createPointAfter(line, vertexIndex) {
   }
 
   /**
-   * 结束绘制。
+   * 菜单中点击结束绘制才结束绘制。
    */
 finishDraw() {
-  if (!this.isDrawing) return false
+  if (this.mode !== 'drawing') return false
 
   if (this.positions.length < 3) {
     console.warn('航线不得少于3个航点！')
@@ -1723,12 +2111,11 @@ finishDraw() {
   const resolve = this.drawResolve
 
   // 先切状态
-  this.isDrawing = false
   this.mode = 'idle'
   this.drawResolve = undefined
   this.drawReject = undefined
 
-  // 再移除临时实体
+  // 再移除临时实体防止地面残留
   resultEntities.forEach((entity) => {
     this.viewer.entities.remove(entity)
   })
@@ -1785,14 +2172,13 @@ getDragCartesianFromScreen(screenPosition, dragPlane) {
    * 取消绘制。
    */
   cancelDraw(reason = '绘制已取消') {
-    if (!this.isDrawing) return
+    if (this.mode !== 'drawing') return
 
     this.clearCurrentDrawing()
     this.unRegisterEvents()
 
     const reject = this.drawReject
 
-    this.isDrawing = false
     this.mode = 'idle'
     this.drawResolve = undefined
     this.drawReject = undefined
@@ -1854,18 +2240,18 @@ getDragCartesianFromScreen(screenPosition, dragPlane) {
    */
   unRegisterEvents() {
     this.hideDrawMenu()
-
+    //Cesium屏幕事件处理器
     if (this.handler && !this.handler.isDestroyed()) {
       this.handler.destroy()
     }
 
     this.handler = undefined
-
+    //移除绘制时候的键盘事件监听 清空键盘按下回调函数
     if (this.keydownHandler) {
       window.removeEventListener('keydown', this.keydownHandler)
       this.keydownHandler = undefined
     }
-
+    //移除阻止右键菜单监听
     if (this.preventContextMenu) {
       this.viewer.scene.canvas.removeEventListener(
         'contextmenu',
@@ -1936,7 +2322,7 @@ getDragCartesianFromScreen(screenPosition, dragPlane) {
 
   // 五、销毁
   destroy() {
-    if (this.isDrawing) {
+    if (this.mode === 'drawing') {
       this.cancelDraw('绘制已取消')
     }
 

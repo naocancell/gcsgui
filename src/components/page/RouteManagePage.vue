@@ -36,6 +36,8 @@ import { ArrowRight } from '@vicons/carbon'
 declare global {
   interface Window {
     viewer: any
+    routeManageViewer?: any
+    pendingSelectedRouteId?: string | number | null
   }
 }
 
@@ -110,7 +112,11 @@ const notify = (type: NotificationType, title: string, detail: string) => {
 }
 
 onMounted(() => {
-  routeManage = new RouteManageViewer(window.viewer)
+  if (!window.routeManageViewer) {
+    window.routeManageViewer = new RouteManageViewer(window.viewer)
+  }
+
+  routeManage = window.routeManageViewer
 
   // 兼容你 RouteManageViewer 构造函数没有接 options 的情况，直接挂回调
   routeManage.onRouteSelected = (routeId: string, line: Airline) => {
@@ -130,7 +136,6 @@ onMounted(() => {
     normalizeRouteForBiz(selectedRoute.value)
     scheduleProfileRefresh()
 
-    // 拖拽航点时不要频繁请求天气，只刷新列表即可
     refreshPtList()
   }
 
@@ -167,6 +172,18 @@ onMounted(() => {
     levelOptions.value.unshift({ value: -1, label: '地面' })
     selectedLevel.value = -1
   })
+
+  window.addEventListener(
+    'route-created-and-select',
+    handleRouteCreatedAndSelect as EventListener,
+  )
+
+  nextTick(() => {
+    if (window.pendingSelectedRouteId != null) {
+      selectRouteById(window.pendingSelectedRouteId)
+      window.pendingSelectedRouteId = null
+    }
+  })
 })
 
 onBeforeUnmount(() => {
@@ -180,8 +197,16 @@ onBeforeUnmount(() => {
     profileRefreshTimer = null
   }
 
-  if (routeManage?.destroy) {
-    routeManage.destroy()
+  window.removeEventListener(
+    'route-created-and-select',
+    handleRouteCreatedAndSelect as EventListener,
+  )
+
+  if (routeManage) {
+    routeManage.onRouteSelected = undefined
+    routeManage.onRouteChanged = undefined
+    routeManage.onEditStateChanged = undefined
+    routeManage.onVertexSelected = undefined
   }
 
   myChart?.dispose()
@@ -552,6 +577,38 @@ function checkRoute(key: number | string) {
   })
 }
 
+function selectRouteById(routeId: string | number) {
+  const route = routeStore.flyRoute.find(
+    (element) => String(element.unicode) === String(routeId),
+  )
+
+  if (!route) {
+    console.warn('[selectRouteById] 未找到航线:', routeId)
+    return false
+  }
+
+  selectAndShowRoute(route, {
+    flyTo: true,
+    refreshWeather: true,
+  })
+
+  return true
+}
+
+
+function handleRouteCreatedAndSelect(event: Event) {
+  const customEvent = event as CustomEvent<{
+    routeId: string | number
+  }>
+
+  const routeId = customEvent.detail?.routeId
+
+  if (routeId == null) {
+    return
+  }
+
+  selectRouteById(routeId)
+}
 
 function startEditSelectedRoute() {
   if (!selectedRoute.value?.unicode) {
@@ -572,8 +629,8 @@ function startEditSelectedRoute() {
   }
 
   isRouteEditing.value = true
-  routeDirty.value = false
-  uiMsg.info('已进入航线编辑模式，可拖拽航点')
+  routeDirty.value = false //刚进入编辑模式，目前航线还没修改过
+  uiMsg.info('已进入航线编辑模式')
 }
 
 async function saveRouteEdit(): Promise<boolean> {
