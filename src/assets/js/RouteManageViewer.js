@@ -86,7 +86,262 @@ export default class RouteManageViewer {
     this.updateSegmentLabels = this.updateSegmentLabels.bind(this)
     this.createSegmentLabelLayer()
     this.viewer.scene.postRender.addEventListener(this.updateSegmentLabels)
+
+    // 编辑视角锁定
+      // Cesium 正俯视是 -90°
+      this.editViewPitch = Cesium.Math.toRadians(-89.9)
+
+      // 当前是否锁定编辑视角
+      this.editViewLocked = false
+
+      // 进入编辑前的相机控制状态
+      this.editViewControllerBackup = undefined
+
+      // 进入编辑前的视角，可选择是否恢复
+      this.editViewCameraBackup = undefined
+
+      // 绑定后保存固定引用，便于移除事件
+      this.enforceEditViewPitch = this.enforceEditViewPitch.bind(this)
   }
+  /**
+   * 进入编辑模式：
+   *
+   * 1. 保存原来的相机控制状态；
+   * 2. 把当前航线移动到屏幕中央；
+   * 3. 调整为正俯视；
+   * 4. 到达后只锁定俯仰角，不锁定中心位置。
+   */
+  lockEditView(line) {
+    if (this.editViewLocked) return
+
+    const camera = this.viewer.camera
+    const scene = this.viewer.scene
+    const controller =
+      scene.screenSpaceCameraController
+
+    // 保存进入编辑前的相机控制状态
+    this.editViewControllerBackup = {
+      enableInputs:
+        controller.enableInputs,
+
+      enableRotate:
+        controller.enableRotate,
+
+      enableTranslate:
+        controller.enableTranslate,
+
+      enableZoom:
+        controller.enableZoom,
+
+      enableTilt:
+        controller.enableTilt,
+
+      enableLook:
+        controller.enableLook,
+    }
+
+    // 保存进入编辑前的相机位置和姿态
+    this.editViewCameraBackup = {
+      destination:
+        Cesium.Cartesian3.clone(
+          camera.positionWC,
+        ),
+
+      heading:
+        camera.heading,
+
+      pitch:
+        camera.pitch,
+
+      roll:
+        camera.roll,
+    }
+
+    this.editViewLocked = true
+
+    // 编辑状态允许旋转、缩放和平移
+    controller.enableInputs = true
+    controller.enableRotate = true
+    controller.enableTranslate = true
+    controller.enableZoom = true
+
+    // 不允许改变俯仰角和自由观察
+    controller.enableTilt = false
+    controller.enableLook = false
+
+    // 聚焦过程中先不要注册每帧校正，
+    // 否则可能与 flyToBoundingSphere 动画互相冲突。
+    scene.postRender.removeEventListener(
+      this.enforceEditViewPitch,
+    )
+
+    const finishFocus = () => {
+      // 如果飞行过程中已经退出了编辑，不能重新注册锁定
+      if (!this.editViewLocked) return
+      if (this.mode !== 'editing') return
+
+      // 到达后校正一次
+      this.enforceEditViewPitch()
+
+      scene.requestRender()
+    }
+
+    const focused = this.focusRouteForEdit(
+      line,
+      {
+        duration: 0.6,
+        complete: finishFocus,
+
+        // 用户在飞行动画过程中操作相机可能取消飞行，
+        // 取消后仍然进入角度锁定状态。
+        cancel: finishFocus,
+      },
+    )
+
+    // 航线数据无效时，退化为在当前位置切换正俯视
+    if (!focused) {
+      camera.setView({
+        destination:
+          Cesium.Cartesian3.clone(
+            camera.positionWC,
+          ),
+
+        orientation: {
+          heading:
+            camera.heading,
+
+          pitch:
+            this.editViewPitch,
+
+          roll:
+            0,
+        },
+      })
+
+      finishFocus()
+    }
+  }
+
+/**
+ * 编辑期间只锁定俯仰角。
+ *
+ * 不修改地图中心，所以用户平移之后，
+ * 航线可以离开屏幕中央。
+ */
+enforceEditViewPitch() {
+  if (!this.editViewLocked) return
+  if (this.mode !== 'editing') return
+
+  const camera = this.viewer.camera
+  const tolerance =
+    Cesium.Math.toRadians(0.05)
+
+  const pitchChanged =
+    Math.abs(
+      camera.pitch - this.editViewPitch,
+    ) > tolerance
+
+  const rollChanged =
+    Math.abs(camera.roll) > tolerance
+
+  if (
+    !pitchChanged &&
+    !rollChanged
+  ) {
+    return
+  }
+
+  camera.setView({
+    // 保留用户平移、缩放后的相机位置
+    destination:
+      Cesium.Cartesian3.clone(
+        camera.positionWC,
+      ),
+
+    orientation: {
+      // heading 不锁，用户可以旋转
+      heading:
+        camera.heading,
+
+      // 始终保持正俯视
+      pitch:
+        this.editViewPitch,
+
+      roll:
+        0,
+    },
+  })
+}
+
+/**
+ * 解除航线编辑视角锁定。
+ *
+ * @param restoreView 是否恢复进入编辑前的视角
+ */
+unlockEditView(restoreView = false) {
+  if (!this.editViewLocked) return
+
+  // 必须先改状态，防止 cancel 回调重新注册角度锁定
+  this.editViewLocked = false
+
+  // 如果聚焦动画还未结束，取消动画
+  this.viewer.camera.cancelFlight()
+
+  this.viewer.scene.postRender.removeEventListener(
+    this.enforceEditViewPitch,
+  )
+
+  const controller =
+    this.viewer.scene
+      .screenSpaceCameraController
+
+  if (this.editViewControllerBackup) {
+    controller.enableInputs =
+      this.editViewControllerBackup.enableInputs
+
+    controller.enableRotate =
+      this.editViewControllerBackup.enableRotate
+
+    controller.enableTranslate =
+      this.editViewControllerBackup.enableTranslate
+
+    controller.enableZoom =
+      this.editViewControllerBackup.enableZoom
+
+    controller.enableTilt =
+      this.editViewControllerBackup.enableTilt
+
+    controller.enableLook =
+      this.editViewControllerBackup.enableLook
+  }
+
+  if (
+    restoreView &&
+    this.editViewCameraBackup
+  ) {
+    this.viewer.camera.setView({
+      destination:
+        this.editViewCameraBackup.destination,
+
+      orientation: {
+        heading:
+          this.editViewCameraBackup.heading,
+
+        pitch:
+          this.editViewCameraBackup.pitch,
+
+        roll:
+          this.editViewCameraBackup.roll,
+      },
+    })
+  }
+
+  this.editViewControllerBackup = undefined
+  this.editViewCameraBackup = undefined
+
+  this.viewer.scene.requestRender()
+}
+
 
   /**
    * 显示并注册航线。
@@ -942,6 +1197,8 @@ flyToRoute(line, duration = 1.5) {
 
     this.mode = 'editing'
     this.selectedRouteId = routeId
+    // 进入编辑时，当前航线居中并正俯视
+    this.lockEditView(routeItem.line)
 
     if (routeItem.entity && routeItem.entity.polyline) {
       routeItem.entity.polyline.material = this.editingLineMaterial
@@ -1648,8 +1905,12 @@ createPointAfter(line, vertexIndex) {
     routeItem.backupPoints = undefined
     routeItem.dirty = false
 
+
+    // 先结束拖拽和编辑事件
     this.unregisterEditEvents()
 
+    // 再解除俯视锁定
+    this.unlockEditView(true)
     this.mode = 'selected'
     this.selectedRouteId = routeId
 
@@ -1700,8 +1961,10 @@ createPointAfter(line, vertexIndex) {
     routeItem.backupPoints = undefined
     routeItem.dirty = false
 
-    this.unregisterEditEvents()
 
+
+    this.unregisterEditEvents()
+    this.unlockEditView(false)
     this.mode = 'selected'
     this.selectedRouteId = routeId
 
@@ -1780,42 +2043,181 @@ createPointAfter(line, vertexIndex) {
   /**
    * 拖拽航点时禁用地图相机操作。
    */
-  disableCameraControls() {
-    const controller = this.viewer.scene.screenSpaceCameraController
+  /**
+ * 拖拽航点时临时禁止相机操作。
+ */
+disableCameraControls() {
+  const controller =
+    this.viewer.scene.screenSpaceCameraController
 
-    if (!this.cameraControllerBackup) {
-      this.cameraControllerBackup = {
-        enableRotate: controller.enableRotate,
-        enableTranslate: controller.enableTranslate,
-        enableZoom: controller.enableZoom,
-        enableTilt: controller.enableTilt,
-        enableLook: controller.enableLook,
-      }
+  if (!this.cameraControllerBackup) {
+    this.cameraControllerBackup = {
+      enableInputs:
+        controller.enableInputs,
+
+      enableRotate:
+        controller.enableRotate,
+
+      enableTranslate:
+        controller.enableTranslate,
+
+      enableZoom:
+        controller.enableZoom,
+
+      enableTilt:
+        controller.enableTilt,
+
+      enableLook:
+        controller.enableLook,
     }
-
-    controller.enableRotate = false
-    controller.enableTranslate = false
-    controller.enableTilt = true
-    controller.enableLook = false
   }
 
+  // 拖拽航点时不允许相机跟着运动
+  controller.enableRotate = false
+  controller.enableTranslate = false
+  controller.enableZoom = false
+  controller.enableTilt = false
+  controller.enableLook = false
+}
+
   /**
-   * 恢复地图相机操作。
+   * 恢复拖拽前的相机控制状态。
    */
   restoreCameraControls() {
     if (!this.cameraControllerBackup) return
 
-    const controller = this.viewer.scene.screenSpaceCameraController
+    const controller =
+      this.viewer.scene.screenSpaceCameraController
 
-    controller.enableRotate = this.cameraControllerBackup.enableRotate
-    controller.enableTranslate = this.cameraControllerBackup.enableTranslate
-    controller.enableZoom = this.cameraControllerBackup.enableZoom
-    controller.enableTilt = this.cameraControllerBackup.enableTilt
-    controller.enableLook = this.cameraControllerBackup.enableLook
+    controller.enableInputs =
+      this.cameraControllerBackup.enableInputs
+
+    controller.enableRotate =
+      this.cameraControllerBackup.enableRotate
+
+    controller.enableTranslate =
+      this.cameraControllerBackup.enableTranslate
+
+    controller.enableZoom =
+      this.cameraControllerBackup.enableZoom
+
+    controller.enableTilt =
+      this.cameraControllerBackup.enableTilt
+
+    controller.enableLook =
+      this.cameraControllerBackup.enableLook
 
     this.cameraControllerBackup = undefined
   }
 
+    /**
+   * 根据航线计算包围球。
+   */
+  getRouteBoundingSphere(line) {
+    if (
+      !line ||
+      !Array.isArray(line.points) ||
+      line.points.length === 0
+    ) {
+      return undefined
+    }
+
+    const positions = line.points
+      .filter((pt) => {
+        const lon = Number(pt.lon)
+        const lat = Number(pt.lat)
+        const alt = Number(pt.alt || 0)
+
+        return (
+          Number.isFinite(lon) &&
+          Number.isFinite(lat) &&
+          Number.isFinite(alt) &&
+          lon >= -180 &&
+          lon <= 180 &&
+          lat >= -90 &&
+          lat <= 90
+        )
+      })
+      .map((pt) => {
+        return Cesium.Cartesian3.fromDegrees(
+          Number(pt.lon),
+          Number(pt.lat),
+          Number(pt.alt || 0),
+        )
+      })
+
+    if (positions.length === 0) {
+      return undefined
+    }
+
+    const boundingSphere =
+      Cesium.BoundingSphere.fromPoints(positions)
+
+    if (
+      !boundingSphere ||
+      !boundingSphere.center ||
+      !Number.isFinite(boundingSphere.radius)
+    ) {
+      return undefined
+    }
+
+    return boundingSphere
+  }
+
+  /**
+   * 开始编辑时，把航线移动到屏幕中心并切换为正俯视。
+   * 这个方法只负责第一次定位，不会持续锁定航线中心。
+   */
+  focusRouteForEdit(
+    line,
+    {
+      duration = 0.6,
+      complete,
+      cancel,
+    } = {},
+  ) {
+    const boundingSphere =
+      this.getRouteBoundingSphere(line)
+
+    if (!boundingSphere) {
+      complete?.()
+      return false
+    }
+
+    // 航线很短时设置一个最小观察距离；
+    // 航线较长时根据包围球半径自动扩大。
+    const radius = Math.max(
+      boundingSphere.radius,
+      100,
+    )
+
+    const range = Math.max(
+      radius * 3,
+      800,
+    )
+
+    this.viewer.camera.flyToBoundingSphere(
+      boundingSphere,
+      {
+        duration,
+
+        offset: new Cesium.HeadingPitchRange(
+          // 保留当前地图朝向
+          this.viewer.camera.heading,
+
+          // Cesium 中正俯视是 -90°
+          this.editViewPitch,
+
+          range,
+        ),
+
+        complete,
+        cancel,
+      },
+    )
+
+    return true
+  }
   /**
    * 绘制航线流程。
    */
@@ -1934,19 +2336,25 @@ createPointAfter(line, vertexIndex) {
    * 屏幕坐标转世界坐标。
    */
   getCartesianFromScreen(screenPosition) {
-    let position
+    const ray = this.viewer.camera.getPickRay(screenPosition)
 
-    try {
-      position = this.viewer.scene.pickPosition(screenPosition)
-    } catch (error) {
-      position = undefined
-    }
+    if (!ray) return undefined
+
+    let position = this.viewer.scene.globe.pick(ray, this.viewer.scene)
 
     if (!position) {
       position = this.viewer.scene.camera.pickEllipsoid(
         screenPosition,
         this.viewer.scene.globe.ellipsoid,
       )
+    }
+
+    if (!position) {
+      try {
+        position = this.viewer.scene.pickPosition(screenPosition)
+      } catch (error) {
+        position = undefined
+      }
     }
 
     return position
@@ -2327,6 +2735,9 @@ getDragCartesianFromScreen(screenPosition, dragPlane) {
     }
 
     this.unregisterEditEvents()
+     // 移除编辑视角锁定
+    this.unlockEditView(false)
+
     this.hideDrawMenu()
     this.hideEditVertexMenu()
 

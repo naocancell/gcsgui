@@ -1,13 +1,22 @@
 import * as Cesium from 'cesium'
 
 const obstacleIcons = {
-    lowPowerPole:'/img/低压电杆.png',
-    highPowerPole:'/img/高压电杆.png',
-    highPowerTower:'/img/高压电塔.png',
-    signalTower:'/img/信号塔.png',
-    radarStation:'/img/雷达站.png',
-    waterTower:'/img/水塔.png',
-    house:'/img/房子.png'
+    lowPowerPole:'/model/低压电杆.glb',
+    highPowerPole:'/model/高压电杆.glb',
+    highPowerTower:'/model/高压电塔.glb',
+    signalTower:'/model/信号塔.glb',
+    radarStation:'/model/雷达站.glb',
+    waterTower:'/model/水塔.glb',
+    house:'/model/房子.glb'
+}
+const obstacleSize = {
+    lowPowerPole:0.8,
+    highPowerPole:1.5,
+    highPowerTower:0.03,
+    signalTower:35,
+    radarStation:30,
+    waterTower:5,
+    house:0.003,
 }
 
 /**
@@ -105,6 +114,67 @@ export function useMarkObstacle() {
     // 当前障碍物图层是否显示
     let obstacleVisible = true
 
+    let hoverObstacleEntity: Cesium.Entity | undefined = undefined //记录的悬浮的障碍物
+    let hoverHandler: Cesium.ScreenSpaceEventHandler | undefined = undefined //处理事件
+
+    function enableObstacleHover(): void {
+        if (hoverHandler && !hoverHandler.isDestroyed()) {
+            return
+        }
+
+        hoverHandler = new Cesium.ScreenSpaceEventHandler(
+            window.viewer.scene.canvas
+        )
+
+        hoverHandler.setInputAction(
+            (movement) => {
+                const picked =
+                    window.viewer.scene.pick(
+                        movement.endPosition
+                    )
+
+                const entity =
+                    picked ? picked.id : undefined
+                //悬浮的是障碍物
+                if (
+                    entity &&
+                    entity._entityType === 'obstacle' &&
+                    obstacleVisible
+                ) { //hoverObstacleEntity是上一个悬浮的障碍物
+                    if (hoverObstacleEntity !== entity) {
+                        if (
+                            hoverObstacleEntity &&
+                            hoverObstacleEntity.label
+                        ) {
+                            ;(hoverObstacleEntity.label as any).show = false
+                        }
+
+                        hoverObstacleEntity = entity
+
+                        if (hoverObstacleEntity.label) {
+                            ;(hoverObstacleEntity.label as any).show = true
+                        }
+                    }
+
+                    ;(window.viewer as any)._element.style.cursor = 'pointer'
+                } else { //不是障碍物
+                    if (
+                        hoverObstacleEntity &&
+                        hoverObstacleEntity.label
+                    ) {
+                        ;(hoverObstacleEntity.label as any).show = false
+                    }
+
+                    hoverObstacleEntity = undefined
+                    ;(window.viewer as any)._element.style.cursor = 'default'
+                }
+
+                window.viewer.scene.requestRender()
+            },
+            Cesium.ScreenSpaceEventType.MOUSE_MOVE
+        )
+    }
+
     // 添加单个障碍物
     function addObstacle(obstacle,longitude,latitude){
         //真北极
@@ -116,44 +186,64 @@ export function useMarkObstacle() {
                 ),
             // 新添加的障碍物要跟随当前显示状态
             show: obstacleVisible,
-            billboard:{
-                image:
-                    obstacleIcons[obstacle.type],
-                width:
-                    80,
-                height:
-                    80,
-                verticalOrigin:
-                    Cesium.VerticalOrigin.BOTTOM,
-
+            model: {
+                uri:obstacleIcons[obstacle.type],
+                 // 模型锚点贴到地形表面
                 heightReference:
                     Cesium.HeightReference.CLAMP_TO_GROUND,
+                scale: obstacleSize[obstacle.type],
 
-                // 不要缩太小
-                scaleByDistance:
-                    new Cesium.NearFarScalar(
-
-                        1000,
-                        1.0,
-                        30000,
-                        0.6
-                    ),
                 distanceDisplayCondition:
                     new Cesium.DistanceDisplayCondition(
                         0,
                         30000
                     ),
-                // 防止被地形遮挡
-                disableDepthTestDistance:
-                    Number.POSITIVE_INFINITY
+                 // 轮廓颜色
+                silhouetteColor:
+                    Cesium.Color.CYAN.withAlpha(1.0),
 
+                // 轮廓宽度，单位是屏幕像素
+                silhouetteSize: 3
             },
+            // billboard:{
+            //     image:
+            //         obstacleIcons[obstacle.type],
+            //     width:
+            //         50,
+            //     height:
+            //         50,
+            //     verticalOrigin:
+            //         Cesium.VerticalOrigin.BOTTOM,
+
+            //     heightReference:
+            //         Cesium.HeightReference.CLAMP_TO_GROUND,
+
+            //     // 不要缩太小
+            //     scaleByDistance:
+            //         new Cesium.NearFarScalar(
+
+            //             1000,
+            //             1.5,
+            //             20000,
+            //             0.1
+            //         ),
+            //     distanceDisplayCondition:
+            //         new Cesium.DistanceDisplayCondition(
+            //             0,
+            //             20000
+            //         ),
+            //     // 防止被地形遮挡
+            //     disableDepthTestDistance:
+            //         Number.POSITIVE_INFINITY
+
+            // },
 
             label:{
+                show: false,
                 text:
                     `${obstacle.name}\n海拔高度:${obstacle.height || '-'}m`,
                 font:
-                    "bold 16px sans-serif",
+                    "bold 13px sans-serif",
                 style:
                     Cesium.LabelStyle.FILL_AND_OUTLINE,
 
@@ -192,7 +282,7 @@ export function useMarkObstacle() {
                 pixelOffset:
                     new Cesium.Cartesian2(
                         0,
-                        -75
+                        -45
                     ),
 
                 /*
@@ -209,19 +299,24 @@ export function useMarkObstacle() {
                     new Cesium.NearFarScalar(
                         1000,
                         1.0,
-                        30000,
+                        20000,
                         0.8
                     ),
                 distanceDisplayCondition:
                     new Cesium.DistanceDisplayCondition(
                         0,
-                        30000
+                        20000
                     )
             }
         })
+        //自己设置一个type属性，方便后面判断
+        ;(obstacleEntity as any)._entityType = 'obstacle'
+        ;(obstacleEntity as any)._obstacleData = obstacle
 
          // 保存实体，后面统一控制显示隐藏
         obstacleEntities.push(obstacleEntity)
+
+        enableObstacleHover()
 
         return obstacleEntity
     }
@@ -238,7 +333,7 @@ export function useMarkObstacle() {
         fileInput.type = 'file'
         fileInput.accept = '.json,application/json'
         fileInput.multiple = false
-        //用户点击打开后执行
+        //用户点击打开文件后执行
         fileInput.addEventListener(
             'change',
             async () => {
@@ -407,8 +502,7 @@ export function useMarkObstacle() {
                 once: true
             }
         )
-
-        fileInput.click()
+        fileInput.click()//点击打开文件选择窗口
     }
 
      // 设置所有障碍物是否显示
@@ -417,7 +511,15 @@ export function useMarkObstacle() {
 
         obstacleEntities.forEach((entity) => {
             entity.show = visible
+
+            if (entity.label) {
+                ;(entity.label as any).show = false
+            }
         })
+
+        hoverObstacleEntity = undefined
+
+        window.viewer.scene.requestRender()
     }
 
     // 切换显示 / 隐藏

@@ -65,6 +65,7 @@ let timer: ReturnType<typeof setInterval> | null = null
 let profileRefreshTimer: ReturnType<typeof setTimeout> | null = null
 
 let activeTab = ref<'detail' | 'profile' | 'weather'>('detail')
+let routeDrawingBlockTipAt = 0
 
 const PtOptions = [
   { label: '在前面插入', key: 'insertBefore' },
@@ -109,6 +110,62 @@ const notify = (type: NotificationType, title: string, detail: string) => {
     closable: true,
     keepAliveOnHover: true,
   })
+}
+
+function isRouteActionIdle() {
+  const viewerMode = routeManage?.mode
+
+  return (
+    routeStore.routeActionMode === 'idle' &&
+    !isRouteEditing.value &&
+    viewerMode !== 'drawing' &&
+    viewerMode !== 'editing'
+  )
+}
+
+function isRouteDrawing() {
+  return routeStore.routeActionMode === 'drawing' || routeManage?.mode === 'drawing'
+}
+
+function warnRouteActionBusy() {
+  if (isRouteDrawing()) {
+    uiMsg.warning('请先结束绘制')
+    return
+  }
+
+  uiMsg.warning('请结束绘制或编辑')
+}
+
+function ensureRouteActionIdle() {
+  if (isRouteActionIdle()) return true
+
+  warnRouteActionBusy()
+  return false
+}
+
+function blockRouteManageWhenDrawing(event: Event) {
+  if (!isRouteDrawing()) return
+
+  const target = event.target as HTMLElement | null
+
+  if (target?.closest('[data-route-manage-close="true"]')) {
+    return
+  }
+
+  const now = Date.now()
+  if (now - routeDrawingBlockTipAt > 800) {
+    uiMsg.warning('请先结束绘制')
+    routeDrawingBlockTipAt = now
+  }
+
+  event.preventDefault()
+  event.stopPropagation()
+
+  const immediateEvent = event as Event & {
+    stopImmediatePropagation?: () => void
+  }
+
+  immediateEvent.stopImmediatePropagation?.()
 }
 
 onMounted(() => {
@@ -551,6 +608,11 @@ function selectAndShowRoute(
  * 航线选择。
  */
 function checkRoute(key: number | string) {
+  if (!ensureRouteActionIdle()) {
+    selectedRouteCode.value = selectedRoute.value?.unicode ?? null
+    return
+  }
+
   if (
     isRouteEditing.value &&
     routeDirty.value &&
@@ -578,6 +640,10 @@ function checkRoute(key: number | string) {
 }
 
 function selectRouteById(routeId: string | number) {
+  if (!ensureRouteActionIdle()) {
+    return false
+  }
+
   const route = routeStore.flyRoute.find(
     (element) => String(element.unicode) === String(routeId),
   )
@@ -625,6 +691,7 @@ function startEditSelectedRoute() {
 
   if (!ok) {
     uiMsg.warning('进入编辑模式失败')
+    routeStore.endRouteAction()
     return
   }
 
@@ -705,6 +772,7 @@ function cancelRouteEdit() {
     forceRefreshPtList: true,
   })
 
+  flyToRoute(selectedRoute.value, 1.5)
   uiMsg.info('已取消编辑')
   return true
 }
@@ -861,6 +929,11 @@ function createPointAfter(index: number) {
  * 航点下拉操作。
  */
 function handlePtSelect(key: any, index: number) {
+  if (isRouteDrawing()) {
+    uiMsg.warning('请先结束绘制')
+    return
+  }
+
   if (!selectedRoute.value?.points) return
 
   if (key === 'deletePt') {
@@ -1067,6 +1140,10 @@ function delRoute(routeUnicode: string | number) {
 }
 
 function importRoute() {
+  if (!ensureRouteActionIdle()) {
+    return
+  }
+
   const input = document.createElement('input')
   input.type = 'file'
   input.accept = '.route'
@@ -1078,6 +1155,10 @@ function importRoute() {
     const reader = new FileReader()
 
     reader.onload = (ev) => {
+      if (!ensureRouteActionIdle()) {
+        return
+      }
+
       const text = ev.target?.result as string
       parseRouteFile(file.name, text)
     }
@@ -1089,6 +1170,10 @@ function importRoute() {
 }
 
 function parseRouteFile(fileName: string, content: string) {
+  if (!ensureRouteActionIdle()) {
+    return
+  }
+
   const lines = content.split('\n').filter((l) => l.trim().length > 0)
 
   if (lines.length === 0) {
@@ -1268,12 +1353,17 @@ function backToHomePage() {
 
 //点击航线缩放到航线
 function handlePtClick(RouteUnicode?: string | number) {
-  const route = routeStore.flyRoute.filter(
-      (element) => element.unicode === String(RouteUnicode),
-    )[0]
-  window.viewer.flyTo(routeManage.addAirLine(route), {
-      duration: 2,
-    })
+  if (!ensureRouteActionIdle()) {
+    return
+  }
+
+  const route = routeStore.flyRoute.find(
+    (element) => String(element.unicode) === String(RouteUnicode),
+  )
+
+  if (!route || !routeManage) return
+
+  flyToRoute(route, 2)
 }
 
 </script>
@@ -1281,7 +1371,14 @@ function handlePtClick(RouteUnicode?: string | number) {
 <template>
   <n-config-provider :theme="darkTheme">
     <div class="route-manage-overlay">
-      <div id="right">
+      <div
+        id="right"
+        @pointerdown.capture="blockRouteManageWhenDrawing"
+        @click.capture="blockRouteManageWhenDrawing"
+        @keydown.capture="blockRouteManageWhenDrawing"
+        @change.capture="blockRouteManageWhenDrawing"
+        @wheel.capture="blockRouteManageWhenDrawing"
+      >
         <n-layout style="height: 100%">
           <n-layout-header :bordered="true">
             <n-space justify="space-between" align="center">
@@ -1306,6 +1403,7 @@ function handlePtClick(RouteUnicode?: string | number) {
                 <n-popover trigger="hover">
                   <template #trigger>
                     <n-button
+                      data-route-manage-close="true"
                       quaternary
                       type="success"
                       size="large"
@@ -1504,6 +1602,7 @@ function handlePtClick(RouteUnicode?: string | number) {
                         size="small"
                         placement="top-start"
                         :show-arrow="true"
+                        :disabled="isRouteDrawing()"
                         :options="PtOptions"
                         @select="handlePtSelect($event, index)"
                       >
