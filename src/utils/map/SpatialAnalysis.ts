@@ -747,6 +747,7 @@ export const drawEchartsVisibility = (
  * @param yData 地形高度数组，以面积线绘制
  * @param routeArr 航点序号数组
  * @param routeHeight  航线高度数组，以折线绘制
+ * @param routeDistanceArr 航点沿航线的累计距离数组
  */
 export const drawEcharts_RouteDetection = (
   myChart: EChartsType,
@@ -754,53 +755,99 @@ export const drawEcharts_RouteDetection = (
   yData: number[],
   routeArr: number[],
   routeHeight: number[],
+  routeDistanceArr: number[] = routeArr.map((_, index) => index),
 ) => {
+  const terrainData = xData.map((distance, index) => [distance, yData[index]])
+  const routeData = routeDistanceArr.map((distance, index) => ({
+    value: [distance, routeHeight[index]],
+    waypoint: routeArr[index],
+  }))
+
   // 绘制图表
-  myChart.setOption({
-    backgroundColor: '#101014',
-    grid: {
-      containLabel: true,
-      top: '15%',
-      right: '6%',
-      left: ' 5%',
-      bottom: '5%',
-    },
-    legend: {
-      show: true,
-      type: 'plain',
-      top: '7%',
-      right: '5%',
-      data: [
-        {
-          //地形剖面图例
-          name: '地形剖面',
-          itemStyle: { fontSize: 14 },
-          lineStyle: 'inherit',
-        },
-        {
-          //视线图例
-          name: '航线高度',
-          lineStyle: 'inherit',
-          itemStyle: { fontSize: 14 },
-        },
-      ],
-      selectedMode: true, //图例选择模式
-      inactiveColor: '#626161',
-    },
-    tooltip: {
-      show: true,
-      appendToBody: true,
-      trigger: 'axis',
-      axisPointer: {
-        type: 'cross',
+  myChart.setOption(
+    {
+      backgroundColor: '#101014',
+      grid: {
+        containLabel: true,
+        top: '15%',
+        right: '6%',
+        left: ' 5%',
+        bottom: '5%',
       },
-      formatter: '地表高度: {c0}m<br> 航点高度：{c1}m',
-    },
-    xAxis: [
-      {
+      legend: {
+        show: true,
+        type: 'plain',
+        top: '7%',
+        right: '5%',
+        data: [
+          {
+            //地形剖面图例
+            name: '地形剖面',
+            itemStyle: { fontSize: 14 },
+            lineStyle: 'inherit',
+          },
+          {
+            //视线图例
+            name: '航线高度',
+            lineStyle: 'inherit',
+            itemStyle: { fontSize: 14 },
+          },
+        ],
+        selectedMode: true, //图例选择模式
+        inactiveColor: '#626161',
+      },
+      tooltip: {
+        show: true,
+        appendToBody: true,
+        trigger: 'axis',
+        axisPointer: {
+          type: 'cross',
+        },
+        formatter: (params: any) => {
+          const items = Array.isArray(params) ? params : [params]
+          const distance = Number(items[0]?.axisValue ?? 0)
+          const lines = [`距离: ${Math.round(distance)}m`]
+          const maxDistance = Math.max(
+            0,
+            xData[xData.length - 1] ?? 0,
+            routeDistanceArr[routeDistanceArr.length - 1] ?? 0,
+          )
+          const waypointHitTolerance = Math.max(
+            1,
+            (maxDistance / Math.max(myChart.getWidth(), 1)) * 10,
+          )
+          let nearestWaypointIndex = -1
+          let nearestWaypointDistance = Number.POSITIVE_INFINITY
+
+          routeDistanceArr.forEach((waypointDistance, index) => {
+            const distanceToWaypoint = Math.abs(waypointDistance - distance)
+
+            if (distanceToWaypoint < nearestWaypointDistance) {
+              nearestWaypointIndex = index
+              nearestWaypointDistance = distanceToWaypoint
+            }
+          })
+
+          if (
+            nearestWaypointIndex >= 0 &&
+            nearestWaypointDistance <= waypointHitTolerance
+          ) {
+            lines.push(`航点: ${routeArr[nearestWaypointIndex]}`)
+          }
+
+          items.forEach((item: any) => {
+            const value = Array.isArray(item.value) ? item.value[1] : item.value
+            lines.push(`${item.marker}${item.seriesName}: ${value}m`)
+          })
+
+          return lines.join('<br>')
+        },
+      },
+      xAxis: {
+        type: 'value',
         boundaryGap: false,
         min: 0,
-        data: xData,
+        name: '距离/m',
         nameTextStyle: {
           fontWeight: 'bolder',
           fontSize: 12,
@@ -816,61 +863,53 @@ export const drawEcharts_RouteDetection = (
           margin: 4,
         },
       },
-      {
-        position: 'bottom',
-        boundaryGap: false,
-        data: routeArr,
-        offset: 30,
-        axisTick: { show: true, inside: true }, // 是否显示坐标轴刻度
+      yAxis: {
+        type: 'value',
+        name: '高度/m',
+        nameTextStyle: {
+          fontSize: 12,
+        },
+        nameLocation: 'end',
+        position: 'left',
+        axisLabel: {
+          formatter: '{value}',
+          margin: 4,
+        },
         axisLine: {
-          onZero: false,
+          show: true,
           symbol: ['none', 'arrow'],
           symbolSize: [7, 10],
         },
-        axisLabel: {
-          formatter: '航点{value}',
-          margin: 4,
+      },
+      series: [
+        {
+          name: '地形剖面',
+          type: 'line',
+          data: terrainData,
+          showSymbol: false,
+          areaStyle: {
+            color: '#37a5fb',
+            opacity: 0.5,
+          },
         },
-      },
-    ],
-    yAxis: {
-      type: 'value',
-      name: '高度/m',
-      nameTextStyle: {
-        fontSize: 12,
-      },
-      nameLocation: 'end',
-      position: 'left',
-      axisLabel: {
-        formatter: '{value}',
-        margin: 4,
-      },
-      axisLine: {
-        show: true,
-        symbol: ['none', 'arrow'],
-        symbolSize: [7, 10],
-      },
+        {
+          name: '航线高度',
+          type: 'line',
+          data: routeData,
+          lineStyle: {
+            color: '#8ae73d',
+          },
+          symbolSize: 11,
+          emphasis: {
+            scale: 1.5,
+            itemStyle: {
+              borderColor: '#ffffff',
+              borderWidth: 2,
+            },
+          },
+        },
+      ],
     },
-    series: [
-      {
-        name: '地形剖面',
-        xAxisIndex: 0,
-        type: 'line',
-        data: yData,
-        areaStyle: {
-          color: '#37a5fb',
-          opacity: 0.5,
-        },
-      },
-      {
-        name: '航线高度',
-        xAxisIndex: 1,
-        type: 'line',
-        data: routeHeight,
-        lineStyle: {
-          color: '#8ae73d',
-        },
-      },
-    ],
-  })
+    true,
+  )
 }

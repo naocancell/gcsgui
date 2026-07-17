@@ -481,12 +481,30 @@ unlockEditView(restoreView = false) {
 
     if (routeItem.entity && routeItem.entity.polyline) {
       routeItem.entity.name = line.name
+      const isEditingCurrentRoute =
+        this.mode === 'editing' && this.selectedRouteId === routeId
+      const renderPositions = this.getRouteRenderPositions(line)
 
-      routeItem.entity.polyline.positions = new Cesium.ConstantProperty(
-        this.getRouteRenderPositions(line),
-      )
+      if (isEditingCurrentRoute) {
+        routeItem.editPositions = renderPositions
+        const hasDynamicPositions =
+          routeItem.entity.polyline.positions instanceof
+          Cesium.CallbackProperty
 
-      if (this.mode === 'editing' && this.selectedRouteId === routeId) {
+        if (!hasDynamicPositions) {
+          routeItem.entity.polyline.positions = new Cesium.CallbackProperty(
+            () => routeItem.editPositions,
+            false,
+          )
+        }
+      } else {
+        routeItem.editPositions = undefined
+        routeItem.entity.polyline.positions = new Cesium.ConstantProperty(
+          renderPositions,
+        )
+      }
+
+      if (isEditingCurrentRoute) {
         routeItem.entity.polyline.material = this.editingLineMaterial
         routeItem.entity.polyline.width = 4
       } else if (this.selectedRouteId === routeId) {

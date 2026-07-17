@@ -14,7 +14,7 @@ import type { Airline } from '@/types/entityoptions.ts'
 import { newAirline, newAirlinePt } from '@/assets/js/TypeInitial.ts'
 import * as echarts from 'echarts'
 import type { EChartsType } from 'echarts'
-import { transLonlat2Car3 } from '@/utils/map/geocomputation.ts'
+import { getDistance, transLonlat2Car3 } from '@/utils/map/geocomputation.ts'
 import {
   drawEcharts_RouteDetection,
   profileAnalyse,
@@ -41,6 +41,19 @@ declare global {
   }
 }
 
+type RouteProfileChartData = {
+  distanceArray: number[]
+  elevationArray: number[]
+  orderArr: number[]
+  heightArr: number[]
+  routeDistanceArr: number[]
+}
+
+type RouteProfileCacheEntry = {
+  routeCode: string
+  data: RouteProfileChartData
+}
+
 let isRouteEditing = ref(false)
 let routeDirty = ref(false)
 
@@ -63,6 +76,12 @@ const dialog = useDialog()
 let nowTime = ref('')
 let timer: ReturnType<typeof setInterval> | null = null
 let profileRefreshTimer: ReturnType<typeof setTimeout> | null = null
+let terrainProfileRefreshTimer: ReturnType<typeof setTimeout> | null = null
+let profileSamplingTimer: ReturnType<typeof setTimeout> | null = null
+let profileSamplingFrame: number | null = null
+let profileSamplingRequestId = 0
+let profileInterval = ref<number | null>(1000)
+const routeProfileCache = new Map<string, RouteProfileCacheEntry>()
 
 let activeTab = ref<'detail' | 'profile' | 'weather'>('detail')
 let routeDrawingBlockTipAt = 0
@@ -95,7 +114,9 @@ const routesListRef = computed(() => {
 })
 
 const hasSelectedRoute = computed(() => {
-  return !!selectedRoute.value?.unicode && selectedRoute.value.points?.length > 0
+  return (
+    !!selectedRoute.value?.unicode && selectedRoute.value.points?.length > 0
+  )
 })
 
 const canEditSelectedRoute = computed(() => {
@@ -124,7 +145,9 @@ function isRouteActionIdle() {
 }
 
 function isRouteDrawing() {
-  return routeStore.routeActionMode === 'drawing' || routeManage?.mode === 'drawing'
+  return (
+    routeStore.routeActionMode === 'drawing' || routeManage?.mode === 'drawing'
+  )
 }
 
 function warnRouteActionBusy() {
@@ -254,6 +277,9 @@ onBeforeUnmount(() => {
     profileRefreshTimer = null
   }
 
+  cancelPendingProfileSampling()
+  cancelTerrainProfileRefresh()
+
   window.removeEventListener(
     'route-created-and-select',
     handleRouteCreatedAndSelect as EventListener,
@@ -272,9 +298,42 @@ onBeforeUnmount(() => {
 
 function switchTab(tab: 'detail' | 'profile' | 'weather') {
   activeTab.value = tab
+
+  if (tab !== 'profile') {
+    if (profileRefreshTimer) {
+      clearTimeout(profileRefreshTimer)
+      profileRefreshTimer = null
+    }
+
+    cancelPendingProfileSampling()
+    cancelTerrainProfileRefresh()
+  }
+
   nextTick(() => {
-    if (tab === 'profile') myChart?.resize()
-    if (tab === 'weather') weatherChart?.resize()
+    if (tab === 'profile') {
+      myChart?.resize()
+
+      if (hasSelectedRoute.value) {
+        const hasCachedProfile = getCachedRouteProfile(selectedRoute.value)
+
+        drawRouteProfile(selectedRoute.value)
+
+        if (
+          !hasCachedProfile &&
+          window.viewer?.scene?.globe?.tilesLoaded === false
+        ) {
+          scheduleTerrainProfileCorrection(selectedRoute.value)
+        }
+      }
+    }
+
+    if (tab === 'weather') {
+      weatherChart?.resize()
+
+      if (hasSelectedRoute.value) {
+        refreshWeatherOfCurrentPoint()
+      }
+    }
   })
 }
 
@@ -373,42 +432,261 @@ function getProfilePoints(route: Airline) {
   return points
 }
 
-function drawRouteProfile(route: Airline) {
+function getRouteProfileDistances(
+  cartesianPositions: ReturnType<typeof transLonlat2Car3>,
+) {
+  const distances = [0]
+
+  for (let index = 1; index < cartesianPositions.length; index++) {
+    const segmentDistance = Math.round(
+      getDistance(cartesianPositions[index - 1], cartesianPositions[index]) *
+        1000,
+    )
+
+    distances.push(distances[index - 1] + segmentDistance)
+  }
+
+  return distances
+}
+
+function getProfileInterval() {
+  return Math.max(100, profileInterval.value ?? 1000)
+}
+
+function getRouteProfileCacheKey(
+  route: Airline,
+  interval = getProfileInterval(),
+) {
+  return JSON.stringify([
+    String(route.unicode),
+    interval,
+    Boolean(route.isClose),
+    route.points.map((point) => [
+      Number(point.lon),
+      Number(point.lat),
+      Number(point.alt),
+    ]),
+  ])
+}
+
+function getCachedRouteProfile(route: Airline) {
+  if (!route?.unicode || !route.points?.length) return undefined
+
+  return routeProfileCache.get(
+    getRouteProfileCacheKey(route, getProfileInterval()),
+  )
+}
+
+function cacheRouteProfile(
+  route: Airline,
+  cacheKey: string,
+  data: RouteProfileChartData,
+) {
+  routeProfileCache.delete(cacheKey)
+  routeProfileCache.set(cacheKey, {
+    routeCode: String(route.unicode),
+    data,
+  })
+
+  if (routeProfileCache.size > 20) {
+    const oldestKey = routeProfileCache.keys().next().value
+    if (oldestKey) routeProfileCache.delete(oldestKey)
+  }
+}
+
+function clearRouteProfileCache(routeCode: string | number) {
+  const normalizedRouteCode = String(routeCode)
+
+  routeProfileCache.forEach((entry, cacheKey) => {
+    if (entry.routeCode === normalizedRouteCode) {
+      routeProfileCache.delete(cacheKey)
+    }
+  })
+}
+
+function renderRouteProfile(data: RouteProfileChartData) {
+  if (!myChart) return
+
+  drawEcharts_RouteDetection(
+    myChart,
+    data.distanceArray,
+    data.elevationArray,
+    data.orderArr,
+    data.heightArr,
+    data.routeDistanceArr,
+  )
+}
+
+function cancelPendingProfileSampling() {
+  profileSamplingRequestId += 1
+
+  if (profileSamplingFrame != null) {
+    cancelAnimationFrame(profileSamplingFrame)
+    profileSamplingFrame = null
+  }
+
+  if (profileSamplingTimer) {
+    clearTimeout(profileSamplingTimer)
+    profileSamplingTimer = null
+  }
+
+  myChart?.hideLoading()
+}
+
+function drawRouteProfile(route: Airline, options?: { force?: boolean }) {
+  cancelPendingProfileSampling()
+
   if (!route?.points || route.points.length < 2) {
     myChart?.clear()
     return
   }
 
+  const interval = getProfileInterval()
+  const cacheKey = getRouteProfileCacheKey(route, interval)
+  const cachedProfile = options?.force
+    ? undefined
+    : routeProfileCache.get(cacheKey)
+
+  if (cachedProfile) {
+    renderRouteProfile(cachedProfile.data)
+    return
+  }
+
   const profilePoints = getProfilePoints(route)
-  const cartesianPositions = transLonlat2Car3(profilePoints)
+  const routeIsClose = Boolean(route.isClose)
 
-  const result = profileAnalyse(window.viewer, cartesianPositions, 1000)
-
-  const orderArr = profilePoints.map((_, index) => {
-    if (route.isClose && index === profilePoints.length - 1) {
-      return 1
-    }
-
-    return index + 1
+  myChart?.showLoading('default', {
+    text: '正在采样中',
+    color: '#63e2b7',
+    textColor: '#ffffff',
+    maskColor: 'rgba(16, 16, 20, 0.88)',
   })
 
-  const hArr = profilePoints.map((point) => point.alt)
+  const requestId = ++profileSamplingRequestId
 
-  drawEcharts_RouteDetection(
-    myChart,
-    result.distanceArray,
-    result.elevationArray,
-    orderArr,
-    hArr,
-  )
+  profileSamplingFrame = requestAnimationFrame(() => {
+    profileSamplingFrame = null
+
+    profileSamplingTimer = setTimeout(() => {
+      profileSamplingTimer = null
+
+      if (requestId !== profileSamplingRequestId) return
+
+      try {
+        const cartesianPositions = transLonlat2Car3(profilePoints)
+        const routeDistanceArr = getRouteProfileDistances(cartesianPositions)
+        const result = profileAnalyse(
+          window.viewer,
+          cartesianPositions,
+          interval,
+        )
+        const data: RouteProfileChartData = {
+          distanceArray: result.distanceArray,
+          elevationArray: result.elevationArray,
+          orderArr: profilePoints.map((_, index) => {
+            if (routeIsClose && index === profilePoints.length - 1) {
+              return 1
+            }
+
+            return index + 1
+          }),
+          heightArr: profilePoints.map((point) => point.alt),
+          routeDistanceArr,
+        }
+
+        if (window.viewer?.scene?.globe?.tilesLoaded !== false) {
+          cacheRouteProfile(route, cacheKey, data)
+        }
+
+        renderRouteProfile(data)
+      } catch (error) {
+        console.error('[drawRouteProfile] 地形剖面采样失败：', error)
+        uiMsg.error('地形剖面采样失败')
+      } finally {
+        if (requestId === profileSamplingRequestId) {
+          myChart?.hideLoading()
+        }
+      }
+    }, 0)
+  })
+}
+
+function redrawRouteProfile() {
+  if (!hasSelectedRoute.value) return
+
+  cancelTerrainProfileRefresh()
+  drawRouteProfile(selectedRoute.value, { force: true })
+
+  if (window.viewer?.scene?.globe?.tilesLoaded === false) {
+    scheduleTerrainProfileCorrection(selectedRoute.value)
+  }
+}
+
+function handleProfileIntervalChanged() {
+  cancelPendingProfileSampling()
+  cancelTerrainProfileRefresh()
+}
+
+function cancelTerrainProfileRefresh() {
+  if (!terrainProfileRefreshTimer) return
+
+  clearTimeout(terrainProfileRefreshTimer)
+  terrainProfileRefreshTimer = null
+}
+
+function scheduleTerrainProfileCorrection(route: Airline) {
+  cancelTerrainProfileRefresh()
+
+  const routeCode = String(route.unicode)
+  const startedAt = Date.now()
+
+  const refreshWhenTerrainReady = () => {
+    const routeChanged =
+      String(selectedRoute.value?.unicode) !== routeCode ||
+      activeTab.value !== 'profile'
+
+    if (routeChanged) {
+      terrainProfileRefreshTimer = null
+      return
+    }
+
+    const elapsed = Date.now() - startedAt
+    const terrainLoaded = window.viewer?.scene?.globe?.tilesLoaded !== false
+    const minimumWaitComplete = elapsed >= 2000
+    const timedOut = elapsed >= 10000
+
+    if ((minimumWaitComplete && terrainLoaded) || timedOut) {
+      terrainProfileRefreshTimer = null
+
+      if (!getCachedRouteProfile(selectedRoute.value)) {
+        drawRouteProfile(selectedRoute.value, { force: true })
+      }
+
+      nextTick(() => myChart?.resize())
+      return
+    }
+
+    terrainProfileRefreshTimer = setTimeout(refreshWhenTerrainReady, 300)
+  }
+
+  terrainProfileRefreshTimer = setTimeout(refreshWhenTerrainReady, 300)
 }
 
 function scheduleProfileRefresh() {
   if (profileRefreshTimer) {
     clearTimeout(profileRefreshTimer)
+    profileRefreshTimer = null
   }
 
+  if (activeTab.value !== 'profile') return
+
+  cancelPendingProfileSampling()
+
   profileRefreshTimer = setTimeout(() => {
+    profileRefreshTimer = null
+
+    if (activeTab.value !== 'profile') return
+
     drawRouteProfile(selectedRoute.value)
   }, 200)
 }
@@ -460,11 +738,18 @@ function refreshSelectedRouteView(options?: {
     refreshPtList()
   }
 
-  drawRouteProfile(selectedRoute.value)
+  if (activeTab.value === 'profile') {
+    drawRouteProfile(selectedRoute.value)
+  }
 
-  if (options?.refreshWeather) {
+  if (options?.refreshWeather && activeTab.value === 'weather') {
     refreshWeatherOfCurrentPoint()
   }
+
+  nextTick(() => {
+    if (activeTab.value === 'profile') myChart?.resize()
+    if (activeTab.value === 'weather') weatherChart?.resize()
+  })
 }
 function flyToRoute(route: Airline, duration = 1.5) {
   if (!routeManage || !route?.unicode) return
@@ -519,7 +804,7 @@ function updateMapRoute(options?: {
     entity = routeManage.addAirLine(selectedRoute.value)
   }
 
-// 编辑状态下不要 selectRoute，否则会把 mode 从 editing 打回 selected，
+  // 编辑状态下不要 selectRoute，否则会把 mode 从 editing 打回 selected，
   // 导致地图失去拖拽/右键/高亮，
   if (!isRouteEditing.value) {
     routeManage.selectRoute?.(selectedRoute.value.unicode)
@@ -542,9 +827,6 @@ function updateMapRoute(options?: {
 
   return entity
 }
-
-
-
 
 function getRouteEntity(route: Airline) {
   if (!routeManage || !route?.unicode) return undefined
@@ -588,8 +870,6 @@ function selectAndShowRoute(
   }
 
   routeManage.selectRoute?.(route.unicode)
-
-  
 
   routeDirty.value = false
 
@@ -661,7 +941,6 @@ function selectRouteById(routeId: string | number) {
   return true
 }
 
-
 function handleRouteCreatedAndSelect(event: Event) {
   const customEvent = event as CustomEvent<{
     routeId: string | number
@@ -682,9 +961,9 @@ function startEditSelectedRoute() {
     return
   }
   if (!routeStore.startEditing()) {
-      uiMsg.warning('请先结束当前航线绘制或编辑操作')
-      return
-    }
+    uiMsg.warning('请先结束当前航线绘制或编辑操作')
+    return
+  }
   routeManage.addAirLine(selectedRoute.value)
 
   const ok = routeManage.startEditRoute?.(selectedRoute.value.unicode)
@@ -712,19 +991,18 @@ async function saveRouteEdit(): Promise<boolean> {
     routeStore.addRoute(selectedRoute.value)
 
     updateMapRoute({
-      rebuildVertex: true,
+      rebuildVertex: false,
     })
 
     routeManage.saveEditRoute?.(selectedRoute.value.unicode)
-    routeManage.selectRoute?.(selectedRoute.value.unicode)
 
     isRouteEditing.value = false
     routeDirty.value = false
     routeStore.endRouteAction()
 
     refreshSelectedRouteView({
-      refreshWeather: true,
-      forceRefreshPtList: true,
+      refreshWeather: false,
+      forceRefreshPtList: false,
     })
 
     await nextTick()
@@ -756,7 +1034,8 @@ function cancelRouteEdit() {
   }
 
   const route = routeStore.flyRoute.find(
-    (element) => String(element.unicode) === String(selectedRoute.value.unicode),
+    (element) =>
+      String(element.unicode) === String(selectedRoute.value.unicode),
   )
 
   if (route) {
@@ -768,7 +1047,7 @@ function cancelRouteEdit() {
   routeStore.endRouteAction()
 
   refreshSelectedRouteView({
-    refreshWeather: true,
+    refreshWeather: false,
     forceRefreshPtList: true,
   })
 
@@ -819,17 +1098,11 @@ function toNumber(value: any, defaultValue = 0) {
 function createPointBetween(ptA: any, ptB: any) {
   const newPt = newAirlinePt()
 
-  newPt.lon = Number(
-    ((toNumber(ptA.lon) + toNumber(ptB.lon)) / 2).toFixed(6),
-  )
+  newPt.lon = Number(((toNumber(ptA.lon) + toNumber(ptB.lon)) / 2).toFixed(6))
 
-  newPt.lat = Number(
-    ((toNumber(ptA.lat) + toNumber(ptB.lat)) / 2).toFixed(6),
-  )
+  newPt.lat = Number(((toNumber(ptA.lat) + toNumber(ptB.lat)) / 2).toFixed(6))
 
-  newPt.alt = Number(
-    ((toNumber(ptA.alt) + toNumber(ptB.alt)) / 2).toFixed(2),
-  )
+  newPt.alt = Number(((toNumber(ptA.alt) + toNumber(ptB.alt)) / 2).toFixed(2))
 
   newPt.speed = ptA.speed ?? ptB.speed ?? 0
   newPt.ch1 = 0
@@ -1124,6 +1397,7 @@ function delRoute(routeUnicode: string | number) {
   }
 
   routeStore.removeRoute(String(routeUnicode))
+  clearRouteProfileCache(routeUnicode)
 
   if (String(selectedRouteCode.value) === String(routeUnicode)) {
     selectedRouteCode.value = null
@@ -1132,6 +1406,7 @@ function delRoute(routeUnicode: string | number) {
     isRouteEditing.value = false
     routeDirty.value = false
 
+    cancelPendingProfileSampling()
     myChart?.clear()
     weatherChart?.clear()
   }
@@ -1365,7 +1640,6 @@ function handlePtClick(RouteUnicode?: string | number) {
 
   flyToRoute(route, 2)
 }
-
 </script>
 
 <template>
@@ -1383,7 +1657,6 @@ function handlePtClick(RouteUnicode?: string | number) {
           <n-layout-header :bordered="true">
             <n-space justify="space-between" align="center">
               <n-space>
-
                 <n-popover trigger="hover">
                   <template #trigger>
                     <n-button
@@ -1660,7 +1933,6 @@ function handlePtClick(RouteUnicode?: string | number) {
                 </n-scrollbar>
 
                 <n-space justify="center" style="margin: 0.5rem 0">
-
                   <n-button
                     type="warning"
                     size="small"
@@ -1699,28 +1971,30 @@ function handlePtClick(RouteUnicode?: string | number) {
                   <n-ellipsis>采样间隔</n-ellipsis>
 
                   <n-input-number
+                    v-model:value="profileInterval"
                     size="small"
                     placeholder="默认1000米"
                     style="width: 8rem"
                     :min="100"
                     :step="100"
+                    @update:value="handleProfileIntervalChanged"
                   ></n-input-number>
 
                   <n-button
                     type="success"
                     size="small"
                     :disabled="!hasSelectedRoute"
-                    @click="drawRouteProfile(selectedRoute)"
+                    @click="redrawRouteProfile"
                   >
                     重新绘图
                   </n-button>
                 </n-space>
 
-                <div id="echarts-profile"></div>
+                <div v-show="hasSelectedRoute" id="echarts-profile"></div>
               </n-flex>
             </div>
 
-            <div v-show="activeTab === 'weather'">
+            <div v-show="activeTab === 'weather' && hasSelectedRoute">
               <n-flex vertical>
                 <n-space justify="space-around" class="routePtSelector">
                   <n-button
