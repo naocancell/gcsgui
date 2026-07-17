@@ -1,7 +1,7 @@
 /*
 后端接收过来的结构转换为固定渲染结构 
  */
-import type { UAVInfo, FP95Frame94Sub1, FP981CAggregate, PlaneState } from "@/types/entityoptions";
+import type { UAVInfo, FP95Aggregate, FP981CAggregate, PlaneState } from "@/types/entityoptions";
 
 
 export function normalizeUAVInfo(uav: UAVInfo): PlaneState {
@@ -22,19 +22,20 @@ export function normalizeUAVInfo(uav: UAVInfo): PlaneState {
   };
 }
 
-export function normalizeFP95(item: FP95Frame94Sub1): PlaneState {
+export function normalizeFP95(item: FP95Aggregate): PlaneState | null {
+  if (!item.frame83) return null;
   return {
-    id: `${item.sAddress}`,
+    id: `fp95:${item.uavId}`,
     type: "fp95",
 
-    lon: item.adsLon,
-    lat: item.adsLat,
-    alt: item.adsAlt,
-    groundSpeed: item.adsVl, // 地速 m/s
-    verticalSpeed: item.adsVu, // 垂直速度 m/s
-    heading: item.adsYaw,
-    pitch: 0,
-    roll: 0,
+    lon: item.frame83.longitude,
+    lat: item.frame83.latitude,
+    alt: item.frame83.altitude,
+    groundSpeed: item.frame83.groundSpeed,
+    verticalSpeed: item.frame83.verticalSpeed,
+    heading: item.frame81?.headingAngle ?? item.frame83.groundTrack,
+    pitch: item.frame81?.pitchAngle ?? 0,
+    roll: item.frame81?.rollAngle ?? 0,
     raw: item,
     showTrail: false,//不显示轨迹线
   };

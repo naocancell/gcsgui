@@ -30,3 +30,8 @@ temp/
 .understand-anything/
 .agents/
 .pnpm-store/
+.codex-artifacts/
+tools/
+output/
+docs/
+.superpowers/

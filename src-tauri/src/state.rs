@@ -3,9 +3,14 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
 
-
 use crate::comms::ProtocolType;
 use crate::protocol::uav_info::UAVInfo;
+
+#[derive(Clone)]
+struct TimedFP95Aggregate {
+    aggregate: crate::protocol::fp95::FP95Aggregate,
+    last_seen: Instant,
+}
 
 /// 代表一条处于活动状态的物理链路句柄
 pub struct ActiveLink {
@@ -62,13 +67,12 @@ pub struct AppState {
     /// RX 层：FP981C 协议聚合状态池
     pub fp981c_pool: Arc<DashMap<u8, crate::protocol::fp981c::FP981CAggregate>>,
 
-    /// RX 层：FP95 协议状态池
-    pub fp95_pool: Arc<DashMap<[u8; 3], crate::protocol::fp95::FP95Frame94Sub1>>,
+    /// RX 层：FP95 协议单机聚合状态
+    fp95_state: Arc<Mutex<Option<TimedFP95Aggregate>>>,
 
     /// RX 层：心跳追踪记录池 (用于死链路超时剔除)
     pub uav_seen: Arc<DashMap<u8, Instant>>,
     pub fp981c_seen: Arc<DashMap<u8, Instant>>,
-    pub fp95_seen: Arc<DashMap<[u8; 3], Instant>>,
 
     /// TX 层：当前已打开的所有物理链路集合 (Key 为 链路名称/ID)
     pub active_links: Arc<DashMap<String, ActiveLink>>,
@@ -82,12 +86,43 @@ impl AppState {
         Self {
             uav_pool: Arc::new(DashMap::new()),
             fp981c_pool: Arc::new(DashMap::new()),
-            fp95_pool: Arc::new(DashMap::new()),
+            fp95_state: Arc::new(Mutex::new(None)),
             uav_seen: Arc::new(DashMap::new()),
             fp981c_seen: Arc::new(DashMap::new()),
-            fp95_seen: Arc::new(DashMap::new()),
             active_links: Arc::new(DashMap::new()),
             metrics: Arc::new(LinkMetrics::default()),
         }
     }
+
+    pub fn merge_fp95(
+        &self,
+        uav_id: u8,
+        parsed: crate::protocol::fp95::ParsedSubFrame,
+        received_at: Instant,
+    ) {
+        let mut guard = self.fp95_state.lock().expect("FP95 state mutex poisoned");
+        let state = guard.get_or_insert_with(|| TimedFP95Aggregate {
+            aggregate: Default::default(),
+            last_seen: received_at,
+        });
+        state.aggregate.uav_id = uav_id;
+        state.aggregate.merge(parsed);
+        state.last_seen = received_at;
+    }
+
+    pub fn fp95_snapshot(
+        &self,
+        now: Instant,
+        timeout: std::time::Duration,
+    ) -> Option<crate::protocol::fp95::FP95Aggregate> {
+        let mut guard = self.fp95_state.lock().expect("FP95 state mutex poisoned");
+        if guard
+            .as_ref()
+            .is_some_and(|state| now.duration_since(state.last_seen) > timeout)
+        {
+            *guard = None;
+        }
+        guard.as_ref().map(|state| state.aggregate.clone())
+    }
 }
+

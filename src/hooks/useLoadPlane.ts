@@ -3,7 +3,7 @@ import { watch } from "vue";
 import { useUavStore } from "@/store/uavStore.ts";
 import { PlaneState } from "@/types/entityoptions";
 import { PLANE_CONFIG } from "@/utils/plane/planeConfig";
-import {UAVInfo, FP95Frame94Sub1, FP981CAggregate} from "@/types/entityoptions";
+import {UAVInfo, FP981CAggregate} from "@/types/entityoptions";
 import {normalizeUAVInfo, normalizeFP95, normalizeFP981C} from "@/utils/plane/planeAdapter";
 export function useLoadPlane() {
   //获取飞机的状态管理store
@@ -328,7 +328,7 @@ const TAIL_OVERLAP = 10;
     stopWatch = watch(
       () => [
         store.uavInfoMap,
-        store.fp95Map,
+        store.fp95Aggregate,
         store.fp981cMap,
       ],//同时监听
       () => {
@@ -340,9 +340,10 @@ const TAIL_OVERLAP = 10;
         });
 
         //将 FP95 类型数据转换成统一 PlaneState
-        store.fp95Map?.forEach((item: FP95Frame94Sub1) => {
-          planes.push(normalizeFP95(item));
-        });
+        if (store.fp95Aggregate) {
+          const fp95Plane = normalizeFP95(store.fp95Aggregate);
+          if (fp95Plane) planes.push(fp95Plane);
+        }
         store.fp981cMap?.forEach((item: FP981CAggregate) => {
           planes.push(normalizeFP981C(item));
         });

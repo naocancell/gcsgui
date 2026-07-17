@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use crate::comms::{ProtocolType, RawData};
 use crate::protocol::uav_info::UAVInfo;
 use crate::state::AppState;
+use crate::uplink::FP95ResponseCoordinator;
 
 use moka::sync::Cache;
 use std::time::{Duration, Instant};
@@ -18,7 +19,11 @@ fn find_fp981c_header(buffer: &[u8]) -> Option<usize> {
     None
 }
 
-pub async fn start_router(mut rx: tokio::sync::mpsc::Receiver<RawData>, app_state: AppState) {
+pub async fn start_router(
+    mut rx: tokio::sync::mpsc::Receiver<RawData>,
+    app_state: AppState,
+    response_coordinator: FP95ResponseCoordinator,
+) {
     // 去重缓存
     let dedup_cache: Cache<String, ()> = Cache::builder()
         .time_to_live(Duration::from_millis(250))
@@ -58,7 +63,12 @@ pub async fn start_router(mut rx: tokio::sync::mpsc::Receiver<RawData>, app_stat
                 extract_and_process_uav_info(buffer, &app_state);
             }
             ProtocolType::FP95 => {
-                extract_and_process_fp95(buffer, &dedup_cache, &app_state);
+                extract_and_process_fp95(
+                    buffer,
+                    &dedup_cache,
+                    &app_state,
+                    &response_coordinator,
+                );
             }
         }
 
@@ -179,6 +189,7 @@ fn extract_and_process_fp95(
     buffer: &mut BytesMut,
     dedup_cache: &Cache<String, ()>,
     app_state: &AppState,
+    response_coordinator: &FP95ResponseCoordinator,
 ) {
     while let Some(header_idx) = find_fp95_header(buffer) {
         if header_idx > 0 {
@@ -186,7 +197,7 @@ fn extract_and_process_fp95(
         }
         if buffer.len() >= 32 {
             let frame = buffer.split_to(32);
-            process_fp95_frame(&frame, dedup_cache, app_state);
+            process_fp95_frame(frame.as_ref(), dedup_cache, app_state, response_coordinator);
         } else {
             break;
         }
@@ -198,7 +209,12 @@ fn extract_and_process_fp95(
     }
 }
 
-fn process_fp95_frame(frame: &[u8], dedup_cache: &Cache<String, ()>, app_state: &AppState) {
+fn process_fp95_frame(
+    frame: &[u8],
+    dedup_cache: &Cache<String, ()>,
+    app_state: &AppState,
+    response_coordinator: &FP95ResponseCoordinator,
+) {
     if !crate::protocol::fkd_crc::verify_fkd_crc(frame, 0x23, 0x23) {
         app_state.metrics.inc_crc_fail();
         return;
@@ -215,25 +231,22 @@ fn process_fp95_frame(frame: &[u8], dedup_cache: &Cache<String, ()>, app_state: 
     }
     dedup_cache.insert(dedup_key, ());
 
-    let subframe_payload = &frame[6..];
+    let subframe_payload = &frame[5..30];
 
     use crate::protocol::fp95::ParsedSubFrame;
 
     match ParsedSubFrame::from_bytes(frame_id, subframe_payload) {
-        Ok(parsed) => match parsed {
-            ParsedSubFrame::Frame94Sub1(frame_94_sub1) => {
-                if frame_94_sub1.raw_s_address == [0, 0, 0] {
-                    return;
-                }
-
-                app_state.metrics.inc_ok();
-                let s_address = frame_94_sub1.raw_s_address;
-                app_state.fp95_pool.insert(s_address, frame_94_sub1);
-                app_state.fp95_seen.insert(s_address, Instant::now());
+        Ok(parsed) => {
+            app_state.metrics.inc_ok();
+            if let ParsedSubFrame::Frame80(frame80) = &parsed {
+                response_coordinator.deliver(uav_id, frame80.injection_response);
             }
-        },
+            app_state.merge_fp95(uav_id, parsed, Instant::now());
+        }
         Err(_err) => {
             app_state.metrics.inc_parse_err();
         }
     }
 }
+
+

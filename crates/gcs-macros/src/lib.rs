@@ -416,16 +416,22 @@ pub fn derive_aggregate(input: TokenStream) -> TokenStream {
     let enum_name = &ast.ident;
 
     let mut agg_struct_name = syn::Ident::new("FP981CAggregate", enum_name.span());
+    let mut aggregate_rename_all: Option<LitStr> = None;
     for attr in &ast.attrs {
         if attr.path().is_ident("aggregate_struct") {
             let _ = attr.parse_nested_meta(|meta| {
-                if let Some(ident) = meta.path.get_ident() {
+                if meta.path.is_ident("rename_all") {
+                    aggregate_rename_all = Some(meta.value()?.parse()?);
+                } else if let Some(ident) = meta.path.get_ident() {
                     agg_struct_name = ident.clone();
                 }
                 Ok(())
             });
         }
     }
+
+    let aggregate_serde_attr =
+        aggregate_rename_all.map(|value| quote! { #[serde(rename_all = #value)] });
 
     let variants = if let Data::Enum(data_enum) = &ast.data {
         &data_enum.variants
@@ -527,6 +533,7 @@ pub fn derive_aggregate(input: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         #[derive(Debug, Default, Clone, serde::Serialize)]
+        #aggregate_serde_attr
         pub struct #agg_struct_name {
             #(#struct_fields),*
         }

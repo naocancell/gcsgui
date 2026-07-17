@@ -35,3 +35,7 @@ bytes = "1.5"
 once_cell = { version = "1.21.4", features = ["parking_lot"] }
 tauri-plugin-single-instance = "2.0"
 tauri-plugin-dialog = "2.0"
+
+[dev-dependencies]
+async-trait = "0.1"
+tokio = { version = "1.52.3", features = ["test-util"] }

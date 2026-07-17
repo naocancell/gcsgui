@@ -28,14 +28,6 @@ pub async fn start_emitter(app_handle: AppHandle, app_state: AppState) {
                 true
             }
         });
-        app_state.fp95_seen.retain(|id, last_seen| {
-            if now.duration_since(*last_seen) > evict_timeout {
-                app_state.fp95_pool.remove(id);
-                false
-            } else {
-                true
-            }
-        });
 
         // 推送 UAVInfo 原始状态
         let uavs: Vec<_> = app_state.uav_pool.iter().map(|kv| kv.value().clone()).collect();
@@ -54,9 +46,8 @@ pub async fn start_emitter(app_handle: AppHandle, app_state: AppState) {
         }
 
         // 推送 FP95 状态
-        let fp95_list: Vec<_> = app_state.fp95_pool.iter().map(|kv| kv.value().clone()).collect();
-        if !fp95_list.is_empty() {
-            if let Err(e) = app_handle.emit("fp95-event", &fp95_list) {
+        if let Some(fp95) = app_state.fp95_snapshot(now, evict_timeout) {
+            if let Err(e) = app_handle.emit("fp95-event", &fp95) {
                 log::error!("Tauri emitter 发送 fp95-event 失败: {}", e);
             }
         }

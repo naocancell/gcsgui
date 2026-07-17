@@ -58,12 +58,17 @@ import { useRouter } from 'vue-router'
 import { getUnicode } from '@/types/entityoptions.ts'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { storeToRefs } from 'pinia'
 //选中飞机以及高度预警
 import { useSelectedPlaneStore } from '@/store/selectedPlaneStore'
 import { useTerrainWarning } from '@/hooks/useTerrainWarning'
 import { useMarkObstacle } from '@/hooks/useMarkObstacle.ts'
-import UavTelemetryPanel from '@/components/UavTelemetryPanel.vue'
+import {
+  exitApplicationOnClose,
+  restoreTelemetryWindow,
+  telemetryWindowOptions,
+} from '@/utils/telemetryWindow'
 
 declare global {
   interface Window {
@@ -107,9 +112,9 @@ let routeDrawViewer: RouteManageViewer | null = null
 
 let nfzViewer = null
 let showNFZ = ref(false)
+let mainCloseUnlisten: (() => void) | null = null
 
-//是否显示航电信息
-const isShowTelemetryInfo = ref<Boolean>(false)
+
 
 function getRouteManageViewer() {
   if (!window.viewer) {
@@ -460,6 +465,11 @@ const baudRateOptions = [
   { label: '38400', value: 38400 },
   { label: '57600', value: 57600 },
   { label: '115200', value: 115200 },
+]
+
+const serialProtocolOptions = [
+  { label: 'FP981C', value: 'FP981C' },
+  { label: 'FP95', value: 'FP95' },
 ]
 
 async function startMainSerialService() {
@@ -896,7 +906,12 @@ const profileMaxHeightLabel = computed(() => {
   return profileRange.value.max.toFixed(0)
 })
 
-onMounted(() => {
+onMounted(async () => {
+  const mainWindow = getCurrentWindow()
+  mainCloseUnlisten = await mainWindow.onCloseRequested(async (event) => {
+    await exitApplicationOnClose(event, () => invoke('close_app'))
+  })
+
   if (!window.viewer) return
 
   terrainWarningApi.value = useTerrainWarning(
@@ -914,6 +929,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   terrainWarningApi.value?.stop()
+  if (mainCloseUnlisten) mainCloseUnlisten()
 })
 
 
@@ -964,8 +980,17 @@ function toggleSelectedPlaneTerrainWarning() {
 
 const {addAllObstacles,toggleObstaclesVisible} = useMarkObstacle() 
 
-function showTelemetryInfo(){
-  isShowTelemetryInfo.value = !isShowTelemetryInfo.value
+async function showTelemetryInfo() {
+  try {
+    const existingWin = await WebviewWindow.getByLabel('telemetry')
+    if (existingWin) {
+      await restoreTelemetryWindow(existingWin)
+    } else {
+      new WebviewWindow('telemetry', telemetryWindowOptions)
+    }
+  } catch (err) {
+    console.error('打开独立航电窗口失败:', err)
+  }
 }
 </script>
 
@@ -1361,6 +1386,13 @@ function showTelemetryInfo(){
                 placeholder="请选择波特率"
               />
             </n-form-item>
+            <n-form-item label="协议类型">
+              <n-select
+                v-model:value="uavStore.mainSerialProtocol"
+                :options="serialProtocolOptions"
+                placeholder="请选择协议"
+              />
+            </n-form-item>
             <n-form-item label="运行状态">
               <n-tag :type="uavStore.isMainSerialRunning ? 'success' : 'error'">
                 {{ uavStore.isMainSerialRunning ? '监听中' : '已停止' }}
@@ -1397,6 +1429,13 @@ function showTelemetryInfo(){
                 v-model:value="uavStore.subSerialBaud"
                 :options="baudRateOptions"
                 placeholder="请选择波特率"
+              />
+            </n-form-item>
+            <n-form-item label="协议类型">
+              <n-select
+                v-model:value="uavStore.subSerialProtocol"
+                :options="serialProtocolOptions"
+                placeholder="请选择协议"
               />
             </n-form-item>
             <n-form-item label="运行状态">
@@ -1538,7 +1577,6 @@ function showTelemetryInfo(){
   />
   <MarkerDialog ref="markerDialog"></MarkerDialog>
   <AltitudeWarning :warningResult="altitudeWarningResult" />
-  <UavTelemetryPanel v-if="isShowTelemetryInfo"/>
 </template>
 
 <style>
