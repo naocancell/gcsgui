@@ -28,7 +28,7 @@ import * as Cesium from "cesium";
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useUavStore } from "@/store/uavStore";
 
-import type { UAVInfo, FP95Frame94Sub1, FP981CAggregate, PlaneType, PlaneState } from "@/types/entityoptions";
+import type { UAVInfo, FP95Aggregate, FP981CAggregate, PlaneType, PlaneState } from "@/types/entityoptions";
 
 import { normalizeUAVInfo, normalizeFP95, normalizeFP981C } from "@/utils/plane/planeAdapter";
 import { PLANE_CONFIG } from "@/utils/plane/planeConfig";
@@ -78,10 +78,10 @@ const allPlaneMap = computed(() => {
     map.set(plane.id, plane);
   });
 
-  store.fp95Map?.forEach((item: FP95Frame94Sub1) => {
-    const plane = normalizeFP95(item);
-    map.set(plane.id, plane);
-  });
+  if (store.fp95Aggregate) {
+    const plane = normalizeFP95(store.fp95Aggregate);
+    if (plane) map.set(plane.id, plane);
+  }
   store.fp981cMap?.forEach((item: FP981CAggregate) => {
     const plane = normalizeFP981C(item);
     map.set(plane.id, plane);
@@ -110,8 +110,8 @@ const panelTitle = computed(() => {
   }
 
   if (plane.type === "fp95") {
-    const raw = plane.raw as FP95Frame94Sub1;//飞机原始信息
-    return `ADS-B ${raw.sAddress}`;
+    const raw = plane.raw as FP95Aggregate;//飞机原始信息
+    return `FP95 ${raw.uavId}`;
   }
 
   if (plane.type === "fp981c") {
@@ -209,40 +209,46 @@ const infoRows = computed<InfoRow[]>(() => {
   }
 
   if (plane.type === "fp95") {
-    const raw = plane.raw as FP95Frame94Sub1;
+    const raw = plane.raw as FP95Aggregate;
+    const position = raw.frame83!;
+    const attitude = raw.frame81;
 
     return [
       {
-        label: "地址类型",
-        value: raw.addressType,
-      },
-      {
-        label: "S模式地址",
-        value: raw.sAddress,
+        label: "飞机号",
+        value: raw.uavId,
       },
       {
         label: "经度",
-        value: raw.adsLon.toFixed(6),
+        value: position.longitude.toFixed(6),
       },
       {
         label: "纬度",
-        value: raw.adsLat.toFixed(6),
+        value: position.latitude.toFixed(6),
       },
       {
         label: "高度",
-        value: `${raw.adsAlt.toFixed(1)} m`,
+        value: `${position.altitude.toFixed(1)} m`,
       },
       {
-        label: "航向角",
-        value: `${raw.adsYaw.toFixed(1)} °`,
-      },
-      {
-        label: "水平速度",
-        value: `${raw.adsVl.toFixed(1)} m/s`,
+        label: "地速",
+        value: `${position.groundSpeed.toFixed(1)} m/s`,
       },
       {
         label: "垂直速度",
-        value: `${raw.adsVu.toFixed(1)} m/s`,
+        value: `${position.verticalSpeed.toFixed(1)} m/s`,
+      },
+      {
+        label: "航向角",
+        value: `${(attitude?.headingAngle ?? position.groundTrack).toFixed(1)} °`,
+      },
+      {
+        label: "俯仰角",
+        value: `${(attitude?.pitchAngle ?? 0).toFixed(1)} °`,
+      },
+      {
+        label: "滚转角",
+        value: `${(attitude?.rollAngle ?? 0).toFixed(1)} °`,
       },
     ];
   }

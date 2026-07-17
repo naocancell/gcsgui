@@ -1,8 +1,22 @@
 import { defineStore } from 'pinia'
-import { ref,shallowRef } from 'vue'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { ref, shallowRef } from 'vue'
+import { listen, emit, type UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
-import type {UAVInfo, FP95Frame94Sub1,FP95EventPayload, FP981CAggregate, FP981CEventPayload } from '@/types/entityoptions'//引入类型
+import type {
+  UAVInfo,
+  FP95Aggregate,
+  FP95EventPayload,
+  FP981CAggregate,
+  FP981CEventPayload,
+  TransponderSwitchConfig,
+  TransponderSwitchReadback,
+  TransponderParamConfig,
+  TransponderParamReadback
+} from '@/types/entityoptions'
+import {
+  getFp95FlightSwitchCommand,
+  type Fp95AvionicsDevice,
+} from '@/utils/plane/fp95AvionicsControl'
 
 // 协议解包类型枚举
 const enum Protocol {
@@ -10,6 +24,8 @@ const enum Protocol {
   FP981C = "FP981C",
   UAVInfo = "UAVInfo"
 }
+
+export type SerialProtocol = Protocol.FP95 | Protocol.FP981C
 
 export const useUavStore = defineStore('uav', () => {
   const uavInfo = ref<UAVInfo | null>(null)
@@ -33,12 +49,14 @@ export const useUavStore = defineStore('uav', () => {
   const mainSerialName = ref('主链路')
   const mainSerialPort = ref('')
   const mainSerialBaud = ref(115200)
+  const mainSerialProtocol = ref<SerialProtocol>(Protocol.FP981C)
   const isMainSerialRunning = ref(false)
 
   // 副链路串口参数 (默认绑定 FP981C)
   const subSerialName = ref('副链路')
   const subSerialPort = ref('')
   const subSerialBaud = ref(115200)
+  const subSerialProtocol = ref<SerialProtocol>(Protocol.FP981C)
   const isSubSerialRunning = ref(false)
 
   // 可用串口号列表
@@ -48,8 +66,24 @@ export const useUavStore = defineStore('uav', () => {
 
   let unlisten: UnlistenFn | null = null
   let fp95Unlisten: UnlistenFn | null = null
+  let fp95ListenPromise: Promise<void> | null = null
+  let fp95ListenerGeneration = 0
+  let fp95ServiceGeneration = 0
   let fp981cUnlisten: UnlistenFn | null = null
+  let fp981cListenPromise: Promise<void> | null = null
+  let fp981cLifecycleGeneration = 0
   let portsUnlisten: UnlistenFn | null = null
+
+  function needsFp95Listening() {
+    return isFp95Running.value
+      || (isMainSerialRunning.value && mainSerialProtocol.value === Protocol.FP95)
+      || (isSubSerialRunning.value && subSerialProtocol.value === Protocol.FP95)
+  }
+
+  function needsFp981cListening() {
+    return (isMainSerialRunning.value && mainSerialProtocol.value === Protocol.FP981C)
+      || (isSubSerialRunning.value && subSerialProtocol.value === Protocol.FP981C)
+  }
 
   // 监听 uav-info-event 事件
   async function startListening() {
@@ -61,23 +95,79 @@ export const useUavStore = defineStore('uav', () => {
   }
 
   // 监听 fp95-event 事件
-  async function startFp95Listening() {
+  async function startFp95Listening(lifecycleGeneration: number) {
     if (fp95Unlisten) return
+    if (fp95ListenPromise) {
+      await fp95ListenPromise
+      if (!fp95Unlisten && needsFp95Listening()) {
+        await startFp95Listening(fp95ListenerGeneration)
+      }
+      return
+    }
 
-    fp95Unlisten = await listen<FP95EventPayload>("fp95-event", (event: any) => {
-      //将接收到的数据给飞机的store   更新数据
-      updateFp95List(event.payload)
-    })
-    console.log('前端已挂载 FP95 数据监听服务')
+    const pending = (async () => {
+      const candidateUnlisten = await listen<FP95EventPayload>("fp95-event", (event) => {
+        //将接收到的数据给飞机的store   更新数据
+        if (
+          lifecycleGeneration === fp95ListenerGeneration
+          && needsFp95Listening()
+        ) {
+          updateFp95Aggregate(event.payload)
+        }
+      })
+      if (
+        lifecycleGeneration === fp95ListenerGeneration
+        && needsFp95Listening()
+      ) {
+        fp95Unlisten = candidateUnlisten
+        console.log('前端已挂载 FP95 数据监听服务')
+      } else {
+        candidateUnlisten()
+      }
+    })()
+    fp95ListenPromise = pending
+    try {
+      await pending
+    } finally {
+      if (fp95ListenPromise === pending) fp95ListenPromise = null
+    }
   }
 
-  async function startFp981cListening() {
+  async function startFp981cListening(lifecycleGeneration: number) {
     if (fp981cUnlisten) return
+    if (fp981cListenPromise) {
+      await fp981cListenPromise
+      if (!fp981cUnlisten && needsFp981cListening()) {
+        await startFp981cListening(fp981cLifecycleGeneration)
+      }
+      return
+    }
 
-    fp981cUnlisten = await listen<FP981CEventPayload>("fp981c-event", (event) => {
-      updateFp981cList(event.payload)
-    })
-    console.log('前端已挂载 FP981C 数据监听服务')
+    const pending = (async () => {
+      const candidateUnlisten = await listen<FP981CEventPayload>("fp981c-event", (event) => {
+        if (
+          lifecycleGeneration === fp981cLifecycleGeneration
+          && needsFp981cListening()
+        ) {
+          updateFp981cList(event.payload)
+        }
+      })
+      if (
+        lifecycleGeneration === fp981cLifecycleGeneration
+        && needsFp981cListening()
+      ) {
+        fp981cUnlisten = candidateUnlisten
+        console.log('前端已挂载 FP981C 数据监听服务')
+      } else {
+        candidateUnlisten()
+      }
+    })()
+    fp981cListenPromise = pending
+    try {
+      await pending
+    } finally {
+      if (fp981cListenPromise === pending) fp981cListenPromise = null
+    }
   }
   // 停止监听 uav-info-event 事件
   function stopListening() {
@@ -101,6 +191,37 @@ export const useUavStore = defineStore('uav', () => {
       fp981cUnlisten()
       fp981cUnlisten = null
       console.log('前端已取消挂载 FP981C 数据监听服务')
+    }
+  }
+
+  function clearFp95State() {
+    if (fp95Watchdog) {
+      clearTimeout(fp95Watchdog)
+      fp95Watchdog = null
+    }
+    fp95Aggregate.value = null
+  }
+
+  function deactivateUnusedProtocolListeners() {
+    if (!needsFp95Listening()) {
+      fp95ListenerGeneration += 1
+      stopFp95Listening()
+      clearFp95State()
+    }
+    if (!needsFp981cListening()) {
+      fp981cLifecycleGeneration += 1
+      stopFp981cListening()
+      fp981cMap.value = new Map()
+    }
+  }
+
+  async function syncProtocolListeners() {
+    deactivateUnusedProtocolListeners()
+    if (needsFp95Listening()) {
+      await startFp95Listening(fp95ListenerGeneration)
+    }
+    if (needsFp981cListening()) {
+      await startFp981cListening(fp981cLifecycleGeneration)
     }
   }
 
@@ -140,13 +261,20 @@ export const useUavStore = defineStore('uav', () => {
 
   // 启动 FP95 接收服务
   async function startFp95Service() {
+    if (isFp95Running.value) return
+    const lifecycleGeneration = ++fp95ServiceGeneration
     try {
       isFp95Running.value = true
       const status = await saveCommsConfig()
       console.log(status)
-      await startFp95Listening()//启动服务时候开启数据监听
+      if (
+        lifecycleGeneration !== fp95ServiceGeneration
+        || !isFp95Running.value
+      ) return
     } catch (err) {
-      isFp95Running.value = false
+      if (lifecycleGeneration === fp95ServiceGeneration) {
+        isFp95Running.value = false
+      }
       console.error('启动并保存 FP95 UDP 后台接收失败', err)
       throw err
     }
@@ -154,17 +282,13 @@ export const useUavStore = defineStore('uav', () => {
 
   // 停止 FP95 接收服务
   async function stopFp95Service() {
+    fp95ServiceGeneration += 1
+    isFp95Running.value = false
+    deactivateUnusedProtocolListeners()
+
     try {
-      isFp95Running.value = false
       const status = await saveCommsConfig()
       console.log(status)
-      stopFp95Listening()//停止监听
-      //计时器
-      if (fp95Watchdog) {
-        clearTimeout(fp95Watchdog)
-        fp95Watchdog = null
-      }
-      fp95Map.value = new Map()      // 清空残留的 FP95 飞机
     } catch (err) {
       console.error('停止并保存 FP95 UDP 后台接收失败', err)
       throw err
@@ -208,7 +332,6 @@ export const useUavStore = defineStore('uav', () => {
       isMainSerialRunning.value = true
       const status = await saveCommsConfig()
       console.log(status)
-      await startFp981cListening()
     } catch (err) {
       isMainSerialRunning.value = false
       console.error('启动并保存主链路串口接收失败', err)
@@ -220,12 +343,9 @@ export const useUavStore = defineStore('uav', () => {
   async function stopMainSerialService() {
     try {
       isMainSerialRunning.value = false
+      deactivateUnusedProtocolListeners()
       const status = await saveCommsConfig()
       console.log(status)
-      if (!isSubSerialRunning.value) {
-        stopFp981cListening()
-        fp981cMap.value = new Map()
-      }
     } catch (err) {
       console.error('停止并保存主链路串口接收失败', err)
       throw err
@@ -238,7 +358,6 @@ export const useUavStore = defineStore('uav', () => {
       isSubSerialRunning.value = true
       const status = await saveCommsConfig()
       console.log(status)
-      await startFp981cListening()
     } catch (err) {
       isSubSerialRunning.value = false
       console.error('启动并保存副链路串口接收失败', err)
@@ -250,12 +369,9 @@ export const useUavStore = defineStore('uav', () => {
   async function stopSubSerialService() {
     try {
       isSubSerialRunning.value = false
+      deactivateUnusedProtocolListeners()
       const status = await saveCommsConfig()
       console.log(status)
-      if (!isMainSerialRunning.value) {
-        stopFp981cListening()
-        fp981cMap.value = new Map()
-      }
     } catch (err) {
       console.error('停止并保存副链路串口接收失败', err)
       throw err
@@ -285,10 +401,12 @@ export const useUavStore = defineStore('uav', () => {
             if (item.ip) udpIp.value = item.ip
             if (item.port) udpPort.value = item.port
             if (item.interface_ip) udpInterface.value = item.interface_ip
+            if (item.enabled !== undefined) isServiceRunning.value = item.enabled
           } else if (item.name === fp95Name.value || item.protocol === Protocol.FP95) {
             if (item.ip) fp95Ip.value = item.ip
             if (item.port) fp95Port.value = item.port
             if (item.interface_ip) fp95Interface.value = item.interface_ip
+            if (item.enabled !== undefined) isFp95Running.value = item.enabled
           }
         }
       }
@@ -297,17 +415,21 @@ export const useUavStore = defineStore('uav', () => {
           if (item.name === mainSerialName.value || item.name === '主链路') {
             if (item.port_name) mainSerialPort.value = item.port_name
             if (item.baud_rate) mainSerialBaud.value = item.baud_rate
+            if (item.protocol === Protocol.FP95 || item.protocol === Protocol.FP981C) {
+              mainSerialProtocol.value = item.protocol
+            }
             if (item.enabled !== undefined) isMainSerialRunning.value = item.enabled
           } else if (item.name === subSerialName.value || item.name === '副链路') {
             if (item.port_name) subSerialPort.value = item.port_name
             if (item.baud_rate) subSerialBaud.value = item.baud_rate
+            if (item.protocol === Protocol.FP95 || item.protocol === Protocol.FP981C) {
+              subSerialProtocol.value = item.protocol
+            }
             if (item.enabled !== undefined) isSubSerialRunning.value = item.enabled
           }
         }
       }
-      if (isMainSerialRunning.value || isSubSerialRunning.value) {
-        await startFp981cListening()
-      }
+      await syncProtocolListeners()
       return config
     } catch (err) {
       console.error('从文件读取配置失败', err)
@@ -347,7 +469,7 @@ export const useUavStore = defineStore('uav', () => {
             data_bits: 8,
             stop_bits: 1,
             parity: 'none',
-            protocol: Protocol.FP981C,
+            protocol: mainSerialProtocol.value,
             enabled: isMainSerialRunning.value,
             auto_connect: true
           },
@@ -358,13 +480,15 @@ export const useUavStore = defineStore('uav', () => {
             data_bits: 8,
             stop_bits: 1,
             parity: 'none',
-            protocol: Protocol.FP981C,
+            protocol: subSerialProtocol.value,
             enabled: isSubSerialRunning.value,
             auto_connect: true
           }
         ]
       }
       const res = await invoke<string>('save_comms_config', { config })
+      await syncProtocolListeners()
+      await emit('comms-config-changed')
       console.log('保存配置成功:', res)
       return res
     } catch (err) {
@@ -372,23 +496,23 @@ export const useUavStore = defineStore('uav', () => {
       throw err
     }
   }
-  //  uavInfo无人机数据的map（key 是飞机id 唯一标识）
-  const uavInfoMap = shallowRef<Map<string, UAVInfo>>(new Map());
-   //  fp95无人机数据的数组
-  const fp95Map = shallowRef<Map<string, FP95Frame94Sub1>>(new Map());
-  const fp981cMap = shallowRef<Map<string, FP981CAggregate>>(new Map());
- 
+
+  // uavInfo无人机数据的map（key 是飞机id 唯一标识）
+  const uavInfoMap = shallowRef<Map<string, UAVInfo>>(new Map())
+  // fp95 单机聚合数据
+  const fp95Aggregate = shallowRef<FP95Aggregate | null>(null)
+  const fp981cMap = shallowRef<Map<string, FP981CAggregate>>(new Map())
+
   let uavWatchdog: ReturnType<typeof setTimeout> | null = null
-  const UAV_TIMEOUT = 1000   // 定时器的 1000ms
-  //后端推送 UAVInfo[] 时调用
+  const UAV_TIMEOUT = 1000
+
   function updateUavInfoList(list: UAVInfo[]) {
-    //临时的map
-    const map = new Map<string, UAVInfo>();
+    const map = new Map<string, UAVInfo>()
     for (const item of list) {
-      const key = `${item.uavSeries}:${item.uavId}`;
-      map.set(key, item);
+      const key = `${item.uavSeries}:${item.uavId}`
+      map.set(key, item)
     }
-    uavInfoMap.value = map;
+    uavInfoMap.value = map
     if (uavWatchdog) clearTimeout(uavWatchdog)
     uavWatchdog = setTimeout(() => {
       uavInfoMap.value = new Map()
@@ -396,52 +520,149 @@ export const useUavStore = defineStore('uav', () => {
     }, UAV_TIMEOUT)
   }
 
-  // FP95 看门狗：超过这个时间没收到新帧就认为 FP95 停了
   let fp95Watchdog: ReturnType<typeof setTimeout> | null = null
   const FP95_TIMEOUT = 1000
 
-  //后端推送 FP95Frame94Sub1[] 时调用
-  function updateFp95List(list: FP95Frame94Sub1[]) {
-    const map = new Map<string, FP95Frame94Sub1>();
-    for (const item of list) {
-      map.set(item.sAddress, item);
-    }
-    fp95Map.value = map;
-     // 每收到一帧就重置看门狗
+  function updateFp95Aggregate(value: FP95Aggregate) {
+    fp95Aggregate.value = value
     if (fp95Watchdog) clearTimeout(fp95Watchdog)
     fp95Watchdog = setTimeout(() => {
-      fp95Map.value = new Map()   // 超时无新数据，从源头清掉残帧
+      fp95Aggregate.value = null
       fp95Watchdog = null
     }, FP95_TIMEOUT)
   }
 
-  function updateFp981cList(list: FP981CAggregate[]) {
-    const map = new Map<string, FP981CAggregate>();
-    for (const item of list) {
-      if (!item.c2) {
-        continue
-      }
-      map.set(String(item.uav_id), item);
+  async function controlFp95AvionicsSwitch(
+    device: Fp95AvionicsDevice,
+    enabled: boolean,
+  ) {
+    const aggregate = fp95Aggregate.value
+    if (!aggregate?.frame84) {
+      throw new Error('暂无 FP95 航电开关遥测')
     }
-    fp981cMap.value = map;
+
+    await invoke('submit_flight_switch_command', {
+      aircraftId: aggregate.uavId,
+      command: getFp95FlightSwitchCommand(device, enabled),
+    })
   }
- // 模拟数据服务
+
+  // ==================== 应答机设置响应式数据与方法 ====================
+  const transponderSwitchConfig = ref<TransponderSwitchConfig>({
+    airGroundState: 0,
+    df11osc: 0,
+    spiState: 0,
+    modeSwitch: 0,
+    baroAltitudeSwitch: 0,
+    adsbOutSwitch: 0,
+    adsbInSwitch: 0,
+  })
+
+  const transponderSwitchReadback = ref<TransponderSwitchReadback>({
+    airGroundState: '',
+    df11osc: '',
+    spiState: '',
+    modeSwitch: '',
+    baroAltitudeSwitch: '',
+    adsbOutSwitch: '',
+    adsbInSwitch: '',
+  })
+
+  const transponderParamConfig = ref<TransponderParamConfig>({
+    aCode: [0, 0, 0, 0],
+    sModeAddr: ['0x00', '0x00', '0x01'],
+    aircraftCategory: 'A类',
+    adsbEmitterType: '无ADS-B发射器类型信息',
+    flightNumber: '',
+  })
+
+  const transponderParamReadback = ref<TransponderParamReadback>({
+    aCode: '',
+    sModeAddr: '',
+    aircraftCategoryInfo: '',
+    flightNumber: '',
+  })
+
+  const transponderOperationPending = ref(false)
+
+  function currentFp95AircraftId() {
+    const aircraftId = fp95Aggregate.value?.uavId
+    if (aircraftId === undefined) {
+      throw new Error('暂无 FP95 飞机遥测')
+    }
+    return aircraftId
+  }
+
+  async function runTransponderOperation<T>(operation: () => Promise<T>): Promise<T> {
+    if (transponderOperationPending.value) {
+      throw new Error('已有应答机或航管参数指令正在等待回报')
+    }
+    transponderOperationPending.value = true
+    try {
+      return await operation()
+    } finally {
+      transponderOperationPending.value = false
+    }
+  }
+
+  async function bindTransponderSwitches(config: TransponderSwitchConfig) {
+    const aircraftId = currentFp95AircraftId()
+    await runTransponderOperation(async () => {
+      await invoke('bind_transponder_switches', { aircraftId, config })
+    })
+    transponderSwitchConfig.value = { ...config }
+  }
+
+  async function queryTransponderSwitches() {
+    const aircraftId = currentFp95AircraftId()
+    return runTransponderOperation(async () => {
+      const res = await invoke<TransponderSwitchReadback>('query_transponder_switches', { aircraftId })
+      transponderSwitchReadback.value = res
+      return res
+    })
+  }
+
+  async function bindTransponderParams(config: TransponderParamConfig) {
+    const aircraftId = currentFp95AircraftId()
+    await runTransponderOperation(async () => {
+      await invoke('bind_air_traffic_params', { aircraftId, config })
+    })
+    transponderParamConfig.value = {
+      ...config,
+      aCode: [...config.aCode],
+      sModeAddr: [...config.sModeAddr]
+    }
+  }
+
+  async function queryTransponderParams() {
+    const aircraftId = currentFp95AircraftId()
+    return runTransponderOperation(async () => {
+      const res = await invoke<TransponderParamReadback>('query_air_traffic_params', { aircraftId })
+      transponderParamReadback.value = res
+      return res
+    })
+  }
+
+  function updateFp981cList(list: FP981CAggregate[]) {
+    const map = new Map<string, FP981CAggregate>()
+    for (const item of list) {
+      if (!item.c2) continue
+      map.set(String(item.uav_id), item)
+    }
+    fp981cMap.value = map
+  }
+
   const isMock = ref(false)
   let mockUavTimer: ReturnType<typeof setInterval> | null = null
 
-  // 第一次点开启，第二次点停止
   function toggleMockUavInfoService() {
-    if (isMock.value) {
-      stopMockUavInfoService()
-    } else {
-      startMockUavInfoService()
-    }
+    if (isMock.value) stopMockUavInfoService()
+    else startMockUavInfoService()
   }
 
   function startMockUavInfoService() {
     if (mockUavTimer) return
     isMock.value = true
-
     const mockUavList: UAVInfo[] = [
       {
         uavSeries: '981A',
@@ -491,7 +712,6 @@ export const useUavStore = defineStore('uav', () => {
     mockUavTimer = setInterval(() => {
       mockUavList[0].longitude += 0.00008
       mockUavList[0].latitude += 0.00002
-      
       mockUavList[0].groundSpeedDirection = 90
       mockUavList[0].distanceNext = Math.max(0, mockUavList[0].distanceNext - 25)
 
@@ -500,10 +720,8 @@ export const useUavStore = defineStore('uav', () => {
       mockUavList[1].groundSpeedDirection = 45
       mockUavList[1].distanceNext = Math.max(0, mockUavList[1].distanceNext - 30)
 
-
       updateUavInfoList(mockUavList.map((item) => ({ ...item })))
     }, 20)
-
     console.log('已启动 UAVInfo 模拟数据服务')
   }
 
@@ -514,8 +732,6 @@ export const useUavStore = defineStore('uav', () => {
     }
     isMock.value = false
     isServiceRunning.value = false
-
-    // 清掉看门狗并清空数据，让模拟飞机立即消失
     if (uavWatchdog) {
       clearTimeout(uavWatchdog)
       uavWatchdog = null
@@ -540,10 +756,12 @@ export const useUavStore = defineStore('uav', () => {
     mainSerialName,
     mainSerialPort,
     mainSerialBaud,
+    mainSerialProtocol,
     isMainSerialRunning,
     subSerialName,
     subSerialPort,
     subSerialBaud,
+    subSerialProtocol,
     isSubSerialRunning,
     availablePorts,
     networkInterfaces,
@@ -559,15 +777,27 @@ export const useUavStore = defineStore('uav', () => {
     fetchNetworkInterfaces,
     loadCommsConfig,
     saveCommsConfig,
-    //uavInfo更新方法和数据
     updateUavInfoList,
     uavInfoMap,
-    //fp95更新方法和数据
-    updateFp95List,
-    fp95Map,
+    updateFp95Aggregate,
+    fp95Aggregate,
+    controlFp95AvionicsSwitch,
     updateFp981cList,
     fp981cMap,
-    //模拟
-    toggleMockUavInfoService
+    transponderSwitchConfig,
+    transponderSwitchReadback,
+    transponderParamConfig,
+    transponderParamReadback,
+    transponderOperationPending,
+    bindTransponderSwitches,
+    queryTransponderSwitches,
+    bindTransponderParams,
+    queryTransponderParams,
+    toggleMockUavInfoService,
+    syncProtocolListeners,
+    startListening,
+    stopListening,
+    startFp95Listening,
+    startFp981cListening
   }
 })

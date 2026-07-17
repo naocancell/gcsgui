@@ -12,6 +12,7 @@ pub mod config;
 pub mod protocol;
 pub mod router;
 pub mod state;
+pub mod uplink;
 
 pub static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
 
@@ -45,12 +46,24 @@ pub fn run() {
             let app_state = state::AppState::new();
             app.manage(app_state.clone());
 
+            let response_coordinator = uplink::FP95ResponseCoordinator::default();
+            app.manage(response_coordinator.clone());
+
+            let uplink_handle = uplink::start(app_state.clone());
+            app.manage(uplink_handle);
+
             let (router_tx, router_rx) = mpsc::channel::<RawData>(1000);
             app.manage(router_tx.clone());
 
             let app_state_clone = app_state.clone();
+            let response_coordinator_clone = response_coordinator.clone();
             tauri::async_runtime::spawn(async move {
-                router::link_manager::start_router(router_rx, app_state_clone).await;
+                router::link_manager::start_router(
+                    router_rx,
+                    app_state_clone,
+                    response_coordinator_clone,
+                )
+                .await;
             });
 
             // 启动 10Hz 状态推送分发器
@@ -85,6 +98,10 @@ pub fn run() {
                 }
             }
 
+            if let Err(e) = comms_config.save(app.handle()) {
+                log::error!("软件启动时重置配置 enabled 状态失败: {}", e);
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -97,7 +114,18 @@ pub fn run() {
             upload_route,
             close_app,
             get_comms_config,
-            save_comms_config
+            save_comms_config,
+            configure_uplink,
+            update_uplink_control,
+            update_uplink_periodic,
+            submit_uplink_command,
+            submit_flight_switch_command,
+            bind_transponder_switches,
+            query_transponder_switches,
+            bind_air_traffic_params,
+            query_air_traffic_params,
+            clear_uplink_command,
+            get_uplink_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

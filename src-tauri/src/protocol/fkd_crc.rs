@@ -1,4 +1,5 @@
 /// FKD 32字节通用数据帧的内置512字节常量查表
+#[rustfmt::skip]
 pub const CRCLIST: [u8; 512] = [
     0x00,0x00,0x89,0x11,0x12,0x23,0x9b,0x32,0x24,0x46,0xad,0x57,0x36,0x65,0xbf,0x74,
     0x48,0x8c,0xc1,0x9d,0x5a,0xaf,0xd3,0xbe,0x6c,0xca,0xe5,0xdb,0x7e,0xe9,0xf7,0xf8,
@@ -34,17 +35,14 @@ pub const CRCLIST: [u8; 512] = [
     0xc7,0x7b,0x4e,0x6a,0xd5,0x58,0x5c,0x49,0xe3,0x3d,0x6a,0x2c,0xf1,0x1e,0x78,0x0f
 ];
 
-/// 验证32字节通用数据帧校验和是否通过
-/// h0, h1 为同步帧头特征字
-pub fn verify_fkd_crc(frame: &[u8], h0: u8, h1: u8) -> bool {
-    if frame.len() < 32 || frame[0] != h0 || frame[1] != h1 {
-        return false;
-    }
-
+/// 计算 FKD CRC 的两个输出字节。
+///
+/// 调用方负责传入协议规定的校验范围；32 字节通用帧应传入偏移 2～29。
+pub fn calculate_fkd_crc(data: &[u8]) -> [u8; 2] {
     let mut c0: u8 = 0;
     let mut c1: u8 = 0;
 
-    for &b in &frame[2..30] {
+    for &b in data {
         let idx_b = 2 * (b as usize);
         let y0 = CRCLIST[idx_b] ^ c1;
         let y1 = CRCLIST[idx_b + 1];
@@ -57,5 +55,16 @@ pub fn verify_fkd_crc(frame: &[u8], h0: u8, h1: u8) -> bool {
         c1 = y1 ^ z1;
     }
 
-    frame[30] == c0 && frame[31] == c1
+    [c0, c1]
 }
+
+/// 验证32字节通用数据帧校验和是否通过
+/// h0, h1 为同步帧头特征字
+pub fn verify_fkd_crc(frame: &[u8], h0: u8, h1: u8) -> bool {
+    if frame.len() < 32 || frame[0] != h0 || frame[1] != h1 {
+        return false;
+    }
+
+    frame[30..32] == calculate_fkd_crc(&frame[2..30])
+}
+

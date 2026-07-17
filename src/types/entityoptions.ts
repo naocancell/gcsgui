@@ -117,7 +117,84 @@ export type FP95Frame94Sub1 = {
   }
 
   // 后端推送的是所有在线无人机状态的数组
-  export type FP95EventPayload = FP95Frame94Sub1[];
+  export interface FP95AvionicsSwitchState {
+    payloadPower: boolean
+    satcom1: boolean
+    fireExtinguishingEquipment: boolean
+    videoManagementComputer: boolean
+    transponder: boolean
+    temperatureHumidity: boolean
+    dataRecorder: boolean
+  }
+
+  export interface FP95Frame80 {
+    reserved: number[]
+    injectionResponse: number[]
+    trailingReserved: number
+  }
+
+  export interface FP95Frame81 {
+    pitchAngle: number
+    rollAngle: number
+    headingAngle: number
+    pitchRate: number
+    rollRate: number
+    headingRate: number
+    forwardAcceleration: number
+    rightAcceleration: number
+    verticalAcceleration: number
+    pitchCommand: number
+    rollCommand: number
+    headingCommand: number
+    groundStationId: number
+    flightWarningCode: number
+    remoteSwitchFeedback: number
+  }
+
+  export interface FP95Frame83 {
+    lateralSpeed: number
+    longitude: number
+    latitude: number
+    altitude: number
+    pressureAltitude: number
+    relativeAltitude: number
+    airSpeed: number
+    groundSpeed: number
+    groundTrack: number
+    verticalSpeed: number
+    trueAirSpeed: number
+  }
+
+  export interface FP95Frame84 {
+    controlMode: number
+    flightNavigationState: number
+    flightFaultFlags: number
+    avionicsFaultState: number
+    avionicsSwitchState: FP95AvionicsSwitchState
+    otherDeviceSwitchState: number
+    flightStateFlags: number
+    dataUseState: number
+    routeNumber: number
+    targetWaypointNumber: number
+    remainingDistance: number
+    crossTrackDistance: number
+    headingError: number
+    faultState: number
+    actuatorFaultState: number
+  }
+
+  export type FP95Frame94 = { Sub1: FP95Frame94Sub1 }
+
+  export interface FP95Aggregate {
+    uavId: number
+    frame80?: FP95Frame80 | null
+    frame81?: FP95Frame81 | null
+    frame83?: FP95Frame83 | null
+    frame84?: FP95Frame84 | null
+    frame94?: FP95Frame94 | null
+  }
+
+  export type FP95EventPayload = FP95Aggregate
 
   export interface FP981CFrameC1 {
     fy_angle?: number;
@@ -152,7 +229,7 @@ export type FP95Frame94Sub1 = {
 
   // 渲染层结构
   export interface PlaneState {
-    id: string;  // 唯一键，UAV用 "UAV-{uavId}"，FP95用 sAddress
+    id: string;  // 唯一键，UAV用 "{uavSeries}:{uavId}"，FP95用 "fp95:{uavId}"
     type: PlaneType;// 飞机类型
     lon: number;// 经度
     lat: number;// 纬度
@@ -161,10 +238,47 @@ export type FP95Frame94Sub1 = {
     pitch?: number;// 俯仰角
     roll?: number;// 滚转角
     groundSpeed?: number;// 地速
-    verticalSpeed: number // 垂直速度 m/s
-    raw: UAVInfo | FP95Frame94Sub1 | FP981CAggregate; // 保留原始数据，点击时用
-    showTrail?: boolean;// 是否显示轨迹
+    verticalSpeed: number; // 垂直速度 m/s
+    raw: UAVInfo | FP95Aggregate | FP981CAggregate; // 保留原始数据，点击时用
+    showTrail?: boolean; // 是否显示轨迹
   }
 
+  // ==================== 应答机设置相关类型定义 ====================
+  // 应答机开关设置项配置 (左栏)
+  export interface TransponderSwitchConfig {
+    airGroundState: number      // 空地指示状态: 0=地面, 1=空中
+    df11osc: number             // DF11断续振荡开关: 0=关闭, 1=工作
+    spiState: number            // 特殊位置识别: 0=正常, 1=特殊识别
+    modeSwitch: number          // A/C/S模式开关: 0=全关(静默), 1=仅A/S模式, 2=A/C/S全开
+    baroAltitudeSwitch: number  // 标准气压高度开关: 0=关闭, 1=高度有效
+    adsbOutSwitch: number       // ADS-B OUT 开关: 0=关闭, 1=工作
+    adsbInSwitch: number        // ADS-B IN 开关: 0=关闭, 1=工作
+  }
 
+  // 应答机开关回读查询显示状态 (左栏查询结果)
+  export interface TransponderSwitchReadback {
+    airGroundState: string      // "地面" | "空中"
+    df11osc: string             // "关闭" | "工作"
+    spiState: string            // "正常" | "特殊识别"
+    modeSwitch: string          // "全关(静默)" | "仅A/S模式" | "A/C/S全开"
+    baroAltitudeSwitch: string  // "关闭" | "高度有效"
+    adsbOutSwitch: string       // "关闭" | "工作"
+    adsbInSwitch: string        // "关闭" | "工作"
+  }
 
+  // 应答机核心参数设置项配置 (右栏上半区)
+  export interface TransponderParamConfig {
+    aCode: number[]             // A代码 (4位八进制高->低字节)，例如 [0, 0, 0, 0]
+    sModeAddr: string[]         // S模式地址 (3位十六进制字符串高->低字节)，例如 ["0x00", "0x00", "0x01"]
+    aircraftCategory: string    // 飞行器类别，例如 "A类"
+    adsbEmitterType: string     // ADS-B发射器类型信息，例如 "无ADS-B发射器类型信息"
+    flightNumber: string        // 航班号
+  }
+
+  // 应答机核心参数回读查询结果 (右栏下半区)
+  export interface TransponderParamReadback {
+    aCode: string               // 回读A代码字符串
+    sModeAddr: string           // 回读S模式地址字符串
+    aircraftCategoryInfo: string// 回读飞行器类别字符串
+    flightNumber: string        // 回读航班号字符串
+  }

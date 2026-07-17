@@ -19,6 +19,11 @@ const router = createRouter({
       name: 'routeManage',
       component: () => import('@/components/page/RouteManagePage.vue'),
     },
+    {
+      path: '/telemetry',
+      name: 'Telemetry',
+      component: () => import('@/components/page/TelemetryPage.vue'),
+    },
   ],
 })
 

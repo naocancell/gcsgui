@@ -93,6 +93,14 @@ export function getTDTTerrainProvider() {
   const provider = new window.Cesium.GeoTerrainProvider({
     urls: terrainUrls,
   })
+  if (provider.errorEvent) {
+    provider.errorEvent.addEventListener((error: any) => {
+      // 静默处理瓦片请求或解析失败引起的异常，关闭重试以避免频繁日志刷屏
+      if (error) {
+        error.retry = false
+      }
+    })
+  }
   return provider
 }
 
