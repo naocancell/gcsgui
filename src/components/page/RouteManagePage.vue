@@ -6,6 +6,8 @@ import {
   SaveOutline,
   FolderOpenOutline,
   DownloadOutline,
+  EyeOutline,
+  EyeOffOutline,
 } from '@vicons/ionicons5'
 import { nextTick, onBeforeUnmount, onMounted, ref, computed } from 'vue'
 import { darkTheme, useMessage, useDialog } from 'naive-ui'
@@ -59,6 +61,9 @@ let routeDirty = ref(false)
 
 let myChart: EChartsType | undefined = undefined
 let weatherChart: EChartsType | undefined = undefined
+let profileChartResizeObserver: ResizeObserver | null = null
+
+const MAX_ROUTE_PROFILE_SAMPLES = 5000
 
 const routeStore = useRouteStore()
 const sStore = useStaticStore()
@@ -109,13 +114,16 @@ const routesListRef = computed(() => {
     return {
       value: route.unicode,
       label: route.name,
+      visible: route.isVisible !== false,
     }
   })
 })
 
 const hasSelectedRoute = computed(() => {
   return (
-    !!selectedRoute.value?.unicode && selectedRoute.value.points?.length > 0
+    !!selectedRoute.value?.unicode &&
+    selectedRoute.value.isVisible !== false &&
+    selectedRoute.value.points?.length > 0
   )
 })
 
@@ -175,6 +183,10 @@ function blockRouteManageWhenDrawing(event: Event) {
     return
   }
 
+  if (target?.closest('[data-route-visibility-toggle="true"]')) {
+    return
+  }
+
   const now = Date.now()
   if (now - routeDrawingBlockTipAt > 800) {
     uiMsg.warning('请先结束绘制')
@@ -198,6 +210,11 @@ onMounted(() => {
 
   routeManage = window.routeManageViewer
 
+  routeStore.flyRoute.forEach((route) => {
+    route.isVisible = route.isVisible !== false
+    routeManage.setRouteVisibility?.(route.unicode, route.isVisible)
+  })
+
   // 兼容你 RouteManageViewer 构造函数没有接 options 的情况，直接挂回调
   routeManage.onRouteSelected = (routeId: string, line: Airline) => {
     selectedRouteCode.value = routeId
@@ -208,22 +225,30 @@ onMounted(() => {
       forceRefreshPtList: true,
     })
   }
-
+  //当航线被编辑变化后会执行这个回调
   routeManage.onRouteChanged = (line: Airline) => {
-    selectedRoute.value = line
+    selectedRoute.value = line//这是被编辑后的最新航线
     routeDirty.value = true
 
     normalizeRouteForBiz(selectedRoute.value)
-    scheduleProfileRefresh()
+    scheduleProfileRefresh()//剖面刷新
 
-    refreshPtList()
+    refreshPtList()//刷新航点详情列表
   }
 
   routeManage.onEditStateChanged = (editing: boolean) => {
     isRouteEditing.value = editing
   }
 
-  myChart = echarts.init(document.getElementById('echarts-profile'), 'dark')
+  const profileChartElement = document.getElementById('echarts-profile')
+
+  if (profileChartElement && typeof ResizeObserver !== 'undefined') {
+    profileChartResizeObserver = new ResizeObserver(() => {
+      resizeProfileChart()
+    })
+    profileChartResizeObserver.observe(profileChartElement)
+  }
+
   weatherChart = echarts.init(document.getElementById('weatherChart'), 'dark')
 
   timer = setInterval(getTimesInterval, 1000)
@@ -279,6 +304,8 @@ onBeforeUnmount(() => {
 
   cancelPendingProfileSampling()
   cancelTerrainProfileRefresh()
+  profileChartResizeObserver?.disconnect()
+  profileChartResizeObserver = null
 
   window.removeEventListener(
     'route-created-and-select',
@@ -311,7 +338,7 @@ function switchTab(tab: 'detail' | 'profile' | 'weather') {
 
   nextTick(() => {
     if (tab === 'profile') {
-      myChart?.resize()
+      resizeProfileChart()
 
       if (hasSelectedRoute.value) {
         const hasCachedProfile = getCachedRouteProfile(selectedRoute.value)
@@ -396,7 +423,7 @@ function removeDuplicatedClosingPoint(route: Airline) {
 
   normalizeRouteForBiz(route)
 }
-
+//刷新航点详情列表
 function refreshPtList() {
   showPtList.value = false
   nextTick(() => {
@@ -447,6 +474,23 @@ function getRouteProfileDistances(
   }
 
   return distances
+}
+
+function getEffectiveProfileInterval(
+  routeDistanceArr: number[],
+  segmentCount: number,
+  requestedInterval: number,
+) {
+  const totalDistance = routeDistanceArr[routeDistanceArr.length - 1] ?? 0
+  const availableSamples = Math.max(
+    1,
+    MAX_ROUTE_PROFILE_SAMPLES - segmentCount * 2,
+  )
+
+  return Math.max(
+    requestedInterval,
+    Math.ceil(totalDistance / availableSamples),
+  )
 }
 
 function getProfileInterval() {
@@ -504,17 +548,40 @@ function clearRouteProfileCache(routeCode: string | number) {
   })
 }
 
+function ensureProfileChart() {
+  const element = document.getElementById('echarts-profile')
+
+  if (!element || element.clientWidth <= 0 || element.clientHeight <= 0) {
+    return undefined
+  }
+
+  if (!myChart || myChart.isDisposed()) {
+    myChart = echarts.getInstanceByDom(element) ?? echarts.init(element, 'dark')
+  }
+
+  return myChart
+}
+
+function resizeProfileChart() {
+  ensureProfileChart()?.resize()
+}
+
 function renderRouteProfile(data: RouteProfileChartData) {
-  if (!myChart) return
+  const chart = ensureProfileChart()
+  if (!chart) return
 
   drawEcharts_RouteDetection(
-    myChart,
+    chart,
     data.distanceArray,
     data.elevationArray,
     data.orderArr,
     data.heightArr,
     data.routeDistanceArr,
   )
+
+  requestAnimationFrame(() => {
+    if (!chart.isDisposed()) chart.resize()
+  })
 }
 
 function cancelPendingProfileSampling() {
@@ -531,6 +598,15 @@ function cancelPendingProfileSampling() {
   }
 
   myChart?.hideLoading()
+}
+
+function showRouteProfileLoading() {
+  ensureProfileChart()?.showLoading('default', {
+    text: '正在采样中',
+    color: '#63e2b7',
+    textColor: '#ffffff',
+    maskColor: 'rgba(16, 16, 20, 0.88)',
+  })
 }
 
 function drawRouteProfile(route: Airline, options?: { force?: boolean }) {
@@ -555,12 +631,7 @@ function drawRouteProfile(route: Airline, options?: { force?: boolean }) {
   const profilePoints = getProfilePoints(route)
   const routeIsClose = Boolean(route.isClose)
 
-  myChart?.showLoading('default', {
-    text: '正在采样中',
-    color: '#63e2b7',
-    textColor: '#ffffff',
-    maskColor: 'rgba(16, 16, 20, 0.88)',
-  })
+  showRouteProfileLoading()
 
   const requestId = ++profileSamplingRequestId
 
@@ -575,10 +646,15 @@ function drawRouteProfile(route: Airline, options?: { force?: boolean }) {
       try {
         const cartesianPositions = transLonlat2Car3(profilePoints)
         const routeDistanceArr = getRouteProfileDistances(cartesianPositions)
+        const effectiveInterval = getEffectiveProfileInterval(
+          routeDistanceArr,
+          Math.max(0, cartesianPositions.length - 1),
+          interval,
+        )
         const result = profileAnalyse(
           window.viewer,
           cartesianPositions,
-          interval,
+          effectiveInterval,
         )
         const data: RouteProfileChartData = {
           distanceArray: result.distanceArray,
@@ -634,11 +710,16 @@ function cancelTerrainProfileRefresh() {
   terrainProfileRefreshTimer = null
 }
 
-function scheduleTerrainProfileCorrection(route: Airline) {
+function scheduleTerrainProfileCorrection(
+  route: Airline,
+  options?: { force?: boolean },
+) {
   cancelTerrainProfileRefresh()
 
   const routeCode = String(route.unicode)
   const startedAt = Date.now()
+  let consecutiveLoadedChecks = 0
+  let fallbackRendered = false
 
   const refreshWhenTerrainReady = () => {
     const routeChanged =
@@ -653,16 +734,32 @@ function scheduleTerrainProfileCorrection(route: Airline) {
     const elapsed = Date.now() - startedAt
     const terrainLoaded = window.viewer?.scene?.globe?.tilesLoaded !== false
     const minimumWaitComplete = elapsed >= 2000
-    const timedOut = elapsed >= 10000
+    const fallbackTimedOut = elapsed >= 10000
+    const hardTimedOut = elapsed >= 30000
 
-    if ((minimumWaitComplete && terrainLoaded) || timedOut) {
+    consecutiveLoadedChecks = terrainLoaded ? consecutiveLoadedChecks + 1 : 0
+
+    const terrainStable = consecutiveLoadedChecks >= 3
+
+    if (minimumWaitComplete && terrainStable) {
       terrainProfileRefreshTimer = null
 
-      if (!getCachedRouteProfile(selectedRoute.value)) {
+      if (options?.force || !getCachedRouteProfile(selectedRoute.value)) {
         drawRouteProfile(selectedRoute.value, { force: true })
       }
 
-      nextTick(() => myChart?.resize())
+      nextTick(resizeProfileChart)
+      return
+    }
+
+    if (fallbackTimedOut && !fallbackRendered) {
+      fallbackRendered = true
+      drawRouteProfile(selectedRoute.value, { force: true })
+      nextTick(resizeProfileChart)
+    }
+
+    if (hardTimedOut) {
+      terrainProfileRefreshTimer = null
       return
     }
 
@@ -721,6 +818,7 @@ function refreshWeatherOfCurrentPoint() {
 function refreshSelectedRouteView(options?: {
   refreshWeather?: boolean
   forceRefreshPtList?: boolean
+  deferProfile?: boolean
 }) {
   if (!selectedRoute.value?.points) return
 
@@ -738,16 +836,26 @@ function refreshSelectedRouteView(options?: {
     refreshPtList()
   }
 
-  if (activeTab.value === 'profile') {
-    drawRouteProfile(selectedRoute.value)
-  }
+  const routeToProfile = options?.deferProfile ? undefined : selectedRoute.value
+  const routeToProfileCode = String(routeToProfile?.unicode ?? '')
 
   if (options?.refreshWeather && activeTab.value === 'weather') {
     refreshWeatherOfCurrentPoint()
   }
 
   nextTick(() => {
-    if (activeTab.value === 'profile') myChart?.resize()
+    if (activeTab.value === 'profile') {
+      resizeProfileChart()
+
+      if (
+        routeToProfile &&
+        hasSelectedRoute.value &&
+        String(selectedRoute.value.unicode) === routeToProfileCode
+      ) {
+        drawRouteProfile(routeToProfile)
+      }
+    }
+
     if (activeTab.value === 'weather') weatherChart?.resize()
   })
 }
@@ -846,7 +954,7 @@ function selectAndShowRoute(
   route: Airline,
   options?: { flyTo?: boolean; refreshWeather?: boolean },
 ) {
-  if (!routeManage || !route) return
+  if (!routeManage || !route || route.isVisible === false) return
 
   normalizeRouteForBiz(route)
 
@@ -873,12 +981,31 @@ function selectAndShowRoute(
 
   routeDirty.value = false
 
+  const deferProfile =
+    activeTab.value === 'profile' &&
+    Boolean(options?.flyTo) &&
+    !getCachedRouteProfile(route)
+
   refreshSelectedRouteView({
     refreshWeather: options?.refreshWeather ?? true,
     forceRefreshPtList: true,
+    deferProfile,
   })
+
   if (options?.flyTo) {
     flyToRoute(route, 2)
+  }
+
+  if (deferProfile) {
+    cancelPendingProfileSampling()
+    cancelTerrainProfileRefresh()
+
+    nextTick(() => {
+      const chart = ensureProfileChart()
+      chart?.clear()
+      showRouteProfileLoading()
+      scheduleTerrainProfileCorrection(route, { force: true })
+    })
   }
 
   return entity
@@ -889,6 +1016,12 @@ function selectAndShowRoute(
  */
 function checkRoute(key: number | string) {
   if (!ensureRouteActionIdle()) {
+    selectedRouteCode.value = selectedRoute.value?.unicode ?? null
+    return
+  }
+
+  if (!isRouteVisible(key)) {
+    uiMsg.warning('请先显示该航线')
     selectedRouteCode.value = selectedRoute.value?.unicode ?? null
     return
   }
@@ -921,6 +1054,11 @@ function checkRoute(key: number | string) {
 
 function selectRouteById(routeId: string | number) {
   if (!ensureRouteActionIdle()) {
+    return false
+  }
+
+  if (!isRouteVisible(routeId)) {
+    console.warn('[selectRouteById] 航线已隐藏:', routeId)
     return false
   }
 
@@ -960,6 +1098,11 @@ function startEditSelectedRoute() {
     uiMsg.warning('请先选择一条航线')
     return
   }
+  if (selectedRoute.value.isVisible === false) {
+    uiMsg.warning('请先显示该航线')
+    return
+  }
+  //询问routeStore 能否进入编辑状态
   if (!routeStore.startEditing()) {
     uiMsg.warning('请先结束当前航线绘制或编辑操作')
     return
@@ -1400,18 +1543,90 @@ function delRoute(routeUnicode: string | number) {
   clearRouteProfileCache(routeUnicode)
 
   if (String(selectedRouteCode.value) === String(routeUnicode)) {
-    selectedRouteCode.value = null
-    selectedRoute.value = newAirline()
-    routePtNumber.value = 1
-    isRouteEditing.value = false
-    routeDirty.value = false
-
-    cancelPendingProfileSampling()
-    myChart?.clear()
-    weatherChart?.clear()
+    clearSelectedRouteState()
   }
 
   uiMsg.success('航线 ' + selectedRouteToDelete.name + ' 已删除')
+}
+
+function isRouteVisible(routeUnicode: string | number) {
+  const route = routeStore.flyRoute.find(
+    (element) => String(element.unicode) === String(routeUnicode),
+  )
+
+  return Boolean(route && route.isVisible !== false)
+}
+
+function clearSelectedRouteState() {
+  selectedRouteCode.value = null
+  selectedRoute.value = newAirline()
+  routePtNumber.value = 1
+  isRouteEditing.value = false
+  routeDirty.value = false
+
+  cancelPendingProfileSampling()
+  cancelTerrainProfileRefresh()
+  myChart?.clear()
+  weatherChart?.clear()
+}
+
+function warnRouteVisibilityBusy() {
+  if (isRouteDrawing()) {
+    uiMsg.warning('请先完成航线绘制，再切换显示状态')
+    return
+  }
+
+  if (isRouteEditing.value || routeManage?.mode === 'editing') {
+    uiMsg.warning('请先保存或取消当前编辑，再切换显示状态')
+    return
+  }
+
+  uiMsg.warning('请先结束当前航线操作')
+}
+
+function toggleRouteVisibility(routeUnicode: string | number) {
+  if (!isRouteActionIdle()) {
+    warnRouteVisibilityBusy()
+    return
+  }
+
+  const route = routeStore.flyRoute.find(
+    (element) => String(element.unicode) === String(routeUnicode),
+  )
+
+  if (!route) {
+    uiMsg.warning('未找到相应的航线')
+    return
+  }
+
+  const nextVisible = route.isVisible === false
+  const routeItem = routeManage?.routesMap?.get?.(String(routeUnicode))
+
+  if (
+    routeItem &&
+    !routeManage.setRouteVisibility?.(routeUnicode, nextVisible)
+  ) {
+    uiMsg.warning('航线显示状态切换失败')
+    return
+  }
+
+  if (!routeStore.setRouteVisibility(routeUnicode, nextVisible)) {
+    uiMsg.warning('航线显示状态切换失败')
+    return
+  }
+
+  if (!routeItem) {
+    const entity = getRouteEntity(route)
+    if (entity) entity.show = nextVisible
+    window.viewer.scene.requestRender()
+  }
+
+  if (
+    !nextVisible &&
+    String(selectedRouteCode.value) === String(routeUnicode)
+  ) {
+    clearSelectedRouteState()
+  }
 }
 
 function importRoute() {
@@ -1632,6 +1847,11 @@ function handlePtClick(RouteUnicode?: string | number) {
     return
   }
 
+  if (RouteUnicode == null || !isRouteVisible(RouteUnicode)) {
+    uiMsg.warning('请先显示该航线')
+    return
+  }
+
   const route = routeStore.flyRoute.find(
     (element) => String(element.unicode) === String(RouteUnicode),
   )
@@ -1735,9 +1955,38 @@ function handlePtClick(RouteUnicode?: string | number) {
                       "
                       @click="handlePtClick(r.value)"
                     >
-                      <n-radio :key="r.value" :value="r.value">
-                        {{ r.label }}
-                      </n-radio>
+                      <n-space align="center" :wrap="false" :size="4">
+                        <!-- <n-popover trigger="hover">
+                          <template #trigger> -->
+                        <n-button
+                          data-route-visibility-toggle="true"
+                          quaternary
+                          circle
+                          size="tiny"
+                          :type="r.visible ? 'success' : 'default'"
+                          :aria-label="r.visible ? '隐藏航线' : '显示航线'"
+                          style="width: 1.5rem; height: 1.5rem"
+                          @click.stop="toggleRouteVisibility(r.value)"
+                        >
+                          <template #icon>
+                            <n-icon>
+                              <EyeOutline v-if="r.visible" />
+                              <EyeOffOutline v-else />
+                            </n-icon>
+                          </template>
+                        </n-button>
+                        <!-- </template>
+                          {{ r.visible ? '隐藏航线' : '显示航线' }}
+                        </n-popover> -->
+
+                        <n-radio
+                          :key="r.value"
+                          :value="r.value"
+                          :disabled="!r.visible"
+                        >
+                          {{ r.label }}
+                        </n-radio>
+                      </n-space>
 
                       <n-button-group>
                         <n-button
@@ -2075,9 +2324,13 @@ function handlePtClick(RouteUnicode?: string | number) {
   background: transparent !important;
 }
 
+#right :deep(.n-layout-scroll-container) {
+  overflow: hidden auto;
+}
+
 #echarts-profile {
-  height: 44vh;
   width: 100%;
+  height: clamp(240px, 42vh, 460px);
 }
 
 .routePtSelector {

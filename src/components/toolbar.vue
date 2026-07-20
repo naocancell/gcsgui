@@ -768,6 +768,7 @@ function startDrawRoute(routeParams) {
         points: AirlinePoints, //航点的数组
         totalDistance: 0,//总距离
         isDesignRoute: true,//是否是设计航线
+        isVisible: true,//航线管理页面默认显示
       }
       //将航线存放到routeStore中
       routeStore.addRoute(aRoute)

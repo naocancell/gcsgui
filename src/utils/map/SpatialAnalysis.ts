@@ -770,7 +770,8 @@ export const drawEcharts_RouteDetection = (
       grid: {
         containLabel: true,
         top: '15%',
-        right: '6%',
+        // Reserve enough space for the x-axis name in the narrow route panel.
+        right: 64,
         left: ' 5%',
         bottom: '5%',
       },
@@ -806,7 +807,6 @@ export const drawEcharts_RouteDetection = (
         formatter: (params: any) => {
           const items = Array.isArray(params) ? params : [params]
           const distance = Number(items[0]?.axisValue ?? 0)
-          const lines = [`距离: ${Math.round(distance)}m`]
           const maxDistance = Math.max(
             0,
             xData[xData.length - 1] ?? 0,
@@ -814,7 +814,7 @@ export const drawEcharts_RouteDetection = (
           )
           const waypointHitTolerance = Math.max(
             1,
-            (maxDistance / Math.max(myChart.getWidth(), 1)) * 10,
+            (maxDistance / Math.max(myChart.getWidth(), 1)) * 2,
           )
           let nearestWaypointIndex = -1
           let nearestWaypointDistance = Number.POSITIVE_INFINITY
@@ -828,17 +828,35 @@ export const drawEcharts_RouteDetection = (
             }
           })
 
+          let nearestTerrainIndex = -1
+          let nearestTerrainDistance = Number.POSITIVE_INFINITY
+
+          xData.forEach((terrainDistance, index) => {
+            const distanceToTerrain = Math.abs(terrainDistance - distance)
+
+            if (distanceToTerrain < nearestTerrainDistance) {
+              nearestTerrainIndex = index
+              nearestTerrainDistance = distanceToTerrain
+            }
+          })
+
+          const terrainHeight =
+            nearestTerrainIndex >= 0 ? yData[nearestTerrainIndex] : undefined
+          const lines: string[] = []
+
           if (
             nearestWaypointIndex >= 0 &&
             nearestWaypointDistance <= waypointHitTolerance
           ) {
             lines.push(`航点: ${routeArr[nearestWaypointIndex]}`)
+            lines.push(`航点高度: ${routeHeight[nearestWaypointIndex]}m`)
           }
 
-          items.forEach((item: any) => {
-            const value = Array.isArray(item.value) ? item.value[1] : item.value
-            lines.push(`${item.marker}${item.seriesName}: ${value}m`)
-          })
+          if (terrainHeight != null) {
+            lines.push(`地形高度: ${terrainHeight}m`)
+          }
+
+          lines.push(`距离: ${Math.round(distance)}m`)
 
           return lines.join('<br>')
         },
@@ -899,7 +917,7 @@ export const drawEcharts_RouteDetection = (
           lineStyle: {
             color: '#8ae73d',
           },
-          symbolSize: 11,
+          symbolSize: 7,
           emphasis: {
             scale: 1.5,
             itemStyle: {

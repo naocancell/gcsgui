@@ -34,6 +34,17 @@ export const useRouteStore = defineStore('RouteStore', {
         this.flyRoute.splice(index, 1)
       }
     },
+    setRouteVisibility(unicode: string | number, visible: boolean) {
+      const route = this.flyRoute.find(
+        (item: Airline) => String(item.unicode) === String(unicode),
+      )
+
+      if (!route) return false
+
+      route.isVisible = visible
+      this.flyRoute = [...this.flyRoute]
+      return true
+    },
     startDrawing() {
       if (this.routeActionMode !== 'idle') return false
       this.routeActionMode = 'drawing'

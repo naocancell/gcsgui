@@ -55,6 +55,7 @@ export type Airline = {
   totalDistance: number
   points: AirlinePoint[]
   isDesignRoute?: boolean //是否为设计航线（用于三维增强渲染和高度预警）
+  isVisible?: boolean //航线管理页面中的显示状态，默认显示
 }
 
 export type routeTerrain = {

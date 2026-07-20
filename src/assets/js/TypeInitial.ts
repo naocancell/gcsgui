@@ -18,6 +18,7 @@ export function newAirline() {
     PtNum: undefined,
     code: undefined,
     isClose: false,
+    isVisible: true,
     name: '',
     points: [],
     totalDistance: undefined,
