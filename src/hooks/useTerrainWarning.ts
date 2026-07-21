@@ -5,7 +5,8 @@ import { ref } from 'vue'
 interface TerrainWarningOptions {
   distance?: number      // 前视距离, 默认 1000 米
   steps?: number         // 把这段距离切成多少段, 默认 20,也就是 21 个点
-  intervalMs?: number    // 多久采样一次,默认 500 毫秒
+  intervalMs?: number    // 最小采样间隔, 0 表示跟随 Cesium tick 尽快刷新
+  terrainLevel?: number  // 固定地形采样等级, 不跟随相机缩放变化
   warnClearance?: number // 净空低于这个值就报警,默认 100 米
 }
 //面板展示的数据 后面是一个数组
@@ -14,6 +15,11 @@ export interface TerrainProfilePoint {
   terrainHeight: number
   flightHeight: number
   clearance: number  
+}
+
+interface TerrainSampleResult {
+  heights: number[]
+  level: number
 }
 //算出前方一排地面点
 function buildForwardGroundPoints(
@@ -95,30 +101,16 @@ function buildForwardGroundPoints(
     distances,
   }
 }
-//查询地形高度
-function getTerrainHeightsFromGlobe(
+//从三维地形查出来的数据中获取到高度，判断是否都查询成功
+function getValidTerrainHeights(
   cartographics: Cesium.Cartographic[],
+  terrainLevel: number,
 ): number[] | null {
-  //拿到地球对象
-  const globe = window.viewer.scene.globe
-
   const heights: number[] = []
   const invalidIndexes: number[] = []
 
   cartographics.forEach((carto, index) => {
-    /*
-     * 创建一个高度为0的新对象。
-     * 避免任何原始高度参与查询结果。
-     */
-    const queryPoint =
-      new Cesium.Cartographic(
-        carto.longitude,
-        carto.latitude,
-        0,
-      )
-
-    const height =
-      globe.getHeight(queryPoint)
+    const height = carto.height
 
     if (
       height === undefined ||
@@ -134,7 +126,7 @@ function getTerrainHeightsFromGlobe(
 
   if (invalidIndexes.length > 0) {
     console.warn(
-      '部分天地图地形瓦片尚未加载：',
+      `固定 ${terrainLevel} 级地形采样失败：`,
       invalidIndexes,
     )
 
@@ -142,6 +134,66 @@ function getTerrainHeightsFromGlobe(
   }
 
   return heights
+}
+//从一个固定的瓦片等级下查询高度
+async function sampleTerrainAtExactLevel(
+  viewer: Cesium.Viewer,
+  cartographics: Cesium.Cartographic[],
+  terrainLevel: number,
+): Promise<TerrainSampleResult | null> {
+  //返回一个新数组，数组中的每个元素都是Cesium.Cartographic对象，高度设为0
+  const queryPoints = cartographics.map(
+    (carto) =>
+      new Cesium.Cartographic(
+        carto.longitude,
+        carto.latitude,
+        0,
+      ),
+  )
+
+  try {
+    const sampledPoints = await Cesium.sampleTerrain(
+      viewer.terrainProvider,
+      terrainLevel,
+      queryPoints,
+    )
+
+    const heights = getValidTerrainHeights(sampledPoints, terrainLevel)
+
+    return heights ? { heights, level: terrainLevel } : null
+  } catch (error) {
+    console.warn(`固定 ${terrainLevel} 级地形采样异常：`, error)
+    return null
+  }
+}
+
+async function getTerrainHeightsAtLevel(
+  viewer: Cesium.Viewer,
+  cartographics: Cesium.Cartographic[],
+  terrainLevel: number,
+  cachedLevel?: number,
+): Promise<TerrainSampleResult | null> {
+  if (cachedLevel !== undefined && cachedLevel <= terrainLevel) {
+    const cachedResult = await sampleTerrainAtExactLevel(
+      viewer,
+      cartographics,
+      cachedLevel,
+    )
+
+    if (cachedResult) return cachedResult
+  }
+
+  for (let level = terrainLevel; level >= 0; level--) {
+    const result = await sampleTerrainAtExactLevel(
+      viewer,
+      cartographics,
+      level,
+    )
+
+    if (result) return result
+  }
+
+  return null
 }
 //主函数
 export function useTerrainWarning(
@@ -154,13 +206,15 @@ export function useTerrainWarning(
     const {
         distance = 1000,
         steps = 20,
-        intervalMs = 500,
+        intervalMs = 0,
+        terrainLevel = 11,
         warnClearance = 100,
     } = options
 
     const active = ref(false)
     const isWarning = ref(false)
     const minClearance = ref<number>(Infinity)//实时的最低净空
+    const actualTerrainLevel = ref<number | null>(null)
 
     // 给左侧面板用的剖面数据
     const profilePoints = ref<TerrainProfilePoint[]>([])
@@ -174,6 +228,9 @@ export function useTerrainWarning(
 
     let lastSampleTime = 0 // 上次采样的时间戳(节流用)
     let sampling = false  //是否正在采样(防重入)
+    let pendingSample = false //采样期间有新 tick 时，结束后立即补采最新位置
+    let sampleVersion = 0
+    let cachedTerrainLevel: number | undefined
     function createEntities() {
         if (!flightEntity) {
         flightEntity = viewer.entities.add({
@@ -198,7 +255,7 @@ export function useTerrainWarning(
                 return isWarning.value ? Cesium.Color.RED : Cesium.Color.LIME
                 }, false),
             ),
-            clampToGround: true,
+            clampToGround: false,
             },
         })
         }
@@ -206,18 +263,25 @@ export function useTerrainWarning(
 
 
     async function update() {
-        const now = Date.now()
+        if (!active.value) return
+
+        const now = performance.now()
 
         /*
         * 把节流放到最前面。
         * 避免Cesium每一帧都重新计算前向点。
         */
-        if (
-            sampling ||
-            now - lastSampleTime < intervalMs
-        ) {
+        if (sampling) {
+            pendingSample = true
             return
         }
+
+        if (intervalMs > 0 && now - lastSampleTime < intervalMs) {
+            pendingSample = true
+            return
+        }
+
+        pendingSample = false
 
         const aircraftPosition =
             getAircraftPosition()
@@ -246,6 +310,7 @@ export function useTerrainWarning(
 
         lastSampleTime = now
         sampling = true
+        const currentSampleVersion = ++sampleVersion
 
         try {
             const aircraftCarto =
@@ -272,19 +337,33 @@ export function useTerrainWarning(
             )
 
             /*
-            * 直接读取Cesium Globe中已经加载的天地图地形。
+            * 按固定地形等级采样，不使用 globe.getHeight。
+            * globe.getHeight 依赖相机当前加载到的瓦片，缩放会改变精度。
             */
-            const terrainHeights =getTerrainHeightsFromGlobe(cartographics,)
+            const terrainSample = await getTerrainHeightsAtLevel(
+                viewer,
+                cartographics,
+                terrainLevel,
+                cachedTerrainLevel,
+            )
+
+            if (!active.value || currentSampleVersion !== sampleVersion) {
+                return
+            }
 
             /*
-            * 天地图瓦片尚未加载时，不使用旧高度，
+            * 固定等级地形采样失败时，不使用旧高度，
             * 也不使用0，等待下一次更新重试。
             */
-            if (!terrainHeights) {console.log('前方地形瓦片尚未加载，等待下一次采样')
+            if (!terrainSample) {console.log('前方固定等级地形采样失败，等待下一次采样')
 
             viewer.scene.requestRender()
             return
         }
+
+        cachedTerrainLevel = terrainSample.level
+        actualTerrainLevel.value = terrainSample.level
+        const terrainHeights = terrainSample.heights
 
         /*
         * 飞机预计飞行轨迹线：
@@ -357,6 +436,9 @@ export function useTerrainWarning(
         isWarning.value = false
     } finally {
         sampling = false
+        if (pendingSample && active.value) {
+            void update()
+        }
     }
     }
 
@@ -375,6 +457,7 @@ export function useTerrainWarning(
         active.value = false
         isWarning.value = false
         minClearance.value = Infinity
+        actualTerrainLevel.value = null
 
         profilePoints.value = []
 
@@ -385,6 +468,11 @@ export function useTerrainWarning(
         removeTick()
         removeTick = null
         }
+
+        pendingSample = false
+        sampling = false
+        sampleVersion++
+        cachedTerrainLevel = undefined
 
         if (flightEntity) {
         viewer.entities.remove(flightEntity)
@@ -409,6 +497,7 @@ export function useTerrainWarning(
         active,
         isWarning,
         minClearance,
+        actualTerrainLevel,
         profilePoints,
         distance,
         warnClearance,
