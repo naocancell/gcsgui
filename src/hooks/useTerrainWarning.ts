@@ -364,7 +364,7 @@ export function useTerrainWarning(
         if (active.value) return
 
         active.value = true
-        createEntities()
+        // createEntities()
 
         removeTick = viewer.clock.onTick.addEventListener(() => {
             update()

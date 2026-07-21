@@ -21,7 +21,7 @@ import {
   Airplane,
   RemoveOutline,
   InformationSharp,
-  InformationCircleOutline
+  InformationCircleOutline,
 } from '@vicons/ionicons5'
 //引入监听hooks和飞机数据状态管理
 
@@ -29,7 +29,7 @@ import { RulerAlt } from '@vicons/carbon'
 import { TerrainSharp } from '@vicons/material'
 import { DrawPolygon } from '@vicons/fa'
 import { useMessage } from 'naive-ui'
-import { ref, watch, computed,onBeforeUnmount, onMounted} from 'vue'
+import { ref, watch, computed, onBeforeUnmount, onMounted } from 'vue'
 import { useStaticStore } from '@/store/staticOptions.js'
 import { useUavStore } from '@/store/uavStore'
 import {
@@ -80,7 +80,7 @@ declare global {
 const selectedPlaneStore = useSelectedPlaneStore()
 const { selectedModel, selectedMeta } = storeToRefs(selectedPlaneStore)
 const terrainWarningApi = ref<ReturnType<typeof useTerrainWarning> | null>(null)
- 
+
 const router = useRouter()
 
 const emit = defineEmits(['resizeMap'])
@@ -105,6 +105,8 @@ SceneValue = ref('untrace')
 let frameCount = 0
 let lastPos = undefined //飞机上一时点的坐标
 let companionMode = ref(false) // 是否处于伴飞模式
+let companionModel: Cesium.Model | null = null
+let removeCompanionRender: (() => void) | null = null
 const altitudeWarningResult = ref(null) // 高度预警结果
 
 let routeDrawViewer: RouteManageViewer | null = null
@@ -113,8 +115,6 @@ let routeDrawViewer: RouteManageViewer | null = null
 let nfzViewer = null
 let showNFZ = ref(false)
 let mainCloseUnlisten: (() => void) | null = null
-
-
 
 function getRouteManageViewer() {
   if (!window.viewer) {
@@ -128,7 +128,6 @@ function getRouteManageViewer() {
   return window.routeManageViewer
 }
 
-
 function toggleNFZ() {
   if (!nfzViewer && window.viewer) {
     nfzViewer = new NFZViewer(window.viewer)
@@ -138,18 +137,94 @@ function toggleNFZ() {
     nfzViewer.toggleNFZ(showNFZ.value)
   }
 }
-function handleSceneSelect(key) {
-  if (!hasPlane.value) return
+function stopCompanionMode() {
+  const viewer = window.viewer as Cesium.Viewer | undefined
+  removeCompanionRender?.()
+  removeCompanionRender = null
 
-  if (key === 'untrace') {
-    window.measureViewer.setNoTrack()
-    companionMode.value = false
-  } else if (key === 'companion') {
-    // 三维伴飞：锁定飞机在屏幕中央 + 渲染设计航线三维效果
-    window.viewer.trackedEntity = window.viewer.entities.getById(
-      store.uav.ModelIDinMap,
+  if (viewer) {
+    viewer.trackedEntity = undefined
+    viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY)
+  }
+
+  companionModel = null
+  companionMode.value = false
+  SceneValue.value = 'untrace'
+}
+
+function startCompanionMode() {
+  const viewer = window.viewer as Cesium.Viewer | undefined
+  const model = selectedModel.value
+  if (
+    !viewer ||
+    !model ||
+    model.isDestroyed() ||
+    !viewer.scene.primitives.contains(model)
+  ) {
+    stopCompanionMode()
+    message.warning('请先在地图上选中一架飞机')
+    return
+  }
+
+  removeCompanionRender?.()
+  companionModel = model
+
+  const initialHeading = Cesium.Math.toRadians(
+    getSelectedAircraftHeading() ?? 0,
+  )
+  const followDistance = 250
+  const targetPosition = new Cesium.Cartesian3()
+  const initialCameraOffset = new Cesium.HeadingPitchRange(
+    initialHeading,
+    Cesium.Math.toRadians(-20),
+    followDistance,
+  )
+  const cameraOffset = new Cesium.Cartesian3()
+  let hasAppliedInitialView = false
+
+  const updateCompanionCamera = () => {
+    if (
+      !companionModel ||
+      companionModel.isDestroyed() ||
+      !viewer.scene.primitives.contains(companionModel)
+    ) {
+      stopCompanionMode()
+      return
+    }
+
+    // camera.position 是以上一帧飞机为原点的局部偏移，包含用户的旋转和缩放。
+    if (hasAppliedInitialView) {
+      Cesium.Cartesian3.clone(viewer.camera.position, cameraOffset)
+    }
+
+    Cesium.Matrix4.getTranslation(
+      companionModel.modelMatrix,
+      targetPosition,
     )
-    companionMode.value = true
+
+    viewer.camera.lookAt(
+      targetPosition,
+      hasAppliedInitialView ? cameraOffset : initialCameraOffset,
+    )
+    hasAppliedInitialView = true
+  }
+
+  viewer.scene.preRender.addEventListener(updateCompanionCamera)
+  removeCompanionRender = () => {
+    viewer.scene.preRender.removeEventListener(updateCompanionCamera)
+  }
+  updateCompanionCamera()
+  companionMode.value = true
+  SceneValue.value = 'companion'
+}
+
+function handleSceneSelect(key) {
+  if (key === 'untrace') {
+    stopCompanionMode()
+  } else if (key === 'companion') {
+    startCompanionMode()
+    if (!companionMode.value) return
+
     // 渲染当前所有航线的三维效果
     const routeStore = useRouteStore()
     routeStore.flyRoute.forEach((route) => {
@@ -164,7 +239,7 @@ function handleSceneSelect(key) {
   }
 }
 
-function handleObstacleSelect(key){
+function handleObstacleSelect(key) {
   if (key === 'loadObstacle') {
     addAllObstacles()
   }
@@ -181,7 +256,7 @@ function openCloseBar() {
   // 判断工具条的class是否包含open，如果包含则移除，否则添加
   if (toolbar?.classList.contains('open')) {
     //关闭
-    
+
     toolbar?.classList.remove('open')
   } else {
     // 打开
@@ -191,8 +266,8 @@ function openCloseBar() {
 }
 //防止上一次绘制没结束
 function handleEditSelect(key) {
-   const routeStore = useRouteStore()
-   if (key === 'createLine') {
+  const routeStore = useRouteStore()
+  if (key === 'createLine') {
     // if (isDrawingRoute.value) {
     //   message.warning('请先结束上一次航线绘制：Esc 取消绘制，Enter 结束绘制')
     //   return
@@ -356,8 +431,6 @@ async function connectWebSocket() {
             ycData.uavId + ycData.uavType,
           )
           hasPlane.value = true
-          SceneValue.value = 'companion'
-          handleSceneSelect('companion')
         }
         // 加载和更新碰撞检测图(50帧更新一次) (只在联网模式下启用)
         if (
@@ -605,8 +678,6 @@ watch(
           ycData.uavId + ycData.uavType,
         )
         hasPlane.value = true
-        SceneValue.value = 'companion'
-        handleSceneSelect('companion')
       }
       // 加载和更新碰撞检测图(50帧更新一次) (只在联网模式下启用)
       frameCount++
@@ -716,7 +787,7 @@ function startDrawRoute(routeParams) {
 
   if (!window.viewer) {
     message.error('地图尚未初始化')
-    routeStore.endRouteAction()//设置未空闲状态
+    routeStore.endRouteAction() //设置未空闲状态
     return
   }
   //航线管理绘制类
@@ -724,7 +795,7 @@ function startDrawRoute(routeParams) {
 
   if (!routeDrawViewer) {
     message.error('航线管理器初始化失败')
-    routeStore.endRouteAction()//设置未空闲状态
+    routeStore.endRouteAction() //设置未空闲状态
     return
   }
 
@@ -766,9 +837,9 @@ function startDrawRoute(routeParams) {
         unicode: getUnicode(), //航线唯一码
         name: routeParams.name, //航线名称（不是航线编号）
         points: AirlinePoints, //航点的数组
-        totalDistance: 0,//总距离
-        isDesignRoute: true,//是否是设计航线
-        isVisible: true,//航线管理页面默认显示
+        totalDistance: 0, //总距离
+        isDesignRoute: true, //是否是设计航线
+        isVisible: true, //航线管理页面默认显示
       }
       //将航线存放到routeStore中
       routeStore.addRoute(aRoute)
@@ -841,12 +912,21 @@ function getSelectedAircraftHeading() {
   }
 
   if (meta.kind === 'fp95') {
-    return uavStore.fp95Map.get(meta.key)?.adsYaw
+    const fp95 = uavStore.fp95Aggregate
+    if (fp95 && `fp95:${fp95.uavId}` === meta.key) {
+      return fp95.frame81?.headingAngle ?? fp95.frame83?.groundTrack
+    }
+  }
+
+  if (meta.kind === 'fp981c') {
+    const fp981c = uavStore.fp981cMap.get(meta.key.replace('fp981c:', ''))
+    return (
+      (fp981c?.c1?.head_angle ?? fp981c?.c2?.ground_speed_direct ?? 0) / 100
+    )
   }
 
   return undefined
 }
-
 
 const profileWidth = 340
 const profileHeight = 180
@@ -871,7 +951,9 @@ const profileRange = computed(() => {
 
 function profileX(distanceM: number) {
   const usableWidth = profileWidth - profilePadding * 2
-  return profilePadding + (distanceM / terrainWarningDistance.value) * usableWidth
+  return (
+    profilePadding + (distanceM / terrainWarningDistance.value) * usableWidth
+  )
 }
 
 function profileY(height: number) {
@@ -921,18 +1003,18 @@ onMounted(async () => {
     getSelectedAircraftHeading,
     {
       distance: 10000,
-      steps: 50,//每1000米采样10个点
+      steps: 50, //每1000米采样10个点
       intervalMs: 100,
       warnClearance: 100,
-    },//传递的参数
+    }, //传递的参数
   )
 })
 
 onBeforeUnmount(() => {
+  stopCompanionMode()
   terrainWarningApi.value?.stop()
   if (mainCloseUnlisten) mainCloseUnlisten()
 })
-
 
 const terrainWarningActive = computed(
   () => terrainWarningApi.value?.active ?? false,
@@ -947,7 +1029,7 @@ const terrainWarningMinClearance = computed(
 )
 
 const terrainProfilePoints = computed(
-  () => terrainWarningApi.value?.profilePoints?? [],
+  () => terrainWarningApi.value?.profilePoints ?? [],
 )
 
 const terrainWarningDistance = computed(
@@ -968,18 +1050,22 @@ const terrainWarningStatusText = computed(() => {
     : `安全：最小离地高度 ${clearance} m`
 })
 
-
 function toggleSelectedPlaneTerrainWarning() {
-  
+  // 关闭操作不依赖当前选中状态，确保再次点击总能关闭检测和面板。
+  if (terrainWarningActive.value) {
+    terrainWarningApi.value?.stop()
+    return
+  }
+
   if (!selectedModel.value || !selectedMeta.value) {
     message.warning('请先选中一架飞机')
     return
   }
 
-  terrainWarningApi.value?.toggle()
+  terrainWarningApi.value?.start()
 }
 
-const {addAllObstacles,toggleObstaclesVisible} = useMarkObstacle() 
+const { addAllObstacles, toggleObstaclesVisible } = useMarkObstacle()
 
 async function showTelemetryInfo() {
   try {
@@ -1031,7 +1117,7 @@ async function showTelemetryInfo() {
           </template>
         </n-button>
       </n-dropdown>
-       <!-- 航线 -->
+      <!-- 航线 -->
       <n-dropdown
         :options="store.menuOptions.EditOptions"
         @select="handleEditSelect"
@@ -1043,7 +1129,7 @@ async function showTelemetryInfo() {
           </template>
         </n-button>
       </n-dropdown>
-       <!-- 测量 -->
+      <!-- 测量 -->
       <n-dropdown
         :options="store.menuOptions.MeasureOptions"
         @select="handleSelect"
@@ -1067,7 +1153,12 @@ async function showTelemetryInfo() {
       <!-- 禁飞区 -->
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
-          <n-button tertiary circle :type="showNFZ ? 'error' : 'warning'" @click="toggleNFZ">
+          <n-button
+            tertiary
+            circle
+            :type="showNFZ ? 'error' : 'warning'"
+            @click="toggleNFZ"
+          >
             <template #icon>
               <n-icon v-if="showNFZ"><ShieldCheckmark /></n-icon>
               <n-icon v-else><ShieldOutline /></n-icon>
@@ -1089,9 +1180,13 @@ async function showTelemetryInfo() {
       </n-tooltip>
 
       <!-- 模拟uavinfo -->
-       <n-tooltip placement="bottom" trigger="hover">
+      <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
-          <n-button tertiary type="warning" @click="uavStore.toggleMockUavInfoService">
+          <n-button
+            tertiary
+            type="warning"
+            @click="uavStore.toggleMockUavInfoService"
+          >
             <template #icon>
               <n-icon><Airplane /></n-icon>
             </template>
@@ -1100,39 +1195,45 @@ async function showTelemetryInfo() {
         <span>飞机实时位置</span>
       </n-tooltip>
 
-    <n-tooltip placement="bottom" trigger="hover">
-      <template #trigger>
-        <n-button
-          tertiary
-          circle
-          :type="terrainWarningActive ? 'error' : 'warning'"
-          @click="toggleSelectedPlaneTerrainWarning"
-        >
-          <template #icon>
-            <n-icon><Airplane /></n-icon>
-          </template>
-        </n-button>
-      </template>
-      <span>
-        {{ terrainWarningActive ? '关闭高度预警' : '开启高度预警' }}
-      </span>
-    </n-tooltip>
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
+          <n-button
+            tertiary
+            circle
+            :type="terrainWarningActive ? 'error' : 'warning'"
+            @click="toggleSelectedPlaneTerrainWarning"
+          >
+            <template #icon>
+              <n-icon><Airplane /></n-icon>
+            </template>
+          </n-button>
+        </template>
+        <span>
+          {{ terrainWarningActive ? '关闭高度预警' : '开启高度预警' }}
+        </span>
+      </n-tooltip>
 
-       <!-- 通视和剖面 -->
+      <!-- 通视和剖面 -->
       <n-popselect
         v-model:value="SceneValue"
         :options="store.menuOptions.sceneOptions"
+        :disabled="!selectedModel && !companionMode"
         @update:value="handleSceneSelect"
         size="medium"
       >
-        <n-button tertiary circle type="warning">
+        <n-button
+          tertiary
+          circle
+          :disabled="!selectedModel && !companionMode"
+          :type="companionMode ? 'success' : 'warning'"
+        >
           <template #icon>
             <n-icon><EyeSharp /></n-icon>
           </template>
         </n-button>
       </n-popselect>
-    <!-- 有用户选择加载机场建筑物-->
-           <n-dropdown
+      <!-- 有用户选择加载机场建筑物-->
+      <n-dropdown
         :options="store.menuOptions.obstacleOptions"
         @select="handleObstacleSelect"
       >
@@ -1144,8 +1245,8 @@ async function showTelemetryInfo() {
         </n-button>
       </n-dropdown>
 
-        <!-- 航电信息 -->
-       <n-tooltip placement="bottom" trigger="hover">
+      <!-- 航电信息 -->
+      <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
           <n-button tertiary type="warning" @click="showTelemetryInfo">
             <template #icon>
@@ -1168,17 +1269,17 @@ async function showTelemetryInfo() {
         <span>刷新页面</span>
       </n-tooltip>
       <!-- 最小化程序 -->
-    <n-tooltip placement="bottom" trigger="hover">
-      <template #trigger>
-        <n-button tertiary type="warning" @click="minimizeApp">
-          <template #icon>
-            <n-icon><RemoveOutline /></n-icon>
-          </template>
-        </n-button>
-      </template>
-      <span>最小化</span>
-    </n-tooltip>
-    <!-- 关闭程序 -->
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
+          <n-button tertiary type="warning" @click="minimizeApp">
+            <template #icon>
+              <n-icon><RemoveOutline /></n-icon>
+            </template>
+          </n-button>
+        </template>
+        <span>最小化</span>
+      </n-tooltip>
+      <!-- 关闭程序 -->
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
           <n-button tertiary type="error" @click="closeApp">
@@ -1219,7 +1320,7 @@ async function showTelemetryInfo() {
       <CollisionDetection ref="collisionDetection"></CollisionDetection>
     </n-flex>
   </n-collapse-transition>
-<!-- 是否显示模型 -->
+  <!-- 是否显示模型 -->
   <n-modal
     v-model:show="showModal"
     style="width: 30%"
@@ -1263,7 +1364,7 @@ async function showTelemetryInfo() {
       </n-space>
     </div>
   </n-modal>
-<!-- 控制是否展示Udp界面 -->
+  <!-- 控制是否展示Udp界面 -->
   <n-modal
     v-model:show="showUdpModal"
     style="width: 48%; min-width: 550px"
@@ -1272,7 +1373,7 @@ async function showTelemetryInfo() {
     title=""
   >
     <template #header>
-      <div style="font-weight: bold; font-size: 16px;">多通道通信配置</div>
+      <div style="font-weight: bold; font-size: 16px">多通道通信配置</div>
     </template>
     <div style="margin: 1rem 1rem 0.5rem 1rem">
       <n-tabs type="segment" animated>
@@ -1282,7 +1383,7 @@ async function showTelemetryInfo() {
             :model="uavStore"
             label-placement="left"
             label-width="auto"
-            style="margin-top: 1.2rem;"
+            style="margin-top: 1.2rem"
           >
             <n-form-item label="组播地址">
               <n-input v-model:value="uavStore.udpIp" placeholder="226.0.1.9" />
@@ -1330,10 +1431,13 @@ async function showTelemetryInfo() {
             :model="uavStore"
             label-placement="left"
             label-width="auto"
-            style="margin-top: 1.2rem;"
+            style="margin-top: 1.2rem"
           >
             <n-form-item label="组播地址">
-              <n-input v-model:value="uavStore.fp95Ip" placeholder="226.0.1.9" />
+              <n-input
+                v-model:value="uavStore.fp95Ip"
+                placeholder="226.0.1.9"
+              />
             </n-form-item>
             <n-form-item label="本地接收端口">
               <n-input-number
@@ -1371,7 +1475,7 @@ async function showTelemetryInfo() {
             :model="uavStore"
             label-placement="left"
             label-width="auto"
-            style="margin-top: 1.2rem;"
+            style="margin-top: 1.2rem"
           >
             <n-form-item label="串口号">
               <n-select
@@ -1401,10 +1505,18 @@ async function showTelemetryInfo() {
             </n-form-item>
           </n-form>
           <n-space justify="center" style="margin-top: 1rem">
-            <n-button @click="startMainSerialService" type="primary" size="small">
+            <n-button
+              @click="startMainSerialService"
+              type="primary"
+              size="small"
+            >
               开启通信
             </n-button>
-            <n-button @click="stopMainSerialService" type="warning" size="small">
+            <n-button
+              @click="stopMainSerialService"
+              type="warning"
+              size="small"
+            >
               关闭通信
             </n-button>
           </n-space>
@@ -1416,7 +1528,7 @@ async function showTelemetryInfo() {
             :model="uavStore"
             label-placement="left"
             label-width="auto"
-            style="margin-top: 1.2rem;"
+            style="margin-top: 1.2rem"
           >
             <n-form-item label="串口号">
               <n-select
@@ -1446,7 +1558,11 @@ async function showTelemetryInfo() {
             </n-form-item>
           </n-form>
           <n-space justify="center" style="margin-top: 1rem">
-            <n-button @click="startSubSerialService" type="primary" size="small">
+            <n-button
+              @click="startSubSerialService"
+              type="primary"
+              size="small"
+            >
               开启通信
             </n-button>
             <n-button @click="stopSubSerialService" type="warning" size="small">
@@ -1463,112 +1579,100 @@ async function showTelemetryInfo() {
       </n-space>
     </div>
   </n-modal>
-<!-- 高度预警是否显示 -->
-<div v-if="terrainWarningActive" class="terrain-warning-panel">
-  <div class="terrain-warning-panel__header">
-    <div>
-      <div class="terrain-warning-panel__title">高度预警</div>
-      <div class="terrain-warning-panel__sub-title">
-        前方 {{ terrainWarningDistance }} m 地形剖面
+  <!-- 高度预警是否显示 -->
+  <div v-if="terrainWarningActive" class="terrain-warning-panel">
+    <div class="terrain-warning-panel__header">
+      <div>
+        <div class="terrain-warning-panel__title">高度预警</div>
+        <div class="terrain-warning-panel__sub-title">
+          前方 {{ terrainWarningDistance }} m 地形剖面
+        </div>
       </div>
+
+      <n-tag :type="terrainWarningIsDanger ? 'error' : 'success'" size="small">
+        {{ terrainWarningIsDanger ? '预警' : '正常' }}
+      </n-tag>
     </div>
 
-    <n-tag :type="terrainWarningIsDanger ? 'error' : 'success'" size="small">
-      {{ terrainWarningIsDanger ? '预警' : '正常' }}
-    </n-tag>
+    <div class="terrain-warning-panel__status">
+      {{ terrainWarningStatusText }}
+    </div>
+
+    <svg
+      class="terrain-profile-svg"
+      :viewBox="`0 0 ${profileWidth} ${profileHeight}`"
+    >
+      <!-- 坐标轴 -->
+      <line
+        :x1="profilePadding"
+        :y1="profileHeight - profilePadding"
+        :x2="profileWidth - profilePadding"
+        :y2="profileHeight - profilePadding"
+        class="profile-axis"
+      />
+      <line
+        :x1="profilePadding"
+        :y1="profilePadding"
+        :x2="profilePadding"
+        :y2="profileHeight - profilePadding"
+        class="profile-axis"
+      />
+
+      <!-- 地形线 -->
+      <polyline
+        v-if="terrainPolylinePoints"
+        :points="terrainPolylinePoints"
+        class="profile-terrain-line"
+      />
+
+      <!-- 飞机预计飞行轨迹线 -->
+      <polyline
+        v-if="flightPolylinePoints"
+        :points="flightPolylinePoints"
+        class="profile-flight-line"
+      />
+
+      <!-- 文本标注 -->
+      <text :x="profilePadding" :y="profileHeight - 6" class="profile-label">
+        0m
+      </text>
+
+      <text
+        :x="profileWidth - profilePadding - 34"
+        :y="profileHeight - 6"
+        class="profile-label"
+      >
+        {{ terrainWarningDistance }}m
+      </text>
+
+      <text :x="4" :y="profilePadding + 4" class="profile-label">
+        {{ profileMaxHeightLabel }}m
+      </text>
+
+      <text :x="4" :y="profileHeight - profilePadding" class="profile-label">
+        {{ profileMinHeightLabel }}m
+      </text>
+    </svg>
+
+    <div class="terrain-warning-panel__legend">
+      <span>
+        <i class="legend-line legend-line--flight"></i>
+        预计轨迹
+      </span>
+
+      <span>
+        <i
+          class="legend-line"
+          :class="
+            terrainWarningIsDanger
+              ? 'legend-line--terrain-danger'
+              : 'legend-line--terrain-safe'
+          "
+        ></i>
+        地形剖面
+      </span>
+    </div>
   </div>
-
-  <div class="terrain-warning-panel__status">
-    {{ terrainWarningStatusText }}
-  </div>
-
-  <svg
-    class="terrain-profile-svg"
-    :viewBox="`0 0 ${profileWidth} ${profileHeight}`"
-  >
-    <!-- 坐标轴 -->
-    <line
-      :x1="profilePadding"
-      :y1="profileHeight - profilePadding"
-      :x2="profileWidth - profilePadding"
-      :y2="profileHeight - profilePadding"
-      class="profile-axis"
-    />
-    <line
-      :x1="profilePadding"
-      :y1="profilePadding"
-      :x2="profilePadding"
-      :y2="profileHeight - profilePadding"
-      class="profile-axis"
-    />
-
-    <!-- 地形线 -->
-    <polyline
-      v-if="terrainPolylinePoints"
-      :points="terrainPolylinePoints"
-      class="profile-terrain-line"
-    />
-
-    <!-- 飞机预计飞行轨迹线 -->
-    <polyline
-      v-if="flightPolylinePoints"
-      :points="flightPolylinePoints"
-      class="profile-flight-line"
-    />
-
-    <!-- 文本标注 -->
-    <text
-      :x="profilePadding"
-      :y="profileHeight - 6"
-      class="profile-label"
-    >
-      0m
-    </text>
-
-    <text
-      :x="profileWidth - profilePadding - 34"
-      :y="profileHeight - 6"
-      class="profile-label"
-    >
-      {{ terrainWarningDistance }}m
-    </text>
-
-    <text
-      :x="4"
-      :y="profilePadding + 4"
-      class="profile-label"
-    >
-      {{ profileMaxHeightLabel }}m
-    </text>
-
-    <text
-      :x="4"
-      :y="profileHeight - profilePadding"
-      class="profile-label"
-    >
-      {{ profileMinHeightLabel }}m
-    </text>
-  </svg>
-
-  <div class="terrain-warning-panel__legend">
-    <span>
-      <i class="legend-line legend-line--flight"></i>
-      预计轨迹
-    </span>
-
-    <span>
-      <i
-        class="legend-line"
-        :class="
-          terrainWarningIsDanger
-            ? 'legend-line--terrain-danger'
-            : 'legend-line--terrain-safe'
-        "
-      ></i>
-      地形剖面
-    </span>
-  </div>
-</div>
   <SpatialAnalysis ref="spatialAnalyse"></SpatialAnalysis>
   <LayerManager ref="layerManager"></LayerManager>
   <RouteOptions
