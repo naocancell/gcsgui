@@ -227,13 +227,13 @@ onMounted(() => {
   }
   //当航线被编辑变化后会执行这个回调
   routeManage.onRouteChanged = (line: Airline) => {
-    selectedRoute.value = line//这是被编辑后的最新航线
+    selectedRoute.value = line //这是被编辑后的最新航线
     routeDirty.value = true
 
     normalizeRouteForBiz(selectedRoute.value)
-    scheduleProfileRefresh()//剖面刷新
+    scheduleProfileRefresh() //剖面刷新
 
-    refreshPtList()//刷新航点详情列表
+    refreshPtList() //刷新航点详情列表
   }
 
   routeManage.onEditStateChanged = (editing: boolean) => {
@@ -1873,7 +1873,7 @@ function handlePtClick(RouteUnicode?: string | number) {
         @change.capture="blockRouteManageWhenDrawing"
         @wheel.capture="blockRouteManageWhenDrawing"
       >
-        <n-layout style="height: 100%">
+        <n-layout class="route-manage-layout">
           <n-layout-header :bordered="true">
             <n-space justify="space-between" align="center">
               <n-space>
@@ -1932,18 +1932,19 @@ function handlePtClick(RouteUnicode?: string | number) {
           </n-layout-header>
 
           <n-layout-content
-            style="height: calc(100% - 61px)"
-            content-style="height:100%; padding:0;"
+            class="route-manage-content"
+            content-style="height: 100%; padding: 0; display: flex; flex-direction: column; overflow: hidden;"
           >
-            <n-flex vertical style="margin: 0.5rem 1rem; overflow: hidden">
+            <n-flex vertical class="route-overview">
               <n-ellipsis><h3>航线列表</h3></n-ellipsis>
 
               <n-radio-group
+                class="route-list-group"
                 v-model:value="selectedRouteCode"
                 name="radiogroup"
                 @update:value="checkRoute"
               >
-                <n-scrollbar style="height: 26vh">
+                <n-scrollbar class="route-list-scrollbar">
                   <n-space vertical>
                     <n-space
                       v-for="r in routesListRef"
@@ -2068,9 +2069,9 @@ function handlePtClick(RouteUnicode?: string | number) {
               </n-space>
             </n-flex>
 
-            <n-divider style="margin: 0.2rem -0.5rem"></n-divider>
+            <n-divider class="section-divider"></n-divider>
 
-            <n-space justify="center" style="margin: 0.3rem 0">
+            <n-space justify="center" class="route-tabs">
               <n-button-group>
                 <n-button
                   size="small"
@@ -2098,10 +2099,10 @@ function handlePtClick(RouteUnicode?: string | number) {
               </n-button-group>
             </n-space>
 
-            <n-divider style="margin: 0.2rem -0.5rem"></n-divider>
+            <n-divider class="section-divider"></n-divider>
 
-            <div v-show="activeTab === 'detail'">
-              <n-flex vertical>
+            <div v-show="activeTab === 'detail'" class="route-tab-panel">
+              <n-flex vertical class="route-detail-panel">
                 <n-space justify="space-around" style="margin-top: 0.5rem">
                   <n-ellipsis style="width: 2rem; margin-left: 0.2rem">
                     序号
@@ -2111,7 +2112,7 @@ function handlePtClick(RouteUnicode?: string | number) {
                   <n-ellipsis style="width: 3rem">高度</n-ellipsis>
                 </n-space>
 
-                <n-scrollbar style="height: 44vh">
+                <n-scrollbar class="route-tab-scrollbar">
                   <div v-if="selectedRoute.points.length > 0 && showPtList">
                     <n-space
                       v-for="(pt, index) in selectedRoute.points"
@@ -2214,8 +2215,8 @@ function handlePtClick(RouteUnicode?: string | number) {
               </n-flex>
             </div>
 
-            <div v-show="activeTab === 'profile'">
-              <n-flex vertical style="margin: 0.5rem 0">
+            <div v-show="activeTab === 'profile'" class="route-tab-panel">
+              <n-flex vertical class="route-profile-panel">
                 <n-space justify="space-evenly" style="padding: 0 0.5rem">
                   <n-ellipsis>采样间隔</n-ellipsis>
 
@@ -2243,8 +2244,11 @@ function handlePtClick(RouteUnicode?: string | number) {
               </n-flex>
             </div>
 
-            <div v-show="activeTab === 'weather' && hasSelectedRoute">
-              <n-flex vertical>
+            <div
+              v-show="activeTab === 'weather' && hasSelectedRoute"
+              class="route-tab-panel"
+            >
+              <n-flex vertical class="route-weather-panel">
                 <n-space justify="space-around" class="routePtSelector">
                   <n-button
                     size="small"
@@ -2285,7 +2289,7 @@ function handlePtClick(RouteUnicode?: string | number) {
                 <n-scrollbar
                   x-scrollable
                   id="weatherChart"
-                  style="width: 100%; height: 44vh"
+                  class="route-weather-chart"
                 ></n-scrollbar>
               </n-flex>
             </div>
@@ -2310,7 +2314,8 @@ function handlePtClick(RouteUnicode?: string | number) {
 }
 
 #right {
-  width: 26vw;
+  width: clamp(360px, 26vw, 480px);
+  max-width: 100vw;
   height: 100vh;
   pointer-events: auto;
   background: rgba(16, 16, 20, 0.75);
@@ -2324,19 +2329,90 @@ function handlePtClick(RouteUnicode?: string | number) {
   background: transparent !important;
 }
 
-#right :deep(.n-layout-scroll-container) {
-  overflow: hidden auto;
+.route-manage-layout {
+  height: 100%;
+}
+
+.route-manage-content {
+  height: calc(100% - 61px);
+}
+
+#right :deep(.route-manage-content > .n-layout-scroll-container) {
+  overflow: hidden;
+}
+
+.route-overview {
+  flex: 0 1 42%;
+  min-height: 0;
+  margin: 0.5rem 1rem 0;
+  overflow: hidden;
+}
+
+.route-overview h3 {
+  margin: 0.5rem 0;
+}
+
+.route-list-group {
+  display: block;
+  flex: 1;
+  min-height: 0;
+}
+
+.route-list-scrollbar,
+.route-tab-scrollbar {
+  height: 100%;
+}
+
+.section-divider {
+  flex: none;
+  margin: 0.2rem -0.5rem;
+}
+
+.route-tabs {
+  flex: none;
+  margin: 0.3rem 0;
+}
+
+.route-tab-panel {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.route-detail-panel,
+.route-profile-panel,
+.route-weather-panel {
+  height: 100%;
+  min-height: 0;
+}
+
+.route-profile-panel {
+  margin: 0.5rem 0;
 }
 
 #echarts-profile {
+  flex: 1;
+  min-height: 0;
   width: 100%;
-  height: clamp(240px, 42vh, 460px);
+  height: 100%;
 }
 
 .routePtSelector {
   width: 100%;
   font-weight: bold;
   color: #63e2b7;
+}
+
+.route-weather-chart {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+@media (max-width: 600px) {
+  #right {
+    width: 100vw;
+  }
 }
 
 .routePtSelector:hover {
