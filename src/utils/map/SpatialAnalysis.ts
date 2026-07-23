@@ -5,13 +5,65 @@
  */
 
 import { getDistance, getElevation } from '@/utils/map/geocomputation.ts'
-import { Cartesian3, Viewer } from 'cesium'
+import { Cartesian3, Cartographic, EllipsoidGeodesic, Viewer } from 'cesium'
 import * as echarts from 'echarts'
 import { EChartsType } from 'echarts'
 import { Airline } from '@/types/entityoptions.ts'
+import { getTerrainHeightsAtLevel } from '@/utils/map/terrainSampling'
 type ProfileResult = {
   distanceArray: number[]
   elevationArray: number[]
+  terrainLevel?: number
+}
+
+function getProfileSamplePositions(
+  start: Cartesian3,
+  end: Cartesian3,
+  interval: number,
+) {
+  const cartographics: Cartographic[] = []
+  const distanceArray: number[] = []
+  const startCartographic = Cartographic.fromCartesian(start)
+  const endCartographic = Cartographic.fromCartesian(end)
+  const isSameSurfacePosition =
+    startCartographic.longitude === endCartographic.longitude &&
+    startCartographic.latitude === endCartographic.latitude
+  const geodesic = isSameSurfacePosition
+    ? null
+    : new EllipsoidGeodesic(startCartographic, endCartographic)
+  const totalLen = geodesic?.surfaceDistance ?? 0
+
+  cartographics.push(
+    new Cartographic(
+      startCartographic.longitude,
+      startCartographic.latitude,
+      0,
+    ),
+  )
+  distanceArray.push(0)
+
+  if (interval > 0 && geodesic) {
+    for (
+      let sampleDistance = interval;
+      sampleDistance + 0.5 < totalLen;
+      sampleDistance += interval
+    ) {
+      cartographics.push(
+        geodesic.interpolateUsingSurfaceDistance(
+          sampleDistance,
+          new Cartographic(),
+        ),
+      )
+      distanceArray.push(Math.round(sampleDistance))
+    }
+  }
+
+  cartographics.push(
+    new Cartographic(endCartographic.longitude, endCartographic.latitude, 0),
+  )
+  distanceArray.push(Math.round(totalLen))
+
+  return { cartographics, distanceArray }
 }
 
 /**
@@ -28,33 +80,16 @@ export function elevationProfile(
   end: Cartesian3,
   interval: number,
 ) {
-  let breakPointsHeight: number[] = [] //断点的高程m
-  let distanceFromStart: number[] = [] //断点至起点的距离m
-  // 计算首尾点距离 m
-  let totalLen = getDistance(start, end) * 1000
-  // 获取起点高度及其与起点的距离
-  breakPointsHeight.push(Math.round(getElevation(viewer, start)))
-  distanceFromStart.push(0)
+  const { cartographics, distanceArray } = getProfileSamplePositions(
+    start,
+    end,
+    interval,
+  )
+  const elevationArray = cartographics.map((point) =>
+    Math.round(getElevation(viewer, point)),
+  )
 
-  //获取中间断点的高度及其与起点的距离
-  if (interval > 0) {
-    //断点数量
-    let breakNum = Math.floor(totalLen / interval)
-    // 如果采样间隔小于首尾点距离，则获取每个断点的坐标 并获取其高度
-    if (breakNum >= 1) {
-      for (let i = 1; i < breakNum; i++) {
-        let breakP = Cartesian3.lerp(start, end, i / breakNum, new Cartesian3())
-        breakPointsHeight.push(Math.round(getElevation(viewer, breakP))) //单位 米
-        distanceFromStart.push(Math.round(getDistance(start, breakP) * 1000)) //单位 米
-      }
-    }
-  }
-
-  // 获取终点高度及其与起点的距离
-  breakPointsHeight.push(Math.round(getElevation(viewer, end)))
-  distanceFromStart.push(Math.round(totalLen))
-
-  return { distanceArray: distanceFromStart, elevationArray: breakPointsHeight }
+  return { distanceArray, elevationArray }
 }
 
 /**
@@ -82,6 +117,56 @@ export function profileAnalyse(
     }
   }
   return result
+}
+
+/**
+ * 使用高度预警共用的地形接口，以指定等级为起点采样折线剖面。
+ */
+export async function profileAnalyseAtTerrainLevel(
+  viewer: Viewer,
+  polyline: Cartesian3[],
+  interval: number,
+  terrainLevel: number,
+): Promise<ProfileResult> {
+  const distanceArray: number[] = []
+  const cartographics: Cartographic[] = []
+  let accumulatedDistance = 0
+
+  for (let index = 0; index < polyline.length - 1; index++) {
+    const segment = getProfileSamplePositions(
+      polyline[index],
+      polyline[index + 1],
+      interval,
+    )
+
+    segment.distanceArray.forEach((distance) => {
+      distanceArray.push(distance + accumulatedDistance)
+    })
+    cartographics.push(...segment.cartographics)
+    accumulatedDistance = distanceArray[distanceArray.length - 1] ?? 0
+  }
+
+  const terrainSample = await getTerrainHeightsAtLevel(
+    viewer,
+    cartographics,
+    terrainLevel,
+    undefined,
+    {
+      batchSize: 100,
+      attemptsPerLevel: 3,
+      retryDelayMs: 150,
+    },
+  )
+
+  if (!terrainSample) {
+    throw new Error(`${terrainLevel} 级及以下地形均采样失败`)
+  }
+
+  return {
+    distanceArray,
+    elevationArray: terrainSample.heights.map((height) => Math.round(height)),
+    terrainLevel: terrainSample.level,
+  }
 }
 
 /**

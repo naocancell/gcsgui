@@ -78,7 +78,7 @@ export default class RouteManageViewer {
     this.selectedEditVertexEntity = undefined
     this.selectedEditVertexInfo = undefined
 
-    this.segmentLabelMaxCameraDistance = 30000
+    this.segmentLabelMaxCameraDistance = 300000
     this.segmentLabelMinPixelLength = 64
     this.segmentLabelLayer = undefined
     this.routeSegmentLabelEls = new Map()
@@ -103,6 +103,16 @@ export default class RouteManageViewer {
     // 绑定后保存固定引用，便于移除事件
     this.enforceEditViewPitch = this.enforceEditViewPitch.bind(this)
   }
+
+  getMinimumRoutePointCount(route = this.routeParams) {
+    return route?.isClose ? 3 : 2
+  }
+
+  getRoutePointCountWarning(route = this.routeParams) {
+    const minimum = this.getMinimumRoutePointCount(route)
+    return `${route?.isClose ? '闭合' : '非闭合'}航线至少需要 ${minimum} 个航点`
+  }
+
   /**
    * 进入编辑模式：
    *
@@ -747,7 +757,7 @@ flyToRoute(line, duration = 1.5) {
         pixelSize: 7,
         outlineColor: Cesium.Color.RED,
         outlineWidth: 2,
-        disableDepthTestDistance: 50000,//在一定距离条件下，关闭这个实体的深度测试。
+        disableDepthTestDistance: 1500000,//在一定距离条件下，关闭这个实体的深度测试。
       },
       label: {
         text: '航点 ' + (index + 1),
@@ -761,7 +771,7 @@ flyToRoute(line, duration = 1.5) {
         showBackground: true,
         backgroundColor: new Cesium.Color(0.165, 0.165, 0.165, 0.99),
         backgroundPadding: new Cesium.Cartesian2(15, 7),
-        disableDepthTestDistance: 50000,//在一定距离条件下，关闭这个实体的深度测试
+        disableDepthTestDistance: 1500000,//在一定距离条件下，关闭这个实体的深度测试
       },
     })
     //用于判断选中类型、选中的是第几个用于删除
@@ -1687,7 +1697,7 @@ showEditVertexMenu(screenPosition, routeId, vertexIndex) {
       () => {
         this.deleteVertex(routeId, vertexIndex)
       },
-      line.points.length <= 3,
+      line.points.length <= this.getMinimumRoutePointCount(line),
     ),
   )
 
@@ -1982,8 +1992,11 @@ createPointAfter(line, vertexIndex) {
 
     const line = routeItem.line
 
-    if (!line.points || line.points.length <= 3) {
-      console.warn('航线至少需要保留 3 个航点')
+    if (
+      !line.points ||
+      line.points.length <= this.getMinimumRoutePointCount(line)
+    ) {
+      console.warn(this.getRoutePointCountWarning(line))
       return false
     }
 
@@ -2543,7 +2556,7 @@ disableCameraControls() {
       createItem(
         '结束绘制',
         () => this.finishDraw(),
-        this.positions.length < 3,
+        this.positions.length < this.getMinimumRoutePointCount(),
       ),
     )
 
@@ -2616,8 +2629,8 @@ disableCameraControls() {
 finishDraw() {
   if (this.mode !== 'drawing') return false
 
-  if (this.positions.length < 3) {
-    console.warn('航线不得少于3个航点！')
+  if (this.positions.length < this.getMinimumRoutePointCount()) {
+    console.warn(this.getRoutePointCountWarning())
     return false
   }
 

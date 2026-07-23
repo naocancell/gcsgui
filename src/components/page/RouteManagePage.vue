@@ -19,7 +19,7 @@ import type { EChartsType } from 'echarts'
 import { getDistance, transLonlat2Car3 } from '@/utils/map/geocomputation.ts'
 import {
   drawEcharts_RouteDetection,
-  profileAnalyse,
+  profileAnalyseAtTerrainLevel,
 } from '@/utils/map/SpatialAnalysis.ts'
 import RouteManageViewer from '@/assets/js/RouteManageViewer.js'
 import {
@@ -64,6 +64,7 @@ let weatherChart: EChartsType | undefined = undefined
 let profileChartResizeObserver: ResizeObserver | null = null
 
 const MAX_ROUTE_PROFILE_SAMPLES = 5000
+const ROUTE_PROFILE_TERRAIN_LEVEL = 11
 
 const routeStore = useRouteStore()
 const sStore = useStaticStore()
@@ -81,7 +82,6 @@ const dialog = useDialog()
 let nowTime = ref('')
 let timer: ReturnType<typeof setInterval> | null = null
 let profileRefreshTimer: ReturnType<typeof setTimeout> | null = null
-let terrainProfileRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let profileSamplingTimer: ReturnType<typeof setTimeout> | null = null
 let profileSamplingFrame: number | null = null
 let profileSamplingRequestId = 0
@@ -303,7 +303,6 @@ onBeforeUnmount(() => {
   }
 
   cancelPendingProfileSampling()
-  cancelTerrainProfileRefresh()
   profileChartResizeObserver?.disconnect()
   profileChartResizeObserver = null
 
@@ -333,7 +332,6 @@ function switchTab(tab: 'detail' | 'profile' | 'weather') {
     }
 
     cancelPendingProfileSampling()
-    cancelTerrainProfileRefresh()
   }
 
   nextTick(() => {
@@ -341,16 +339,7 @@ function switchTab(tab: 'detail' | 'profile' | 'weather') {
       resizeProfileChart()
 
       if (hasSelectedRoute.value) {
-        const hasCachedProfile = getCachedRouteProfile(selectedRoute.value)
-
         drawRouteProfile(selectedRoute.value)
-
-        if (
-          !hasCachedProfile &&
-          window.viewer?.scene?.globe?.tilesLoaded === false
-        ) {
-          scheduleTerrainProfileCorrection(selectedRoute.value)
-        }
       }
     }
 
@@ -401,6 +390,15 @@ function normalizeRouteForBiz(route: Airline) {
   }
 
   route.PtNum = route.points.length
+}
+
+function getMinimumRoutePointCount(route: Pick<Airline, 'isClose'>) {
+  return route.isClose ? 3 : 2
+}
+
+function getRoutePointCountWarning(route: Pick<Airline, 'isClose'>) {
+  const minimum = getMinimumRoutePointCount(route)
+  return `${route.isClose ? '闭合' : '非闭合'}航线至少需要 ${minimum} 个航点`
 }
 
 /**
@@ -504,6 +502,7 @@ function getRouteProfileCacheKey(
   return JSON.stringify([
     String(route.unicode),
     interval,
+    ROUTE_PROFILE_TERRAIN_LEVEL,
     Boolean(route.isClose),
     route.points.map((point) => [
       Number(point.lon),
@@ -511,14 +510,6 @@ function getRouteProfileCacheKey(
       Number(point.alt),
     ]),
   ])
-}
-
-function getCachedRouteProfile(route: Airline) {
-  if (!route?.unicode || !route.points?.length) return undefined
-
-  return routeProfileCache.get(
-    getRouteProfileCacheKey(route, getProfileInterval()),
-  )
 }
 
 function cacheRouteProfile(
@@ -638,7 +629,7 @@ function drawRouteProfile(route: Airline, options?: { force?: boolean }) {
   profileSamplingFrame = requestAnimationFrame(() => {
     profileSamplingFrame = null
 
-    profileSamplingTimer = setTimeout(() => {
+    profileSamplingTimer = setTimeout(async () => {
       profileSamplingTimer = null
 
       if (requestId !== profileSamplingRequestId) return
@@ -651,11 +642,20 @@ function drawRouteProfile(route: Airline, options?: { force?: boolean }) {
           Math.max(0, cartesianPositions.length - 1),
           interval,
         )
-        const result = profileAnalyse(
+        const result = await profileAnalyseAtTerrainLevel(
           window.viewer,
           cartesianPositions,
           effectiveInterval,
+          ROUTE_PROFILE_TERRAIN_LEVEL,
         )
+
+        if (requestId !== profileSamplingRequestId) return
+
+        if (result.terrainLevel !== ROUTE_PROFILE_TERRAIN_LEVEL) {
+          console.info(
+            `航线地形剖面使用 ${result.terrainLevel} 级地形（请求等级 ${ROUTE_PROFILE_TERRAIN_LEVEL}）`,
+          )
+        }
         const data: RouteProfileChartData = {
           distanceArray: result.distanceArray,
           elevationArray: result.elevationArray,
@@ -670,12 +670,12 @@ function drawRouteProfile(route: Airline, options?: { force?: boolean }) {
           routeDistanceArr,
         }
 
-        if (window.viewer?.scene?.globe?.tilesLoaded !== false) {
-          cacheRouteProfile(route, cacheKey, data)
-        }
+        cacheRouteProfile(route, cacheKey, data)
 
         renderRouteProfile(data)
       } catch (error) {
+        if (requestId !== profileSamplingRequestId) return
+
         console.error('[drawRouteProfile] 地形剖面采样失败：', error)
         uiMsg.error('地形剖面采样失败')
       } finally {
@@ -690,83 +690,11 @@ function drawRouteProfile(route: Airline, options?: { force?: boolean }) {
 function redrawRouteProfile() {
   if (!hasSelectedRoute.value) return
 
-  cancelTerrainProfileRefresh()
   drawRouteProfile(selectedRoute.value, { force: true })
-
-  if (window.viewer?.scene?.globe?.tilesLoaded === false) {
-    scheduleTerrainProfileCorrection(selectedRoute.value)
-  }
 }
 
 function handleProfileIntervalChanged() {
   cancelPendingProfileSampling()
-  cancelTerrainProfileRefresh()
-}
-
-function cancelTerrainProfileRefresh() {
-  if (!terrainProfileRefreshTimer) return
-
-  clearTimeout(terrainProfileRefreshTimer)
-  terrainProfileRefreshTimer = null
-}
-
-function scheduleTerrainProfileCorrection(
-  route: Airline,
-  options?: { force?: boolean },
-) {
-  cancelTerrainProfileRefresh()
-
-  const routeCode = String(route.unicode)
-  const startedAt = Date.now()
-  let consecutiveLoadedChecks = 0
-  let fallbackRendered = false
-
-  const refreshWhenTerrainReady = () => {
-    const routeChanged =
-      String(selectedRoute.value?.unicode) !== routeCode ||
-      activeTab.value !== 'profile'
-
-    if (routeChanged) {
-      terrainProfileRefreshTimer = null
-      return
-    }
-
-    const elapsed = Date.now() - startedAt
-    const terrainLoaded = window.viewer?.scene?.globe?.tilesLoaded !== false
-    const minimumWaitComplete = elapsed >= 2000
-    const fallbackTimedOut = elapsed >= 10000
-    const hardTimedOut = elapsed >= 30000
-
-    consecutiveLoadedChecks = terrainLoaded ? consecutiveLoadedChecks + 1 : 0
-
-    const terrainStable = consecutiveLoadedChecks >= 3
-
-    if (minimumWaitComplete && terrainStable) {
-      terrainProfileRefreshTimer = null
-
-      if (options?.force || !getCachedRouteProfile(selectedRoute.value)) {
-        drawRouteProfile(selectedRoute.value, { force: true })
-      }
-
-      nextTick(resizeProfileChart)
-      return
-    }
-
-    if (fallbackTimedOut && !fallbackRendered) {
-      fallbackRendered = true
-      drawRouteProfile(selectedRoute.value, { force: true })
-      nextTick(resizeProfileChart)
-    }
-
-    if (hardTimedOut) {
-      terrainProfileRefreshTimer = null
-      return
-    }
-
-    terrainProfileRefreshTimer = setTimeout(refreshWhenTerrainReady, 300)
-  }
-
-  terrainProfileRefreshTimer = setTimeout(refreshWhenTerrainReady, 300)
 }
 
 function scheduleProfileRefresh() {
@@ -818,7 +746,6 @@ function refreshWeatherOfCurrentPoint() {
 function refreshSelectedRouteView(options?: {
   refreshWeather?: boolean
   forceRefreshPtList?: boolean
-  deferProfile?: boolean
 }) {
   if (!selectedRoute.value?.points) return
 
@@ -836,7 +763,7 @@ function refreshSelectedRouteView(options?: {
     refreshPtList()
   }
 
-  const routeToProfile = options?.deferProfile ? undefined : selectedRoute.value
+  const routeToProfile = selectedRoute.value
   const routeToProfileCode = String(routeToProfile?.unicode ?? '')
 
   if (options?.refreshWeather && activeTab.value === 'weather') {
@@ -981,31 +908,13 @@ function selectAndShowRoute(
 
   routeDirty.value = false
 
-  const deferProfile =
-    activeTab.value === 'profile' &&
-    Boolean(options?.flyTo) &&
-    !getCachedRouteProfile(route)
-
   refreshSelectedRouteView({
     refreshWeather: options?.refreshWeather ?? true,
     forceRefreshPtList: true,
-    deferProfile,
   })
 
   if (options?.flyTo) {
     flyToRoute(route, 2)
-  }
-
-  if (deferProfile) {
-    cancelPendingProfileSampling()
-    cancelTerrainProfileRefresh()
-
-    nextTick(() => {
-      const chart = ensureProfileChart()
-      chart?.clear()
-      showRouteProfileLoading()
-      scheduleTerrainProfileCorrection(route, { force: true })
-    })
   }
 
   return entity
@@ -1125,6 +1034,14 @@ function startEditSelectedRoute() {
 async function saveRouteEdit(): Promise<boolean> {
   if (!selectedRoute.value?.unicode || !selectedRoute.value.points?.length) {
     uiMsg.warning('请先选择一条有效的航线')
+    return false
+  }
+
+  if (
+    selectedRoute.value.points.length <
+    getMinimumRoutePointCount(selectedRoute.value)
+  ) {
+    uiMsg.warning(getRoutePointCountWarning(selectedRoute.value))
     return false
   }
 
@@ -1353,8 +1270,11 @@ function handlePtSelect(key: any, index: number) {
   if (!selectedRoute.value?.points) return
 
   if (key === 'deletePt') {
-    if (selectedRoute.value.points.length <= 3) {
-      uiMsg.warning('航线至少需要保留 3 个航点')
+    if (
+      selectedRoute.value.points.length <=
+      getMinimumRoutePointCount(selectedRoute.value)
+    ) {
+      uiMsg.warning(getRoutePointCountWarning(selectedRoute.value))
       return
     }
 
@@ -1485,6 +1405,12 @@ function levelChanged(key: string | number) {
 function handleRouteCloseChanged(value: boolean) {
   if (!selectedRoute.value?.unicode) return
 
+  if (value && selectedRoute.value.points.length < 3) {
+    selectedRoute.value.isClose = false
+    uiMsg.warning('闭合航线至少需要 3 个航点')
+    return
+  }
+
   selectedRoute.value.isClose = value
   normalizeRouteForBiz(selectedRoute.value)
 
@@ -1565,7 +1491,6 @@ function clearSelectedRouteState() {
   routeDirty.value = false
 
   cancelPendingProfileSampling()
-  cancelTerrainProfileRefresh()
   myChart?.clear()
   weatherChart?.clear()
 }
@@ -1716,6 +1641,11 @@ function parseRouteFile(fileName: string, content: string) {
 
   removeDuplicatedClosingPoint(newRoute)
   normalizeRouteForBiz(newRoute)
+
+  if (newRoute.points.length < getMinimumRoutePointCount(newRoute)) {
+    uiMsg.error(getRoutePointCountWarning(newRoute))
+    return
+  }
 
   routeStore.addRoute(newRoute)
 

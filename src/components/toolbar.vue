@@ -61,7 +61,10 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { storeToRefs } from 'pinia'
 //选中飞机以及高度预警
-import { useSelectedPlaneStore } from '@/store/selectedPlaneStore'
+import {
+  useSelectedPlaneStore,
+  type SelectedPlaneMeta,
+} from '@/store/selectedPlaneStore'
 import { useTerrainWarning } from '@/hooks/useTerrainWarning'
 import { useMarkObstacle } from '@/hooks/useMarkObstacle.ts'
 import {
@@ -80,6 +83,12 @@ declare global {
 const selectedPlaneStore = useSelectedPlaneStore()
 const { selectedModel, selectedMeta } = storeToRefs(selectedPlaneStore)
 const terrainWarningApi = ref<ReturnType<typeof useTerrainWarning> | null>(null)
+type TerrainWarningTarget = {
+  model: Cesium.Model
+  meta: SelectedPlaneMeta
+}
+let terrainWarningTarget: TerrainWarningTarget | null = null
+const terrainWarningTargetLabel = ref('')
 
 const router = useRouter()
 
@@ -218,24 +227,11 @@ function startCompanionMode() {
   SceneValue.value = 'companion'
 }
 
-function handleSceneSelect(key) {
-  if (key === 'untrace') {
+function activeCompanionMode() {
+  if (companionMode.value) {
     stopCompanionMode()
-  } else if (key === 'companion') {
+  } else {
     startCompanionMode()
-    if (!companionMode.value) return
-
-    // 渲染当前所有航线的三维效果
-    const routeStore = useRouteStore()
-    routeStore.flyRoute.forEach((route) => {
-      route.isDesignRoute = true
-      window.measureViewer.showDesignRoute3D(route)
-    })
-    // 同时渲染 layerStore 中的航线
-    lStore.navi.airlines.forEach((route) => {
-      route.isDesignRoute = true
-      window.measureViewer.showDesignRoute3D(route)
-    })
   }
 }
 
@@ -892,21 +888,15 @@ function startDrawRoute(routeParams) {
       routeStore.endRouteAction() //设置空闲状态
     })
 }
-//拿到选中的飞机模型的世界坐标
-function getSelectedAircraftPosition() {
-  const model = selectedModel.value
-  if (!model || model.isDestroyed()) return undefined
-
-  return Cesium.Matrix4.getTranslation(
-    model.modelMatrix,
-    new Cesium.Cartesian3(),
-  )
-}
 //拿到选中的飞机模型的heading
 function getSelectedAircraftHeading() {
   const meta = selectedMeta.value
   if (!meta) return undefined
 
+  return getAircraftHeading(meta)
+}
+
+function getAircraftHeading(meta: SelectedPlaneMeta) {
   if (meta.kind === 'uavInfo') {
     return uavStore.uavInfoMap.get(meta.key)?.headingAngle
   }
@@ -926,6 +916,36 @@ function getSelectedAircraftHeading() {
   }
 
   return undefined
+}
+
+function getTerrainWarningAircraftPosition() {
+  const model = terrainWarningTarget?.model
+  if (!model || model.isDestroyed()) return undefined
+
+  return Cesium.Matrix4.getTranslation(
+    model.modelMatrix,
+    new Cesium.Cartesian3(),
+  )
+}
+
+function getTerrainWarningAircraftHeading() {
+  const meta = terrainWarningTarget?.meta
+  return meta ? getAircraftHeading(meta) : undefined
+}
+
+function getAircraftLabel(meta: SelectedPlaneMeta) {
+  if (meta.kind === 'uavInfo') {
+    const uav = uavStore.uavInfoMap.get(meta.key)
+    if (uav) return `${uav.uavSeries}-${uav.uavId}`
+  }
+
+  if (meta.kind === 'fp95') {
+    const aircraftId = meta.key.replace('fp95:', '')
+    return `FP95-${aircraftId}`
+  }
+
+  const aircraftId = meta.key.replace('fp981c:', '')
+  return `FP981C-${aircraftId}`
 }
 
 const profileWidth = 340
@@ -999,12 +1019,12 @@ onMounted(async () => {
 
   terrainWarningApi.value = useTerrainWarning(
     window.viewer,
-    getSelectedAircraftPosition,
-    getSelectedAircraftHeading,
+    getTerrainWarningAircraftPosition,
+    getTerrainWarningAircraftHeading,
     {
       distance: 10000,
       steps: 50, //每1000米采样10个点
-      intervalMs: 100,
+      intervalMs: 10,
       terrainLevel: 11,
       warnClearance: 100,
     }, //传递的参数
@@ -1055,6 +1075,8 @@ function toggleSelectedPlaneTerrainWarning() {
   // 关闭操作不依赖当前选中状态，确保再次点击总能关闭检测和面板。
   if (terrainWarningActive.value) {
     terrainWarningApi.value?.stop()
+    terrainWarningTarget = null
+    terrainWarningTargetLabel.value = ''
     return
   }
 
@@ -1063,6 +1085,13 @@ function toggleSelectedPlaneTerrainWarning() {
     return
   }
 
+  const meta = { ...selectedMeta.value }
+  const label = getAircraftLabel(meta)
+  terrainWarningTarget = {
+    model: selectedModel.value,
+    meta,
+  }
+  terrainWarningTargetLabel.value = label
   terrainWarningApi.value?.start()
 }
 
@@ -1214,8 +1243,27 @@ async function showTelemetryInfo() {
         </span>
       </n-tooltip>
 
-      <!-- 通视和剖面 -->
-      <n-popselect
+      <!-- 三维伴飞 -->
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
+          <n-button
+            tertiary
+            circle
+            :type="companionMode ? 'success' : 'warning'"
+            @click="activeCompanionMode"
+          >
+            <template #icon>
+              <n-icon><EyeSharp /></n-icon>
+            </template>
+          </n-button>
+        </template>
+        <span>
+          {{ companionMode ? '关闭三维伴飞' : '开启三维伴飞' }}
+        </span>
+      </n-tooltip>
+
+
+      <!-- <n-popselect
         v-model:value="SceneValue"
         :options="store.menuOptions.sceneOptions"
         :disabled="!selectedModel && !companionMode"
@@ -1232,7 +1280,7 @@ async function showTelemetryInfo() {
             <n-icon><EyeSharp /></n-icon>
           </template>
         </n-button>
-      </n-popselect>
+      </n-popselect> -->
       <!-- 有用户选择加载机场建筑物-->
       <n-dropdown
         :options="store.menuOptions.obstacleOptions"
@@ -1585,6 +1633,9 @@ async function showTelemetryInfo() {
     <div class="terrain-warning-panel__header">
       <div>
         <div class="terrain-warning-panel__title">高度预警</div>
+        <div class="terrain-warning-panel__aircraft">
+          {{ terrainWarningTargetLabel }}
+        </div>
         <div class="terrain-warning-panel__sub-title">
           前方 {{ terrainWarningDistance }} m 地形剖面
         </div>
@@ -1736,6 +1787,13 @@ async function showTelemetryInfo() {
 .terrain-warning-panel__title {
   font-size: 16px;
   font-weight: bold;
+}
+
+.terrain-warning-panel__aircraft {
+  margin-top: 2px;
+  font-size: 14px;
+  font-weight: 600;
+  color: rgb(255 255 255 / 90%);
 }
 
 .terrain-warning-panel__sub-title {
