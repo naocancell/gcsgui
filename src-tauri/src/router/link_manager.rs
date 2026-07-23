@@ -1,13 +1,81 @@
 use bytes::BytesMut;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::comms::{ProtocolType, RawData};
 use crate::protocol::uav_info::UAVInfo;
+use crate::router::rx_arbiter::{
+    FrameObservation, RxArbiter, RxArbiterConfig, RxDecision, RxHealthSnapshot, StreamKey,
+};
 use crate::state::AppState;
 use crate::uplink::FP95ResponseCoordinator;
 
-use moka::sync::Cache;
 use std::time::{Duration, Instant};
+
+struct RouterCore {
+    arbiter: RxArbiter,
+    link_buffers: HashMap<String, BytesMut>,
+}
+
+impl RouterCore {
+    fn new(config: RxArbiterConfig) -> Self {
+        Self {
+            arbiter: RxArbiter::new(config),
+            link_buffers: HashMap::new(),
+        }
+    }
+
+    fn process_raw(
+        &mut self,
+        raw: RawData,
+        protocol: ProtocolType,
+        active_protocol_links: HashSet<String>,
+        app_state: &AppState,
+        response_coordinator: &FP95ResponseCoordinator,
+    ) {
+        let buffer = self
+            .link_buffers
+            .entry(raw.source_link.clone())
+            .or_default();
+        buffer.extend_from_slice(&raw.data);
+
+        match protocol {
+            ProtocolType::FP981C => extract_and_process_fp981c(
+                buffer,
+                &raw.source_link,
+                raw.received_at,
+                active_protocol_links,
+                &mut self.arbiter,
+                app_state,
+            ),
+            ProtocolType::UAVInfo => {
+                extract_and_process_uav_info(buffer, raw.received_at, app_state)
+            }
+            ProtocolType::FP95 => extract_and_process_fp95(
+                buffer,
+                &raw.source_link,
+                raw.received_at,
+                active_protocol_links,
+                &mut self.arbiter,
+                app_state,
+                response_coordinator,
+            ),
+        }
+
+        if buffer.len() > 4096 {
+            log::warn!("链路 {} 缓冲区溢出，执行清空", raw.source_link);
+            buffer.clear();
+            app_state.metrics.inc_overflow();
+        }
+    }
+
+    fn maintenance(
+        &mut self,
+        now: Instant,
+        active_links: &HashMap<ProtocolType, HashSet<String>>,
+    ) -> RxHealthSnapshot {
+        self.arbiter.maintenance(now, active_links)
+    }
+}
 
 /// 从字节流中寻找 FP981C 包头 0xEB 0x90
 fn find_fp981c_header(buffer: &[u8]) -> Option<usize> {
@@ -24,68 +92,64 @@ pub async fn start_router(
     app_state: AppState,
     response_coordinator: FP95ResponseCoordinator,
 ) {
-    // 去重缓存
-    let dedup_cache: Cache<String, ()> = Cache::builder()
-        .time_to_live(Duration::from_millis(250))
-        .build();
+    let mut router = RouterCore::new(RxArbiterConfig::default());
+    let mut maintenance = tokio::time::interval(Duration::from_millis(250));
+    maintenance.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    // 每条链路的字节累积缓冲区（串口流式数据需要拼接后再切帧）
-    let mut link_buffers: HashMap<String, BytesMut> = HashMap::new();
-
-    while let Some(raw) = rx.recv().await {
-        // 从 active_links 查找该链路绑定的协议类型
-        let protocol = {
-            if let Some(link) = app_state.active_links.get(&raw.source_link) {
-                // 顺便更新心跳
-                let mut lock = link
-                    .last_heartbeat
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                *lock = raw.received_at;
-                link.protocol
-            } else {
-                continue;
+    loop {
+        tokio::select! {
+            raw = rx.recv() => {
+                let Some(raw) = raw else { break };
+                let protocol = {
+                    let Some(link) = app_state.active_links.get(&raw.source_link) else {
+                        continue;
+                    };
+                    let mut lock = link
+                        .last_raw_rx
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    *lock = raw.received_at;
+                    link.protocol
+                };
+                let active = active_links_for_protocol(&app_state, protocol);
+                router.process_raw(raw, protocol, active, &app_state, &response_coordinator);
             }
-        };
-
-        // 获取该链路的累积缓冲区并追加新数据
-        let buffer = link_buffers
-            .entry(raw.source_link.clone())
-            .or_insert_with(BytesMut::new);
-        buffer.extend_from_slice(&raw.data);
-
-        // 根据协议类型执行切帧 + 解析
-        match protocol {
-            ProtocolType::FP981C => {
-                extract_and_process_fp981c(buffer, &dedup_cache, &app_state);
+            _ = maintenance.tick() => {
+                let active = active_links_by_protocol(&app_state);
+                app_state.replace_rx_health(router.maintenance(Instant::now(), &active));
             }
-            ProtocolType::UAVInfo => {
-                extract_and_process_uav_info(buffer, &app_state);
-            }
-            ProtocolType::FP95 => {
-                extract_and_process_fp95(
-                    buffer,
-                    &dedup_cache,
-                    &app_state,
-                    &response_coordinator,
-                );
-            }
-        }
-
-        // 防止缓冲区无限膨胀
-        if buffer.len() > 4096 {
-            log::warn!("链路 {} 缓冲区溢出，执行清空", raw.source_link);
-            buffer.clear();
-            app_state.metrics.inc_overflow();
         }
     }
+}
+
+fn active_links_for_protocol(app_state: &AppState, protocol: ProtocolType) -> HashSet<String> {
+    app_state
+        .active_links
+        .iter()
+        .filter(|link| link.protocol == protocol)
+        .map(|link| link.key().clone())
+        .collect()
+}
+
+fn active_links_by_protocol(app_state: &AppState) -> HashMap<ProtocolType, HashSet<String>> {
+    let mut result: HashMap<ProtocolType, HashSet<String>> = HashMap::new();
+    for link in app_state.active_links.iter() {
+        result
+            .entry(link.protocol)
+            .or_default()
+            .insert(link.key().clone());
+    }
+    result
 }
 
 // ==================== FP981C 切帧 + 解析 ====================
 
 fn extract_and_process_fp981c(
     buffer: &mut BytesMut,
-    dedup_cache: &Cache<String, ()>,
+    source_link: &str,
+    received_at: Instant,
+    active_links: HashSet<String>,
+    arbiter: &mut RxArbiter,
     app_state: &AppState,
 ) {
     while let Some(header_idx) = find_fp981c_header(buffer) {
@@ -94,7 +158,14 @@ fn extract_and_process_fp981c(
         }
         if buffer.len() >= 32 {
             let frame = buffer.split_to(32); // O(1) 零拷贝切出整帧
-            process_fp981c_frame(&frame, dedup_cache, app_state);
+            process_fp981c_frame(
+                &frame,
+                source_link,
+                received_at,
+                active_links.clone(),
+                arbiter,
+                app_state,
+            );
         } else {
             break;
         }
@@ -106,7 +177,14 @@ fn extract_and_process_fp981c(
     }
 }
 
-fn process_fp981c_frame(frame: &[u8], dedup_cache: &Cache<String, ()>, app_state: &AppState) {
+fn process_fp981c_frame(
+    frame: &[u8],
+    source_link: &str,
+    received_at: Instant,
+    active_links: HashSet<String>,
+    arbiter: &mut RxArbiter,
+    app_state: &AppState,
+) {
     if !crate::protocol::fkd_crc::verify_fkd_crc(frame, 0xEB, 0x90) {
         app_state.metrics.inc_crc_fail();
         return;
@@ -116,12 +194,24 @@ fn process_fp981c_frame(frame: &[u8], dedup_cache: &Cache<String, ()>, app_state
     let seq_num = frame[3];
     let uav_id = frame[4];
 
-    let dedup_key = format!("981c-{}-{}-{}", uav_id, frame_id, seq_num);
-    if dedup_cache.contains_key(&dedup_key) {
-        app_state.metrics.inc_dedup();
+    let frame_bytes: [u8; 32] = frame.try_into().expect("FP981C frame length was checked");
+    let decision = arbiter.observe(
+        FrameObservation {
+            source_link: source_link.to_string(),
+            stream: StreamKey {
+                protocol: ProtocolType::FP981C,
+                uav_id,
+                frame_id,
+            },
+            raw_sequence: seq_num,
+            frame: frame_bytes,
+            received_at,
+        },
+        active_links,
+    );
+    if !accept_decision(decision, app_state) {
         return;
     }
-    dedup_cache.insert(dedup_key, ());
 
     let subframe_payload = &frame[5..];
 
@@ -139,7 +229,7 @@ fn process_fp981c_frame(frame: &[u8], dedup_cache: &Cache<String, ()>, app_state
             agg.uav_id = uav_id;
 
             agg.merge(parsed);
-            app_state.fp981c_seen.insert(uav_id, Instant::now());
+            app_state.fp981c_seen.insert(uav_id, received_at);
         }
         Err(_) => {
             app_state.metrics.inc_parse_err();
@@ -149,7 +239,7 @@ fn process_fp981c_frame(frame: &[u8], dedup_cache: &Cache<String, ()>, app_state
 
 // ==================== UAVInfo 切帧 + 解析 ====================
 
-fn extract_and_process_uav_info(buffer: &mut BytesMut, app_state: &AppState) {
+fn extract_and_process_uav_info(buffer: &mut BytesMut, received_at: Instant, app_state: &AppState) {
     while buffer.len() >= 75 {
         let frame = buffer.split_to(75);
 
@@ -158,7 +248,7 @@ fn extract_and_process_uav_info(buffer: &mut BytesMut, app_state: &AppState) {
                 app_state.metrics.inc_ok();
                 let uav_id = info.uav_id as u8;
                 app_state.uav_pool.insert(uav_id, info);
-                app_state.uav_seen.insert(uav_id, Instant::now());
+                app_state.uav_seen.insert(uav_id, received_at);
             }
             Err(e) => {
                 app_state.metrics.inc_parse_err();
@@ -187,7 +277,10 @@ fn find_fp95_header(buffer: &[u8]) -> Option<usize> {
 
 fn extract_and_process_fp95(
     buffer: &mut BytesMut,
-    dedup_cache: &Cache<String, ()>,
+    source_link: &str,
+    received_at: Instant,
+    active_links: HashSet<String>,
+    arbiter: &mut RxArbiter,
     app_state: &AppState,
     response_coordinator: &FP95ResponseCoordinator,
 ) {
@@ -197,7 +290,15 @@ fn extract_and_process_fp95(
         }
         if buffer.len() >= 32 {
             let frame = buffer.split_to(32);
-            process_fp95_frame(frame.as_ref(), dedup_cache, app_state, response_coordinator);
+            process_fp95_frame(
+                frame.as_ref(),
+                source_link,
+                received_at,
+                active_links.clone(),
+                arbiter,
+                app_state,
+                response_coordinator,
+            );
         } else {
             break;
         }
@@ -211,7 +312,10 @@ fn extract_and_process_fp95(
 
 fn process_fp95_frame(
     frame: &[u8],
-    dedup_cache: &Cache<String, ()>,
+    source_link: &str,
+    received_at: Instant,
+    active_links: HashSet<String>,
+    arbiter: &mut RxArbiter,
     app_state: &AppState,
     response_coordinator: &FP95ResponseCoordinator,
 ) {
@@ -224,12 +328,24 @@ fn process_fp95_frame(
     let uav_id = frame[3];
     let frame_id = frame[4];
 
-    let dedup_key = format!("95-{}-{}-{}", uav_id, frame_id, seq_num);
-    if dedup_cache.contains_key(&dedup_key) {
-        app_state.metrics.inc_dedup();
+    let frame_bytes: [u8; 32] = frame.try_into().expect("FP95 frame length was checked");
+    let decision = arbiter.observe(
+        FrameObservation {
+            source_link: source_link.to_string(),
+            stream: StreamKey {
+                protocol: ProtocolType::FP95,
+                uav_id,
+                frame_id,
+            },
+            raw_sequence: seq_num,
+            frame: frame_bytes,
+            received_at,
+        },
+        active_links,
+    );
+    if !accept_decision(decision, app_state) {
         return;
     }
-    dedup_cache.insert(dedup_key, ());
 
     let subframe_payload = &frame[5..30];
 
@@ -241,7 +357,7 @@ fn process_fp95_frame(
             if let ParsedSubFrame::Frame80(frame80) = &parsed {
                 response_coordinator.deliver(uav_id, frame80.injection_response);
             }
-            app_state.merge_fp95(uav_id, parsed, Instant::now());
+            app_state.merge_fp95(uav_id, parsed, received_at);
         }
         Err(_err) => {
             app_state.metrics.inc_parse_err();
@@ -249,4 +365,27 @@ fn process_fp95_frame(
     }
 }
 
-
+fn accept_decision(decision: RxDecision, app_state: &AppState) -> bool {
+    match decision {
+        RxDecision::Accept { missing_before, .. } => {
+            app_state.metrics.add_all_links_missing(missing_before);
+            true
+        }
+        RxDecision::Duplicate { .. } => {
+            app_state.metrics.inc_dedup();
+            false
+        }
+        RxDecision::Stale => {
+            app_state.metrics.inc_stale();
+            false
+        }
+        RxDecision::Conflict => {
+            app_state.metrics.inc_conflict();
+            false
+        }
+        RxDecision::Buffering => {
+            app_state.metrics.inc_recovery_buffered();
+            false
+        }
+    }
+}

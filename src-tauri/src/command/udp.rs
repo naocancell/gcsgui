@@ -49,7 +49,7 @@ pub async fn start_udp_internal(
         endpoint_info,
         protocol: protocol_type,
         transport,
-        last_heartbeat: Arc::new(Mutex::new(Instant::now())),
+        last_raw_rx: Arc::new(Mutex::new(Instant::now())),
     };
 
     state.active_links.insert(link_name.clone(), active_link);
