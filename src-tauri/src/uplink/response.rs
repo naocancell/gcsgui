@@ -2,9 +2,10 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 
 use crate::protocol::fp95_command::{
-    decode_air_traffic_query, decode_switch_query, matches_air_traffic_binding,
-    matches_switch_binding, AirTrafficParamReadback, TransponderSwitchReadback,
-    AIR_TRAFFIC_QUERY_CODE, SWITCH_QUERY_CODE,
+    decode_air_traffic_query, decode_switch_query, decode_weight_query,
+    matches_air_traffic_binding, matches_switch_binding, matches_weight_binding,
+    AirTrafficParamReadback, TransponderSwitchReadback, WeightReadback,
+    AIR_TRAFFIC_QUERY_CODE, SWITCH_QUERY_CODE, WEIGHT_QUERY_CODE,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,13 +14,16 @@ pub enum ExpectedResponse {
     SwitchQuery,
     AirTrafficBinding([u8; 15]),
     AirTrafficQuery,
+    WeightBinding([u8; 15]),
+    WeightQuery,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum FP95Response {
     BindingConfirmed,
     SwitchQuery(TransponderSwitchReadback),
     AirTrafficQuery(AirTrafficParamReadback),
+    WeightQuery(WeightReadback),
 }
 
 pub struct PendingResponse {
@@ -94,15 +98,31 @@ impl FP95ResponseCoordinator {
             let Some(pending) = state.pending.as_ref() else {
                 return;
             };
-            if pending.aircraft_id != aircraft_id || !Self::matches(&pending.expected, &data) {
+            if pending.aircraft_id != aircraft_id {
+                log::warn!(
+                    "忽略 FP95 0x80 回报：飞机 ID 不匹配，期望 {}，收到 {}，数据 {:02X?}",
+                    pending.aircraft_id,
+                    aircraft_id,
+                    data
+                );
                 return;
             }
+            if !Self::matches(&pending.expected, &data) {
+                log::warn!(
+                    "忽略 FP95 0x80 回报：不匹配当前等待事务，数据 {:02X?}",
+                    data
+                );
+                return;
+            }
+            log::info!("FP95 0x80 回报匹配成功，飞机 {aircraft_id}，数据 {:02X?}", data);
             state.pending.take()
         };
 
         if let Some(pending) = pending {
             let result = match pending.expected {
-                ExpectedResponse::SwitchBinding(_) | ExpectedResponse::AirTrafficBinding(_) => {
+                ExpectedResponse::SwitchBinding(_)
+                | ExpectedResponse::AirTrafficBinding(_)
+                | ExpectedResponse::WeightBinding(_) => {
                     Ok(FP95Response::BindingConfirmed)
                 }
                 ExpectedResponse::SwitchQuery => {
@@ -110,6 +130,9 @@ impl FP95ResponseCoordinator {
                 }
                 ExpectedResponse::AirTrafficQuery => {
                     decode_air_traffic_query(data).map(FP95Response::AirTrafficQuery)
+                }
+                ExpectedResponse::WeightQuery => {
+                    decode_weight_query(data).map(FP95Response::WeightQuery)
                 }
             };
             let _ = pending.sender.send(result);
@@ -124,8 +147,8 @@ impl FP95ResponseCoordinator {
                 matches_air_traffic_binding(data, payload)
             }
             ExpectedResponse::AirTrafficQuery => data[0] == AIR_TRAFFIC_QUERY_CODE,
+            ExpectedResponse::WeightBinding(payload) => matches_weight_binding(data, payload),
+            ExpectedResponse::WeightQuery => data[0] == WEIGHT_QUERY_CODE,
         }
     }
 }
-
-

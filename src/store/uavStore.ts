@@ -11,7 +11,9 @@ import type {
   TransponderSwitchConfig,
   TransponderSwitchReadback,
   TransponderParamConfig,
-  TransponderParamReadback
+  TransponderParamReadback,
+  WeightBindingConfig,
+  WeightReadback
 } from '@/types/entityoptions'
 import {
   getFp95FlightSwitchCommand,
@@ -655,6 +657,24 @@ export const useUavStore = defineStore('uav', () => {
     flightNumber: '',
   })
 
+  const weightBindingConfig = ref<WeightBindingConfig>({
+    emptyUavWeight: 0,
+    emptyUavC: 0,
+    loadWeight: 0,
+    loadC: 0,
+    oilTotal: 0,
+    oilType: 4,
+  })
+
+  const weightReadback = ref<WeightReadback>({
+    emptyUavWeight: 0,
+    emptyUavC: 0,
+    loadWeight: 0,
+    loadC: 0,
+    oilTotal: 0,
+    oilType: 4,
+  })
+
   const transponderOperationPending = ref(false)
 
   function currentFp95AircraftId() {
@@ -711,6 +731,24 @@ export const useUavStore = defineStore('uav', () => {
     return runTransponderOperation(async () => {
       const res = await invoke<TransponderParamReadback>('query_air_traffic_params', { aircraftId })
       transponderParamReadback.value = res
+      return res
+    })
+  }
+
+  async function bindWeightParams(config: WeightBindingConfig) {
+    const aircraftId = currentFp95AircraftId()
+    await runTransponderOperation(async () => {
+      await invoke('bind_weight_params', { aircraftId, config })
+    })
+    weightBindingConfig.value = { ...config }
+  }
+
+  async function queryWeightParams() {
+    const aircraftId = currentFp95AircraftId()
+    return runTransponderOperation(async () => {
+      const res = await invoke<WeightReadback>('query_weight_params', { aircraftId })
+      weightReadback.value = res
+      weightBindingConfig.value = { ...res }
       return res
     })
   }
@@ -866,6 +904,10 @@ export const useUavStore = defineStore('uav', () => {
     queryTransponderSwitches,
     bindTransponderParams,
     queryTransponderParams,
+    weightBindingConfig,
+    weightReadback,
+    bindWeightParams,
+    queryWeightParams,
     toggleMockUavInfoService,
     syncProtocolListeners,
     startListening,

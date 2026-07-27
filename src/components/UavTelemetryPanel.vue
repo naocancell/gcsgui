@@ -371,7 +371,70 @@
                 </div>
             </section>
 
-            <!-- 2. 航电开关 / AVIONICS SWITCH -->
+            <!-- 2. 重量装订模块 -->
+            <section class="transponder-section" @mousedown.stop>
+                <div class="section-header-title">
+                    <span>重量与重心装订</span>
+                    <span class="section-sub">WEIGHT & CENTROID SETTINGS</span>
+                </div>
+                <div class="weight-grid">
+                    <div class="param-row">
+                        <span class="param-label">燃油类型</span>
+                        <n-select
+                            v-model:value="uavStore.weightBindingConfig.oilType"
+                            :options="fuelTypeSelectOptions"
+                            size="small"
+                            class="n-cat-select-long"
+                        />
+                    </div>
+                    <div class="param-row">
+                        <span class="param-label">总油量 (L)</span>
+                        <input type="number" min="0" step="1" v-model.number="uavStore.weightBindingConfig.oilTotal" class="flight-input" placeholder="总油量..." />
+                    </div>
+                    <div class="param-row">
+                        <span class="param-label">空机重量 (kg)</span>
+                        <input type="number" min="0" step="1" v-model.number="uavStore.weightBindingConfig.emptyUavWeight" class="flight-input" placeholder="空机重量..." />
+                    </div>
+                    <div class="param-row">
+                        <span class="param-label">空机重心 (%)</span>
+                        <input type="number" min="0" step="0.01" v-model.number="uavStore.weightBindingConfig.emptyUavC" class="flight-input" placeholder="空机重心..." />
+                    </div>
+                    <div class="param-row">
+                        <span class="param-label">货物重量 (kg)</span>
+                        <input type="number" min="0" step="1" v-model.number="uavStore.weightBindingConfig.loadWeight" class="flight-input" placeholder="货物重量..." />
+                    </div>
+                    <div class="param-row">
+                        <span class="param-label">货物重心 (m)</span>
+                        <input type="number" min="0" step="0.1" v-model.number="uavStore.weightBindingConfig.loadC" class="flight-input" placeholder="货物重心..." />
+                    </div>
+                </div>
+
+                <div class="weight-footer">
+                    <div class="centroid-check-result" :class="centroidResultStatus">
+                        <span class="result-label">重心校验：</span>
+                        <span class="result-text">{{ centroidResultText || '未校验' }}</span>
+                    </div>
+                    <div class="right-btn-group">
+                        <button
+                            class="action-btn query-btn"
+                            :disabled="uavStore.transponderOperationPending"
+                            @click="handleCheckCentroid"
+                        >重心校验</button>
+                        <button
+                            class="action-btn query-btn"
+                            :disabled="!uavStore.fp95Aggregate || uavStore.transponderOperationPending"
+                            @click="handleQueryWeight"
+                        >{{ uavStore.transponderOperationPending ? '处理中…' : '查询重量' }}</button>
+                        <button
+                            class="action-btn bind-btn"
+                            :disabled="!uavStore.fp95Aggregate || uavStore.transponderOperationPending"
+                            @click="handleBindWeight"
+                        >{{ uavStore.transponderOperationPending ? '处理中…' : '装订重量' }}</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 3. 航电开关 / AVIONICS SWITCH -->
             <section class="legacy-avionics-switches" @mousedown.stop>
                 <div class="section-title">
                     <span>AVIONICS SWITCH</span>
@@ -447,6 +510,10 @@ import {
     isFp95SwitchTelemetryConfirmed,
     type Fp95PendingSwitchControl
 } from '@/utils/plane/fp95AvionicsControl'
+import {
+    calculateWeightCentroid,
+    FUEL_TYPE_OPTIONS
+} from '@/utils/plane/weightBinding'
 
 const telemetryStore =
     useTelemetryStore()
@@ -729,6 +796,80 @@ async function handleQueryRightParams() {
         message.success('航管参数查询成功')
     } catch (error) {
         message.error(`航管参数查询失败：${formatControlError(error)}`)
+    }
+}
+
+// 重量装订与重心校验逻辑
+const fuelTypeSelectOptions = FUEL_TYPE_OPTIONS
+const centroidResultText = ref<string>('')
+const centroidResultStatus = ref<'valid' | 'invalid' | 'none'>('none')
+
+function handleCheckCentroid(): boolean {
+    const config = uavStore.weightBindingConfig
+    const res = calculateWeightCentroid(config)
+    if (!res.ok) {
+        centroidResultStatus.value = 'invalid'
+        centroidResultText.value = `校验失败：${res.error}`
+        message.error(res.error)
+        return false
+    }
+    const { centroid, isValid } = res.value
+    const percentText = (centroid * 100).toFixed(2)
+    if (isValid) {
+        centroidResultStatus.value = 'valid'
+        centroidResultText.value = `总体重心：${percentText}% (合格)`
+        message.success(`重心校验成功：总体重心为 ${percentText}% (合格)`)
+        return true
+    } else {
+        centroidResultStatus.value = 'invalid'
+        centroidResultText.value = `总体重心：${percentText}% (不合格，范围为 19%~31%)`
+        message.warning(`总体重心为 ${percentText}% (不合格，超出 19%~31% 范围)`)
+        return false
+    }
+}
+
+async function handleBindWeight() {
+    const config = uavStore.weightBindingConfig
+    if (
+        !Number.isFinite(config.emptyUavWeight) ||
+        !Number.isFinite(config.emptyUavC) ||
+        !Number.isFinite(config.loadWeight) ||
+        !Number.isFinite(config.loadC) ||
+        !Number.isFinite(config.oilTotal)
+    ) {
+        message.error('重量与重心参数必须为有效数值')
+        return
+    }
+    if (
+        config.emptyUavWeight < 0 ||
+        config.emptyUavC < 0 ||
+        config.loadWeight < 0 ||
+        config.loadC < 0 ||
+        config.oilTotal < 0
+    ) {
+        message.error('重量、重心与油量不能为负数')
+        return
+    }
+    const checkPass = handleCheckCentroid()
+    if (!checkPass) {
+        return
+    }
+
+    try {
+        await uavStore.bindWeightParams(config)
+        message.success('重量参数装订成功')
+    } catch (error) {
+        message.error(`重量参数装订失败：${formatControlError(error)}`)
+    }
+}
+
+async function handleQueryWeight() {
+    try {
+        await uavStore.queryWeightParams()
+        message.success('重量参数查询成功')
+        handleCheckCentroid()
+    } catch (error) {
+        message.error(`重量参数查询失败：${formatControlError(error)}`)
     }
 }
 
@@ -1413,5 +1554,36 @@ onBeforeUnmount(() => {
     border-radius: 6px;
     text-align: center;
     font-size: 12px;
+}
+
+/* 重量装订与重心校验 */
+.weight-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 16px;
+}
+
+.weight-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-light);
+}
+
+.centroid-check-result {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.centroid-check-result.valid .result-text {
+    color: #4ade80;
+    font-weight: 600;
+}
+
+.centroid-check-result.invalid .result-text {
+    color: #f87171;
+    font-weight: 600;
 }
 </style>
