@@ -56,17 +56,49 @@ onMounted(() => {
   // 定位到中国
   // flyToDefault(viewer)
 
-  viewer.camera.flyTo({
-  // 西经, 南纬, 东经, 北纬，大致框住海南岛
+  // 1. 初始化时，瞬间将视角切换到中国全貌，彻底避免一开始在地球全景停顿卡顿。
+  viewer.camera.setView({
     destination: Cesium.Cartesian3.fromDegrees(
-            110.376662306,   // 经度
-            19.6727238,    // 纬度
-            5000     // 高度，米
-        ),
+      104.195397, // 中国中心经度
+      35.86166,   // 中国中心纬度
+      8000000     // 高度 800 万米，看清中国全景
+    )
+  });
 
-    // Cesium.Rectangle.fromDegrees(110.376662306, 19.6727238, 111.1, 20.2),
-    duration: 2,
-});
+  // 2. 使用原生系统地理定位（不受代理影响，能拿到真实位置）
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        // 获取成功后，从刚才的初始高空平滑飞往你的真实位置，高度降低以获得更大视角
+        viewer.camera.flyTo({
+          destination: Cesium.Cartesian3.fromDegrees(
+            position.coords.longitude,
+            position.coords.latitude,
+            1000 // 高度降到 1500 米，视角会更放大、更贴近地面
+          ),
+          duration: 2,
+        });
+      },
+      (error) => {
+        console.warn('获取真实地理位置失败:', error.message);
+        // 如果最终获取失败（比如没给权限），则平滑回退到默认大视角
+        viewer.camera.flyTo({
+          destination: Cesium.Cartesian3.fromDegrees(107.4191777, 37.855152, 5000),
+          duration: 2,
+        });
+      },
+      {
+        enableHighAccuracy: true, // 开启高精度，调用系统底层定位
+        timeout: 10000,           // 给足 10 秒时间等待系统定位服务“预热”响应
+        maximumAge: 0 
+      }
+    );
+  } else {
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(107.4191777, 37.855152, 5000),
+      duration: 2,
+    });
+  }
   // 显示罗盘和比例尺
   showNavigator(viewer)
 

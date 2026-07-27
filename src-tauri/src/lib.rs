@@ -76,15 +76,34 @@ pub fn run() {
             // 启动串口热插拔监测后台任务
             crate::command::serial::start_port_monitor(app.handle().clone());
 
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
+            // 开启软件日志插件（强行创建目录并落盘）
+            use tauri_plugin_log::{Target, TargetKind};
+            let log_dir = app
+                .path()
+                .app_log_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("./logs"));
+
+            let _ = std::fs::create_dir_all(&log_dir);
+
+            if let Err(e) = app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .targets([
+                        Target::new(TargetKind::Stdout),
+                        Target::new(TargetKind::Folder {
+                            path: log_dir.clone(),
+                            file_name: Some("gcsgui".to_string()),
+                        }),
+                        Target::new(TargetKind::Webview),
+                    ])
+                    .level(log::LevelFilter::Info)
+                    .build(),
+            ) {
+                eprintln!("初始化日志插件失败: {}", e);
+            } else {
+                log::info!("=== GCSGUI 地面站日志系统初始化成功 ===");
+                log::info!("日志持久化保存路径: {:?}", log_dir);
             }
 
-            // 目前不确定是否需要修改热重载逻辑 先这样改
             // 软件开启时，把本地配置中的 enabled 全部重置为 false，避免前后端状态不一致
             let mut comms_config = config::comms::CommsConfig::load(app.handle());
             for udp in &mut comms_config.udp {
@@ -124,6 +143,8 @@ pub fn run() {
             query_transponder_switches,
             bind_air_traffic_params,
             query_air_traffic_params,
+            bind_weight_params,
+            query_weight_params,
             clear_uplink_command,
             get_uplink_status
         ])

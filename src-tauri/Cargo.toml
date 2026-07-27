@@ -30,7 +30,6 @@ comms-core = {path = "../crates/comms-core"}
 tokio-serial = "5.5.0"
 tokio-util = { version = "0.7.13", features = ["rt"] }
 dashmap = "6.2.1"
-moka = { version = "0.12.5", features = ["sync"] }
 bytes = "1.5"
 once_cell = { version = "1.21.4", features = ["parking_lot"] }
 tauri-plugin-single-instance = "2.0"

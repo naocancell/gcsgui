@@ -24,6 +24,11 @@ const router = createRouter({
       name: 'Telemetry',
       component: () => import('@/components/page/TelemetryPage.vue'),
     },
+    {
+      path: '/linkHealth',
+      name: 'LinkHealth',
+      component: () => import('@/components/page/LinkHealthPage.vue'),
+    },
   ],
 })
 

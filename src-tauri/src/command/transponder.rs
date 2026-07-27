@@ -1,10 +1,12 @@
 use std::future::Future;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::protocol::fp95_command::{
-    encode_air_traffic_binding, encode_switch_binding, AirTrafficParamConfig,
-    AirTrafficParamReadback, TransponderSwitchConfig, TransponderSwitchReadback,
+    encode_air_traffic_binding, encode_switch_binding, encode_weight_binding,
+    AirTrafficParamConfig, AirTrafficParamReadback, TransponderSwitchConfig,
+    TransponderSwitchReadback, WeightBindingConfig, WeightReadback,
     AIR_TRAFFIC_BIND_CODE, AIR_TRAFFIC_QUERY_CODE, SWITCH_BIND_CODE, SWITCH_QUERY_CODE,
+    WEIGHT_BIND_CODE, WEIGHT_QUERY_CODE,
 };
 use crate::protocol::uplink::{NoAckCommand, UplinkFrameContext};
 use crate::uplink::{
@@ -45,21 +47,36 @@ where
     C: FnMut() -> CleanupFut,
     CleanupFut: Future<Output = Result<(), String>>,
 {
+    let started_at = Instant::now();
     for attempt in 1..=2 {
         let pending = coordinator.register(aircraft_id, expected.clone())?;
+        log::info!(
+            "FP95 应答事务第 {attempt}/2 次发送，飞机 {aircraft_id}"
+        );
         if let Err(error) = send().await {
             coordinator.cancel(pending.id);
             return Err(error);
         }
 
         match tokio::time::timeout(timeout_duration, pending.receiver).await {
-            Ok(Ok(result)) => return result,
+            Ok(Ok(result)) => {
+                log::info!(
+                    "FP95 应答事务收到匹配回报，耗时 {} ms",
+                    started_at.elapsed().as_millis()
+                );
+                let _ = cleanup().await;
+                return result;
+            }
             Ok(Err(_)) => {
                 coordinator.cancel(pending.id);
                 return Err("0x80回报等待通道异常关闭".to_string());
             }
             Err(_) => {
                 coordinator.cancel(pending.id);
+                log::warn!(
+                    "FP95 应答事务第 {attempt}/2 次等待 0x80 回报超时（{} ms）",
+                    timeout_duration.as_millis()
+                );
                 cleanup().await?;
                 if attempt == 2 {
                     return Err("等待0x80回报超时，已尝试2次".to_string());
@@ -90,7 +107,7 @@ async fn submit_acknowledged_command(
                         function_code,
                         payload,
                     },
-                    CommandSendPolicy::Once,
+                    CommandSendPolicy::UntilCleared,
                 )
                 .await
                 .map_err(uplink_error_message)
@@ -189,4 +206,47 @@ pub async fn query_air_traffic_params(
     }
 }
 
+#[tauri::command]
+pub async fn bind_weight_params(
+    handle: tauri::State<'_, UplinkHandle>,
+    coordinator: tauri::State<'_, FP95ResponseCoordinator>,
+    aircraft_id: u8,
+    config: WeightBindingConfig,
+) -> Result<(), String> {
+    let payload = encode_weight_binding(&config)?;
+    match submit_acknowledged_command(
+        &handle,
+        &coordinator,
+        aircraft_id,
+        WEIGHT_BIND_CODE,
+        payload,
+        ExpectedResponse::WeightBinding(payload),
+    )
+    .await?
+    {
+        FP95Response::BindingConfirmed => Ok(()),
+        _ => Err("重量参数装订收到非预期回报".to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn query_weight_params(
+    handle: tauri::State<'_, UplinkHandle>,
+    coordinator: tauri::State<'_, FP95ResponseCoordinator>,
+    aircraft_id: u8,
+) -> Result<WeightReadback, String> {
+    match submit_acknowledged_command(
+        &handle,
+        &coordinator,
+        aircraft_id,
+        WEIGHT_QUERY_CODE,
+        [0u8; 15],
+        ExpectedResponse::WeightQuery,
+    )
+    .await?
+    {
+        FP95Response::WeightQuery(readback) => Ok(readback),
+        _ => Err("重量参数查询收到非预期回报".to_string()),
+    }
+}
 

@@ -1,6 +1,6 @@
 use dashmap::DashMap;
 use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 use std::time::Instant;
 
 use crate::comms::ProtocolType;
@@ -25,7 +25,7 @@ pub struct ActiveLink {
     /// 底层真实多态物理传输链路句柄
     pub transport: Arc<dyn comms_core::TransportLink>,
     /// 健康度：最后一次成功收到合法数据包的时间戳 (用于动态选主)
-    pub last_heartbeat: Arc<Mutex<Instant>>,
+    pub last_raw_rx: Arc<Mutex<Instant>>,
 }
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -38,6 +38,10 @@ pub struct LinkMetrics {
     pub dedup_hit: AtomicU64,
     pub buffer_overflow: AtomicU64,
     pub parse_err: AtomicU64,
+    pub stale_frame: AtomicU64,
+    pub conflict_frame: AtomicU64,
+    pub recovery_buffered: AtomicU64,
+    pub all_links_missing: AtomicU64,
 }
 
 impl LinkMetrics {
@@ -55,6 +59,19 @@ impl LinkMetrics {
     }
     pub fn inc_parse_err(&self) {
         self.parse_err.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn inc_stale(&self) {
+        self.stale_frame.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn inc_conflict(&self) {
+        self.conflict_frame.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn inc_recovery_buffered(&self) {
+        self.recovery_buffered.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn add_all_links_missing(&self, count: u8) {
+        self.all_links_missing
+            .fetch_add(u64::from(count), Ordering::Relaxed);
     }
 }
 
@@ -79,6 +96,9 @@ pub struct AppState {
 
     /// 全链路遥测指标埋点统计器
     pub metrics: Arc<LinkMetrics>,
+
+    /// RX 层：多物理链路仲裁器发布的最新健康快照。
+    pub rx_health: Arc<RwLock<crate::router::rx_arbiter::RxHealthSnapshot>>,
 }
 
 impl AppState {
@@ -91,6 +111,7 @@ impl AppState {
             fp981c_seen: Arc::new(DashMap::new()),
             active_links: Arc::new(DashMap::new()),
             metrics: Arc::new(LinkMetrics::default()),
+            rx_health: Arc::new(RwLock::new(Default::default())),
         }
     }
 
@@ -124,5 +145,19 @@ impl AppState {
         }
         guard.as_ref().map(|state| state.aggregate.clone())
     }
-}
 
+    pub fn replace_rx_health(&self, snapshot: crate::router::rx_arbiter::RxHealthSnapshot) {
+        let mut guard = self
+            .rx_health
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = snapshot;
+    }
+
+    pub fn rx_health_snapshot(&self) -> crate::router::rx_arbiter::RxHealthSnapshot {
+        self.rx_health
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+}

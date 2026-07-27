@@ -283,3 +283,23 @@ export type FP95Frame94Sub1 = {
     aircraftCategoryInfo: string// 回读飞行器类别字符串
     flightNumber: string        // 回读航班号字符串
   }
+
+  // 重量装订配置 (Z11, 0x25)
+  export interface WeightBindingConfig {
+    emptyUavWeight: number      // 空机重量 (kg)
+    emptyUavC: number           // 空机重心 (%)
+    loadWeight: number          // 货物重量 (kg)
+    loadC: number               // 货物重心 (m)
+    oilTotal: number            // 总油量 (L)
+    oilType: number             // 燃油类型 (1~4)
+  }
+
+  // 重量查询回读 (Z12, 0x27)
+  export interface WeightReadback {
+    emptyUavWeight: number
+    emptyUavC: number
+    loadWeight: number
+    loadC: number
+    oilTotal: number
+    oilType: number
+  }

@@ -66,6 +66,13 @@ impl SerialLink {
             })
             .await;
 
+        log::info!(
+            "串口链路 [{}] 已启动监听 (端口: {}, 波特率: {})",
+            link_name,
+            config.port_name,
+            config.baud_rate
+        );
+
         let cancel_clone = cancel_token.clone();
         tokio::spawn(async move {
             let mut buf = vec![0u8; buf_size];
@@ -81,12 +88,8 @@ impl SerialLink {
                     res = reader.read(&mut buf) => {
                         match res {
                             Ok(0) => {
-                                log::warn!("串口链路 {} 读取到 0 字节 (EOF)", rx_name);
-                                let _ = rx_tx.send(LinkEvent::StatusChanged {
-                                    link_name: rx_name.clone(),
-                                    status: LinkStatus::Faulted("读取EOF，端口已关闭".to_string()),
-                                }).await;
-                                break;
+                                // 物理串口无数据时可能返回 Ok(0)，绝不能 break 退出，稍作等待继续监听
+                                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                             }
                             Ok(n) => {
                                 let _ = rx_tx.send(LinkEvent::Data {

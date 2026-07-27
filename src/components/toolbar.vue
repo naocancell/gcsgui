@@ -28,7 +28,8 @@ import {
   EarthOutline,
   EyeOutline,
   CompassOutline,
-  CaretForwardCircleOutline
+  CaretForwardCircleOutline,
+  PulseOutline
 } from '@vicons/ionicons5'
 //引入监听hooks和飞机数据状态管理
 
@@ -80,6 +81,10 @@ import {
   restoreTelemetryWindow,
   telemetryWindowOptions,
 } from '@/utils/telemetryWindow'
+import {
+  linkHealthWindowOptions,
+  restoreLinkHealthWindow,
+} from '@/utils/linkHealthWindow'
 
 declare global {
   interface Window {
@@ -1200,6 +1205,18 @@ async function isRouteVisiable(){
   await drawLosEntities(startCarto)
   losResultsVisible.value = true
 }
+async function showLinkHealthInfo() {
+  try {
+    const existingWin = await WebviewWindow.getByLabel('linkHealth')
+    if (existingWin) {
+      await restoreLinkHealthWindow(existingWin)
+    } else {
+      new WebviewWindow('linkHealth', linkHealthWindowOptions)
+    }
+  } catch (err) {
+    console.error('打开独立链路状态窗口失败:', err)
+  }
+}
 </script>
 
 <template>
@@ -1383,6 +1400,18 @@ async function isRouteVisiable(){
           </template>
         </n-button>
       </n-dropdown>
+
+      <!-- 链路状态 -->
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
+          <n-button tertiary type="warning" @click="showLinkHealthInfo">
+            <template #icon>
+              <n-icon><PulseOutline /></n-icon>
+            </template>
+          </n-button>
+        </template>
+        <span>链路状态</span>
+      </n-tooltip>
 
       <!-- 航电信息 -->
       <n-tooltip placement="bottom" trigger="hover">

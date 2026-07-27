@@ -52,7 +52,7 @@ fn require_bit(value: u8, field: &str) -> Result<u8, String> {
     if value <= 1 {
         Ok(value)
     } else {
-        Err(format!("{field} 只能为 0 或 1"))
+        Err(format!("{} 只能为 0 或 1", field))
     }
 }
 
@@ -82,9 +82,9 @@ fn parse_hex_byte(value: &str, field: &str) -> Result<u8, String> {
         .or_else(|| value.strip_prefix("0X"))
         .unwrap_or(value);
     if digits.len() != 2 {
-        return Err(format!("{field} 必须是两位十六进制字节"));
+        return Err(format!("{} 必须是两位十六进制字节", field));
     }
-    u8::from_str_radix(digits, 16).map_err(|_| format!("{field} 不是有效十六进制字节"))
+    u8::from_str_radix(digits, 16).map_err(|_| format!("{} 不是有效十六进制字节", field))
 }
 
 fn encode_aircraft_category(category: &str, detail: &str) -> Result<u8, String> {
@@ -114,7 +114,7 @@ fn encode_aircraft_category(category: &str, detail: &str) -> Result<u8, String> 
         ("C类", "水面航行器-服务设备") => 2,
         ("C类", "单点式障碍物（包括系留气球）") => 3,
         ("D类", "保留（无定义）") => 0,
-        _ => return Err(format!("{category} 不支持发射器类型“{detail}”")),
+        _ => return Err(format!("{} 不支持发射器类型“{}”", category, detail)),
     };
     Ok((detail_code << 5) | major)
 }
@@ -233,7 +233,7 @@ fn decode_aircraft_category(value: u8) -> String {
         (2, 3) => "单点式障碍物",
         _ => "未定义",
     };
-    format!("{category}（{detail_text}）")
+    format!("{}（{}）", category, detail_text)
 }
 
 pub fn decode_air_traffic_query(data: [u8; 16]) -> Result<AirTrafficParamReadback, String> {
@@ -271,11 +271,101 @@ pub fn decode_air_traffic_query(data: [u8; 16]) -> Result<AirTrafficParamReadbac
 }
 
 pub fn matches_switch_binding(data: &[u8; 16], expected: &[u8; 15]) -> bool {
-    data[..2] == expected[..2]
+    data[0] == SWITCH_BIND_CODE && data[1..3] == expected[0..2]
 }
 
 pub fn matches_air_traffic_binding(data: &[u8; 16], expected: &[u8; 15]) -> bool {
-    data[..15] == expected[..]
+    data[0] == AIR_TRAFFIC_BIND_CODE && data[1..16] == expected[..]
 }
 
+pub const WEIGHT_BIND_CODE: u8 = 0x25;
+pub const WEIGHT_QUERY_CODE: u8 = 0x27;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeightBindingConfig {
+    pub empty_uav_weight: u16,
+    pub empty_uav_c: f64,
+    pub load_weight: u16,
+    pub load_c: f64,
+    pub oil_total: u16,
+    pub oil_type: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeightReadback {
+    pub empty_uav_weight: u16,
+    pub empty_uav_c: f64,
+    pub load_weight: u16,
+    pub load_c: f64,
+    pub oil_total: u16,
+    pub oil_type: u8,
+}
+
+pub fn encode_weight_binding(config: &WeightBindingConfig) -> Result<[u8; 15], String> {
+    if !config.empty_uav_c.is_finite() || config.empty_uav_c < 0.0 {
+        return Err("空机重心必须为有限非负数值".to_string());
+    }
+    if !config.load_c.is_finite() || config.load_c < 0.0 {
+        return Err("货物重心必须为有限非负数值".to_string());
+    }
+    if !(1..=4).contains(&config.oil_type) {
+        return Err("燃油类型必须为 1 到 4".to_string());
+    }
+
+    let empty_c_scaled = (config.empty_uav_c * 100.0).round();
+    if empty_c_scaled > u16::MAX as f64 {
+        return Err("空机重心数值超出表示范围".to_string());
+    }
+    let empty_c_raw = empty_c_scaled as u16;
+
+    let load_c_scaled = (config.load_c * 10.0).round();
+    if load_c_scaled > u16::MAX as f64 {
+        return Err("货物重心数值超出表示范围".to_string());
+    }
+    let load_c_raw = load_c_scaled as u16;
+
+    let mut payload = [0u8; 15];
+    payload[0..2].copy_from_slice(&config.empty_uav_weight.to_le_bytes());
+    payload[2..4].copy_from_slice(&empty_c_raw.to_le_bytes());
+    payload[4..6].copy_from_slice(&config.load_weight.to_le_bytes());
+    payload[6..8].copy_from_slice(&load_c_raw.to_le_bytes());
+    payload[8..10].copy_from_slice(&config.oil_total.to_le_bytes());
+    payload[10] = config.oil_type;
+    Ok(payload)
+}
+
+pub fn decode_weight_query(data: [u8; 16]) -> Result<WeightReadback, String> {
+    if data[0] != WEIGHT_QUERY_CODE {
+        return Err(format!("重量参数查询回报功能码错误: 0x{:02X}", data[0]));
+    }
+    let empty_uav_weight = u16::from_le_bytes([data[1], data[2]]);
+    let empty_c_raw = u16::from_le_bytes([data[3], data[4]]);
+    let load_weight = u16::from_le_bytes([data[5], data[6]]);
+    let load_c_raw = u16::from_le_bytes([data[7], data[8]]);
+    let oil_total = u16::from_le_bytes([data[9], data[10]]);
+    let raw_oil_type = data[11];
+    let oil_type = match raw_oil_type {
+        0 => 4,
+        1..=4 => raw_oil_type,
+        _ => return Err(format!("燃油类型回报取值无效: {}", raw_oil_type)),
+    };
+
+    let empty_uav_c = (empty_c_raw as f64) * 0.01;
+    let load_c = (load_c_raw as f64) * 0.1;
+
+    Ok(WeightReadback {
+        empty_uav_weight,
+        empty_uav_c,
+        load_weight,
+        load_c,
+        oil_total,
+        oil_type,
+    })
+}
+
+pub fn matches_weight_binding(data: &[u8; 16], expected: &[u8; 15]) -> bool {
+    data[0] == WEIGHT_BIND_CODE && data[1..16] == expected[..]
+}
 

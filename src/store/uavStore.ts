@@ -11,12 +11,15 @@ import type {
   TransponderSwitchConfig,
   TransponderSwitchReadback,
   TransponderParamConfig,
-  TransponderParamReadback
+  TransponderParamReadback,
+  WeightBindingConfig,
+  WeightReadback
 } from '@/types/entityoptions'
 import {
   getFp95FlightSwitchCommand,
   type Fp95AvionicsDevice,
 } from '@/utils/plane/fp95AvionicsControl'
+import type { RxHealthSnapshot } from '@/types/linkHealth'
 
 // 协议解包类型枚举
 const enum Protocol {
@@ -63,6 +66,7 @@ export const useUavStore = defineStore('uav', () => {
   const availablePorts = ref<string[]>([])
 
   const networkInterfaces = ref<{ name: string; ip: string }[]>([])
+  const rxHealth = shallowRef<RxHealthSnapshot>({ links: [], aircraft: [] })
 
   let unlisten: UnlistenFn | null = null
   let fp95Unlisten: UnlistenFn | null = null
@@ -73,6 +77,9 @@ export const useUavStore = defineStore('uav', () => {
   let fp981cListenPromise: Promise<void> | null = null
   let fp981cLifecycleGeneration = 0
   let portsUnlisten: UnlistenFn | null = null
+  let healthUnlisten: UnlistenFn | null = null
+  let healthListenPromise: Promise<void> | null = null
+  let healthListenerGeneration = 0
 
   function needsFp95Listening() {
     return isFp95Running.value
@@ -83,6 +90,13 @@ export const useUavStore = defineStore('uav', () => {
   function needsFp981cListening() {
     return (isMainSerialRunning.value && mainSerialProtocol.value === Protocol.FP981C)
       || (isSubSerialRunning.value && subSerialProtocol.value === Protocol.FP981C)
+  }
+
+  function needsHealthListening() {
+    return isServiceRunning.value
+      || isFp95Running.value
+      || isMainSerialRunning.value
+      || isSubSerialRunning.value
   }
 
   // 监听 uav-info-event 事件
@@ -169,6 +183,46 @@ export const useUavStore = defineStore('uav', () => {
       if (fp981cListenPromise === pending) fp981cListenPromise = null
     }
   }
+
+  async function startHealthListening(lifecycleGeneration: number) {
+    if (healthUnlisten) return
+    if (healthListenPromise) {
+      await healthListenPromise
+      if (!healthUnlisten && needsHealthListening()) {
+        await startHealthListening(healthListenerGeneration)
+      }
+      return
+    }
+
+    const pending = (async () => {
+      const candidateUnlisten = await listen<RxHealthSnapshot>(
+        'link-health-event',
+        (event) => {
+          if (
+            lifecycleGeneration === healthListenerGeneration
+            && needsHealthListening()
+          ) {
+            rxHealth.value = event.payload
+          }
+        },
+      )
+      if (
+        lifecycleGeneration === healthListenerGeneration
+        && needsHealthListening()
+      ) {
+        healthUnlisten = candidateUnlisten
+        console.log('前端已挂载链路健康监听服务')
+      } else {
+        candidateUnlisten()
+      }
+    })()
+    healthListenPromise = pending
+    try {
+      await pending
+    } finally {
+      if (healthListenPromise === pending) healthListenPromise = null
+    }
+  }
   // 停止监听 uav-info-event 事件
   function stopListening() {
     if (unlisten) {
@@ -194,6 +248,14 @@ export const useUavStore = defineStore('uav', () => {
     }
   }
 
+  function stopHealthListening() {
+    if (healthUnlisten) {
+      healthUnlisten()
+      healthUnlisten = null
+      console.log('前端已取消挂载链路健康监听服务')
+    }
+  }
+
   function clearFp95State() {
     if (fp95Watchdog) {
       clearTimeout(fp95Watchdog)
@@ -213,6 +275,11 @@ export const useUavStore = defineStore('uav', () => {
       stopFp981cListening()
       fp981cMap.value = new Map()
     }
+    if (!needsHealthListening()) {
+      healthListenerGeneration += 1
+      stopHealthListening()
+      rxHealth.value = { links: [], aircraft: [] }
+    }
   }
 
   async function syncProtocolListeners() {
@@ -222,6 +289,9 @@ export const useUavStore = defineStore('uav', () => {
     }
     if (needsFp981cListening()) {
       await startFp981cListening(fp981cLifecycleGeneration)
+    }
+    if (needsHealthListening()) {
+      await startHealthListening(healthListenerGeneration)
     }
   }
 
@@ -234,6 +304,7 @@ export const useUavStore = defineStore('uav', () => {
       await startListening()
     } catch (err) {
       isServiceRunning.value = false
+      deactivateUnusedProtocolListeners()
       console.error('启动并保存 UAVInfo UDP 后台接收失败', err)
       throw err
     }
@@ -274,6 +345,7 @@ export const useUavStore = defineStore('uav', () => {
     } catch (err) {
       if (lifecycleGeneration === fp95ServiceGeneration) {
         isFp95Running.value = false
+        deactivateUnusedProtocolListeners()
       }
       console.error('启动并保存 FP95 UDP 后台接收失败', err)
       throw err
@@ -334,6 +406,7 @@ export const useUavStore = defineStore('uav', () => {
       console.log(status)
     } catch (err) {
       isMainSerialRunning.value = false
+      deactivateUnusedProtocolListeners()
       console.error('启动并保存主链路串口接收失败', err)
       throw err
     }
@@ -360,6 +433,7 @@ export const useUavStore = defineStore('uav', () => {
       console.log(status)
     } catch (err) {
       isSubSerialRunning.value = false
+      deactivateUnusedProtocolListeners()
       console.error('启动并保存副链路串口接收失败', err)
       throw err
     }
@@ -583,6 +657,24 @@ export const useUavStore = defineStore('uav', () => {
     flightNumber: '',
   })
 
+  const weightBindingConfig = ref<WeightBindingConfig>({
+    emptyUavWeight: 0,
+    emptyUavC: 0,
+    loadWeight: 0,
+    loadC: 0,
+    oilTotal: 0,
+    oilType: 4,
+  })
+
+  const weightReadback = ref<WeightReadback>({
+    emptyUavWeight: 0,
+    emptyUavC: 0,
+    loadWeight: 0,
+    loadC: 0,
+    oilTotal: 0,
+    oilType: 4,
+  })
+
   const transponderOperationPending = ref(false)
 
   function currentFp95AircraftId() {
@@ -639,6 +731,24 @@ export const useUavStore = defineStore('uav', () => {
     return runTransponderOperation(async () => {
       const res = await invoke<TransponderParamReadback>('query_air_traffic_params', { aircraftId })
       transponderParamReadback.value = res
+      return res
+    })
+  }
+
+  async function bindWeightParams(config: WeightBindingConfig) {
+    const aircraftId = currentFp95AircraftId()
+    await runTransponderOperation(async () => {
+      await invoke('bind_weight_params', { aircraftId, config })
+    })
+    weightBindingConfig.value = { ...config }
+  }
+
+  async function queryWeightParams() {
+    const aircraftId = currentFp95AircraftId()
+    return runTransponderOperation(async () => {
+      const res = await invoke<WeightReadback>('query_weight_params', { aircraftId })
+      weightReadback.value = res
+      weightBindingConfig.value = { ...res }
       return res
     })
   }
@@ -765,6 +875,7 @@ export const useUavStore = defineStore('uav', () => {
     isSubSerialRunning,
     availablePorts,
     networkInterfaces,
+    rxHealth,
     startUavService,
     stopUavService,
     startFp95Service,
@@ -793,6 +904,10 @@ export const useUavStore = defineStore('uav', () => {
     queryTransponderSwitches,
     bindTransponderParams,
     queryTransponderParams,
+    weightBindingConfig,
+    weightReadback,
+    bindWeightParams,
+    queryWeightParams,
     toggleMockUavInfoService,
     syncProtocolListeners,
     startListening,
