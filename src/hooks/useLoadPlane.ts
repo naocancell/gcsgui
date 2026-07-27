@@ -359,7 +359,7 @@ export function useLoadPlane() {
     )
 
     // 兼容数秒级遥测；连续 10 秒无数据才判定离线并移除。
-    const planeOfflineTimeout = 2_000
+    const planeOfflineTimeout = 1_000
     intervalId = window.setInterval(() => {
       const now = Date.now()
       for (const [key, lastSeen] of Array.from(lastSeenMap.entries())) {

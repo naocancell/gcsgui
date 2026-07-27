@@ -4,6 +4,7 @@
   创建人：Zhaipeixiu
 -->
 <script setup lang="ts">
+import { RadioOutline } from '@vicons/ionicons5'
 import {
   ChevronBack,
   ChevronForward,
@@ -22,6 +23,12 @@ import {
   RemoveOutline,
   InformationSharp,
   InformationCircleOutline,
+  AlertCircleOutline,
+  ScanOutline,
+  EarthOutline,
+  EyeOutline,
+  CompassOutline,
+  CaretForwardCircleOutline
 } from '@vicons/ionicons5'
 //引入监听hooks和飞机数据状态管理
 
@@ -67,6 +74,7 @@ import {
 } from '@/store/selectedPlaneStore'
 import { useTerrainWarning } from '@/hooks/useTerrainWarning'
 import { useMarkObstacle } from '@/hooks/useMarkObstacle.ts'
+import { useRouteLineOfSight }from '@/hooks/useRouteLineOfSight.ts'
 import {
   exitApplicationOnClose,
   restoreTelemetryWindow,
@@ -80,6 +88,21 @@ declare global {
     pendingSelectedRouteId?: string | number | null
   }
 }
+
+const {isVisiable,drawLosEntities,toggleLosEntitiesVisibility} = useRouteLineOfSight()
+const losResultsVisible = ref(true)
+const losAnalyzeOptions = computed(() =>
+  store.menuOptions.LosAnalyzeOptions.map((option) =>
+    option.key === 'ifShowLos'
+      ? {
+          ...option,
+          label: losResultsVisible.value
+            ? '隐藏结果'
+            : '显示结果',
+        }
+      : option,
+  ),
+)
 const selectedPlaneStore = useSelectedPlaneStore()
 const { selectedModel, selectedMeta } = storeToRefs(selectedPlaneStore)
 const terrainWarningApi = ref<ReturnType<typeof useTerrainWarning> | null>(null)
@@ -89,6 +112,10 @@ type TerrainWarningTarget = {
 }
 let terrainWarningTarget: TerrainWarningTarget | null = null
 const terrainWarningTargetLabel = ref('')
+const terrainWarningDistance = ref(10000)//默认值
+const terrainWarningClearance = ref(100)//默认值
+const terrainWarningDistanceInput = ref<number | null>(10000)
+const terrainWarningClearanceInput = ref<number | null>(100)
 
 const router = useRouter()
 
@@ -206,10 +233,7 @@ function startCompanionMode() {
       Cesium.Cartesian3.clone(viewer.camera.position, cameraOffset)
     }
 
-    Cesium.Matrix4.getTranslation(
-      companionModel.modelMatrix,
-      targetPosition,
-    )
+    Cesium.Matrix4.getTranslation(companionModel.modelMatrix, targetPosition)
 
     viewer.camera.lookAt(
       targetPosition,
@@ -293,6 +317,25 @@ function handleAnalyseSelect(key) {
     store.analysisVars.analysisType = 1
     //弹出参数窗口
     spatialAnalyse.value?.openParamsDialog()
+  }
+}
+
+function handleLosAnalyseSelect(key) {
+  //通视分析按钮
+  if (key === 'losAnalyse') {
+    isRouteVisiable()
+  }
+  if (key === 'stopLosAnalyse'){
+    //TODO 停止通视分析
+  }
+  if (key === 'ifShowLos') {
+    const visible = toggleLosEntitiesVisibility()
+    if (visible === null) {
+      message.warning('暂无通视分析结果')
+      return
+    }
+    losResultsVisible.value = visible
+    message.success(visible ? '通视结果已显示' : '通视结果已隐藏')
   }
 }
 
@@ -1008,6 +1051,35 @@ const profileMaxHeightLabel = computed(() => {
   if (!profileRange.value) return '--'
   return profileRange.value.max.toFixed(0)
 })
+//根据hooks中返回的剖面拿到飞机的高度用于展示
+const terrainWarningAircraftHeight = computed(() => {
+  const height = terrainProfilePoints.value[0]?.flightHeight
+  return Number.isFinite(height) ? `${height.toFixed(0)} m` : '--'
+})
+//高度预数值传入到hooks中 默认第一次远方10km 高度100
+function applyTerrainWarningOptions() {
+  terrainWarningApi.value?.updateOptions({
+    distance: terrainWarningDistance.value,
+    warnClearance: terrainWarningClearance.value,
+  })
+}
+//更新用户输入的预警距离
+function updateTerrainWarningDistance(value: number | null) {
+  if (value === null || value < 1000 || value > 10000) return
+  terrainWarningDistance.value = value
+  applyTerrainWarningOptions()
+}
+//更新用户输入的预警高度
+function updateTerrainWarningClearance(value: number | null) {
+  if (value === null || value < 100 || value > 2000) return
+  terrainWarningClearance.value = value
+  applyTerrainWarningOptions()
+}
+//输入框中显示的值（可能输入的不对 update会对数据进行矫正 矫正后再显示到input中）
+function restoreTerrainWarningInputs() {
+  terrainWarningDistanceInput.value = terrainWarningDistance.value
+  terrainWarningClearanceInput.value = terrainWarningClearance.value
+}
 
 onMounted(async () => {
   const mainWindow = getCurrentWindow()
@@ -1022,11 +1094,11 @@ onMounted(async () => {
     getTerrainWarningAircraftPosition,
     getTerrainWarningAircraftHeading,
     {
-      distance: 10000,
+      distance: terrainWarningDistance.value,
       steps: 50, //每1000米采样10个点
       intervalMs: 10,
       terrainLevel: 11,
-      warnClearance: 100,
+      warnClearance: terrainWarningClearance.value,
     }, //传递的参数
   )
 })
@@ -1048,13 +1120,16 @@ const terrainWarningIsDanger = computed(
 const terrainWarningMinClearance = computed(
   () => terrainWarningApi.value?.minClearance ?? Infinity,
 )
-
+//数组包含多个如下对象
+/*{
+ *distance: number//距离
+  terrainHeight: number //地形高
+  flightHeight: number //飞机高
+  clearance: number     //离地高度
+}
+*/
 const terrainProfilePoints = computed(
   () => terrainWarningApi.value?.profilePoints ?? [],
-)
-
-const terrainWarningDistance = computed(
-  () => terrainWarningApi.value?.distance ?? 1000,
 )
 
 const terrainWarningStatusText = computed(() => {
@@ -1108,6 +1183,22 @@ async function showTelemetryInfo() {
   } catch (err) {
     console.error('打开独立航电窗口失败:', err)
   }
+}
+
+async function isRouteVisiable(){
+  const startCarto = Cartographic.fromDegrees(110.093484, 22.395758, 1800)
+  //const endCarto = Cartographic.fromDegrees(109.97489, 22.396414, 1800) //航点2通视
+  //const endCarto = Cartographic.fromDegrees(109.682106, 22.14533, 1800) //航点3通视
+  //const endCarto = Cartographic.fromDegrees(109.530916, 21.763838, 1800) //航点4通视
+  //const endCarto = Cartographic.fromDegrees(109.612228, 21.539554, 1800) //航点5通视
+  //const endCarto = Cartographic.fromDegrees(109.495786, 20.007391, 1800) //航点6通视
+  //const endCarto = Cartographic.fromDegrees(109.536614, 19.739022, 1800) //航点7不通视
+  //const endCarto = Cartographic.fromDegrees(109.632882, 19.551391, 1800) //航点8不通视
+  //const endCarto = Cartographic.fromDegrees(109.998914, 19.153206, 1800) //航点9不通视
+  //const startCarto   = Cartographic.fromDegrees(110.281251, 18.78065, 1800) //航点10不通视
+  //isVisiable(startCarto,endCarto,90)
+  await drawLosEntities(startCarto)
+  losResultsVisible.value = true
 }
 </script>
 
@@ -1218,11 +1309,11 @@ async function showTelemetryInfo() {
             @click="uavStore.toggleMockUavInfoService"
           >
             <template #icon>
-              <n-icon><Airplane /></n-icon>
+              <n-icon><CaretForwardCircleOutline /></n-icon>
             </template>
           </n-button>
         </template>
-        <span>飞机实时位置</span>
+        <span>模拟飞行</span>
       </n-tooltip>
 
       <n-tooltip placement="bottom" trigger="hover">
@@ -1234,7 +1325,7 @@ async function showTelemetryInfo() {
             @click="toggleSelectedPlaneTerrainWarning"
           >
             <template #icon>
-              <n-icon><Airplane /></n-icon>
+              <n-icon><AlertCircleOutline /></n-icon>
             </template>
           </n-button>
         </template>
@@ -1253,7 +1344,7 @@ async function showTelemetryInfo() {
             @click="activeCompanionMode"
           >
             <template #icon>
-              <n-icon><EyeSharp /></n-icon>
+              <n-icon><Airplane /></n-icon>
             </template>
           </n-button>
         </template>
@@ -1261,7 +1352,6 @@ async function showTelemetryInfo() {
           {{ companionMode ? '关闭三维伴飞' : '开启三维伴飞' }}
         </span>
       </n-tooltip>
-
 
       <!-- <n-popselect
         v-model:value="SceneValue"
@@ -1305,6 +1395,29 @@ async function showTelemetryInfo() {
         </template>
         <span>航电信息</span>
       </n-tooltip>
+      <!-- <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
+          <n-button tertiary type="warning" @click="isRouteVisiable">
+            <template #icon>
+              <n-icon><RadioOutline /></n-icon>
+            </template>
+          </n-button>
+        </template>
+        <span>通视分析测试</span>
+      </n-tooltip> -->
+      <!-- 通视分析 -->
+      <n-dropdown
+        :options="losAnalyzeOptions"
+        @select="handleLosAnalyseSelect"
+      >
+        <n-button tertiary type="warning">
+          <template #icon>
+            <n-icon><RadioOutline /></n-icon>
+          </template>
+        </n-button>
+      </n-dropdown>
+
+
 
       <!-- 刷新页面 -->
       <n-tooltip placement="bottom" trigger="hover">
@@ -1317,6 +1430,7 @@ async function showTelemetryInfo() {
         </template>
         <span>刷新页面</span>
       </n-tooltip>
+
       <!-- 最小化程序 -->
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
@@ -1632,13 +1746,7 @@ async function showTelemetryInfo() {
   <div v-if="terrainWarningActive" class="terrain-warning-panel">
     <div class="terrain-warning-panel__header">
       <div>
-        <div class="terrain-warning-panel__title">高度预警</div>
-        <div class="terrain-warning-panel__aircraft">
-          {{ terrainWarningTargetLabel }}
-        </div>
-        <div class="terrain-warning-panel__sub-title">
-          前方 {{ terrainWarningDistance }} m 地形剖面
-        </div>
+        <div class="terrain-warning-panel__title">高度预警: {{ terrainWarningTargetLabel }}</div>
       </div>
 
       <n-tag :type="terrainWarningIsDanger ? 'error' : 'success'" size="small">
@@ -1646,8 +1754,50 @@ async function showTelemetryInfo() {
       </n-tag>
     </div>
 
-    <div class="terrain-warning-panel__status">
+    <div class="terrain-warning-panel__header">
       {{ terrainWarningStatusText }}
+    </div>
+
+    <div class="terrain-warning-panel__metrics">
+      <div>
+        <span>飞机高度</span>
+        <strong>{{ terrainWarningAircraftHeight }}</strong>
+      </div>
+      <div>
+        <span>预警离地高度</span>
+        <strong>{{ terrainWarningClearance }} m</strong>
+      </div>
+    </div>
+
+    <div class="terrain-warning-panel__controls">
+      <label>
+        <span>预警长度</span>
+        <n-input-number
+          v-model:value="terrainWarningDistanceInput"
+          :min="1000"
+          :max="10000"
+          :step="100"
+          size="small"
+          @update:value="updateTerrainWarningDistance"
+          @blur="restoreTerrainWarningInputs"
+        >
+          <template #suffix>m</template>
+        </n-input-number>
+      </label>
+      <label>
+        <span>预警离地高度</span>
+        <n-input-number
+          v-model:value="terrainWarningClearanceInput"
+          :min="100"
+          :max="2000"
+          :step="10"
+          size="small"
+          @update:value="updateTerrainWarningClearance"
+          @blur="restoreTerrainWarningInputs"
+        >
+          <template #suffix>m</template>
+        </n-input-number>
+      </label>
     </div>
 
     <svg
@@ -1789,22 +1939,47 @@ async function showTelemetryInfo() {
   font-weight: bold;
 }
 
-.terrain-warning-panel__aircraft {
-  margin-top: 2px;
-  font-size: 14px;
-  font-weight: 600;
-  color: rgb(255 255 255 / 90%);
+
+.terrain-warning-panel__metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 
-.terrain-warning-panel__sub-title {
-  margin-top: 2px;
+.terrain-warning-panel__metrics > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 9px;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 6px;
+  background: rgb(255 255 255 / 6%);
+}
+
+.terrain-warning-panel__metrics span,
+.terrain-warning-panel__controls label > span {
   font-size: 12px;
   color: rgb(255 255 255 / 65%);
 }
 
-.terrain-warning-panel__status {
-  margin-bottom: 8px;
-  font-size: 13px;
+.terrain-warning-panel__metrics strong {
+  font-size: 14px;
+  color: #fff;
+}
+
+.terrain-warning-panel__controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.terrain-warning-panel__controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 
 .terrain-profile-svg {

@@ -93,6 +93,9 @@ export function useTerrainWarning(
     terrainLevel = 11,
     warnClearance = 100,
   } = options
+  //设施最大最最小范围
+  let configuredDistance = Cesium.Math.clamp(distance, 1000, 10000)
+  let configuredWarnClearance = Cesium.Math.clamp(warnClearance, 100, 2000)
 
   const active = ref(false)
   const isWarning = ref(false)
@@ -200,7 +203,7 @@ export function useTerrainWarning(
       const { cartographics, distances } = buildForwardGroundPoints(
         aircraftPosition,
         Number(aircraftHeading),
-        distance,
+        configuredDistance,
         steps,
       )
 
@@ -277,7 +280,7 @@ export function useTerrainWarning(
         ...profilePoints.value.map((point) => point.clearance),
       )
 
-      isWarning.value = minClearance.value < warnClearance
+      isWarning.value = minClearance.value < configuredWarnClearance
 
       viewer.scene.requestRender()
     } catch (error) {
@@ -350,16 +353,37 @@ export function useTerrainWarning(
     }
   }
 
+  function updateOptions(
+    nextOptions: Pick<TerrainWarningOptions, 'distance' | 'warnClearance'>,
+  ) {
+    if (nextOptions.distance !== undefined) {
+      configuredDistance = Cesium.Math.clamp(nextOptions.distance, 1000, 10000)
+    }
+
+    if (nextOptions.warnClearance !== undefined) {
+      configuredWarnClearance = Cesium.Math.clamp(
+        nextOptions.warnClearance,
+        100,
+        2000,
+      )
+    }
+
+    sampleVersion++
+    if (active.value) {
+      pendingSample = true
+      void update()
+    }
+  }
+
   return {
     active,
     isWarning,
     minClearance,
     actualTerrainLevel,
     profilePoints,
-    distance,
-    warnClearance,
     start,
     stop,
     toggle,
+    updateOptions,
   }
 }

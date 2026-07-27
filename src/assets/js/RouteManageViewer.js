@@ -390,6 +390,8 @@ export default class RouteManageViewer {
           this.selectedRouteId === routeId
             ? this.selectedLineMaterial
             : this.normalLineMaterial,
+        arcType: Cesium.ArcType.GEODESIC,
+        granularity: 500 / Cesium.Ellipsoid.WGS84.maximumRadius,
         clampToGround: false,
       },
     })
