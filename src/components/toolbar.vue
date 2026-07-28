@@ -29,7 +29,7 @@ import {
   EyeOutline,
   CompassOutline,
   CaretForwardCircleOutline,
-  PulseOutline
+  PulseOutline,
 } from '@vicons/ionicons5'
 //引入监听hooks和飞机数据状态管理
 
@@ -75,7 +75,7 @@ import {
 } from '@/store/selectedPlaneStore'
 import { useTerrainWarning } from '@/hooks/useTerrainWarning'
 import { useMarkObstacle } from '@/hooks/useMarkObstacle.ts'
-import { useRouteLineOfSight }from '@/hooks/useRouteLineOfSight.ts'
+import { useRouteLineOfSight } from '@/hooks/useRouteLineOfSight.ts'
 import {
   exitApplicationOnClose,
   restoreTelemetryWindow,
@@ -85,6 +85,7 @@ import {
   linkHealthWindowOptions,
   restoreLinkHealthWindow,
 } from '@/utils/linkHealthWindow'
+import LosAnalyseOptions from './page/LosAnalyseOptions.vue'
 
 declare global {
   interface Window {
@@ -94,16 +95,15 @@ declare global {
   }
 }
 
-const {isVisiable,drawLosEntities,toggleLosEntitiesVisibility} = useRouteLineOfSight()
+const { drawLosEntities, stopLosAnalysis, toggleLosEntitiesVisibility } =
+  useRouteLineOfSight()
 const losResultsVisible = ref(true)
 const losAnalyzeOptions = computed(() =>
   store.menuOptions.LosAnalyzeOptions.map((option) =>
     option.key === 'ifShowLos'
       ? {
           ...option,
-          label: losResultsVisible.value
-            ? '隐藏结果'
-            : '显示结果',
+          label: losResultsVisible.value ? '隐藏结果' : '显示结果',
         }
       : option,
   ),
@@ -117,8 +117,8 @@ type TerrainWarningTarget = {
 }
 let terrainWarningTarget: TerrainWarningTarget | null = null
 const terrainWarningTargetLabel = ref('')
-const terrainWarningDistance = ref(10000)//默认值
-const terrainWarningClearance = ref(100)//默认值
+const terrainWarningDistance = ref(10000) //默认值
+const terrainWarningClearance = ref(100) //默认值
 const terrainWarningDistanceInput = ref<number | null>(10000)
 const terrainWarningClearanceInput = ref<number | null>(100)
 
@@ -130,6 +130,7 @@ let SceneValue
 let showModal = ref(false)
 let showUdpModal = ref(false)
 let showRouteModal = ref(false)
+let showLosAnalyseModal = ref(false)
 let hasPlane = ref(false)
 let showDetection = ref(false)
 let store = useStaticStore()
@@ -325,13 +326,16 @@ function handleAnalyseSelect(key) {
   }
 }
 
-function handleLosAnalyseSelect(key) {
+async function handleLosAnalyseSelect(key) {
   //通视分析按钮
   if (key === 'losAnalyse') {
-    isRouteVisiable()
+    //弹窗进行参数设置  设置后点击确定或取消按钮再判断是否进行可视分析
+    showLosAnalyseModal.value = true
   }
-  if (key === 'stopLosAnalyse'){
-    //TODO 停止通视分析
+  if (key === 'stopLosAnalyse') {
+    if (!stopLosAnalysis()) {
+      message.warning('当前没有正在进行的通视分析')
+    }
   }
   if (key === 'ifShowLos') {
     const visible = toggleLosEntitiesVisibility()
@@ -1189,21 +1193,28 @@ async function showTelemetryInfo() {
     console.error('打开独立航电窗口失败:', err)
   }
 }
-
-async function isRouteVisiable(){
-  const startCarto = Cartographic.fromDegrees(110.093484, 22.395758, 1800)
-  //const endCarto = Cartographic.fromDegrees(109.97489, 22.396414, 1800) //航点2通视
-  //const endCarto = Cartographic.fromDegrees(109.682106, 22.14533, 1800) //航点3通视
-  //const endCarto = Cartographic.fromDegrees(109.530916, 21.763838, 1800) //航点4通视
-  //const endCarto = Cartographic.fromDegrees(109.612228, 21.539554, 1800) //航点5通视
-  //const endCarto = Cartographic.fromDegrees(109.495786, 20.007391, 1800) //航点6通视
-  //const endCarto = Cartographic.fromDegrees(109.536614, 19.739022, 1800) //航点7不通视
-  //const endCarto = Cartographic.fromDegrees(109.632882, 19.551391, 1800) //航点8不通视
-  //const endCarto = Cartographic.fromDegrees(109.998914, 19.153206, 1800) //航点9不通视
-  //const startCarto   = Cartographic.fromDegrees(110.281251, 18.78065, 1800) //航点10不通视
-  //isVisiable(startCarto,endCarto,90)
-  await drawLosEntities(startCarto)
-  losResultsVisible.value = true
+//通视分析时候得参数类型限定
+type losAnalyesParam = {
+  viewPointLon: number
+  viewPointLat: number
+  viewPointAlt: number
+  routeInterval: number
+  losInterval: number
+  isCalculateRefractionCorrection: boolean
+}
+async function isRouteVisiable(losAnalyesParam: losAnalyesParam) {
+  showLosAnalyseModal.value = false
+  const viewPositionCarto = Cartographic.fromDegrees(
+    losAnalyesParam.viewPointLon,
+    losAnalyesParam.viewPointLat,
+    losAnalyesParam.viewPointAlt,
+  )
+  const completed = await drawLosEntities(
+    viewPositionCarto,
+    losAnalyesParam.routeInterval,
+    losAnalyesParam.losInterval,
+  )
+  if (completed) losResultsVisible.value = true
 }
 async function showLinkHealthInfo() {
   try {
@@ -1435,18 +1446,13 @@ async function showLinkHealthInfo() {
         <span>通视分析测试</span>
       </n-tooltip> -->
       <!-- 通视分析 -->
-      <n-dropdown
-        :options="losAnalyzeOptions"
-        @select="handleLosAnalyseSelect"
-      >
+      <n-dropdown :options="losAnalyzeOptions" @select="handleLosAnalyseSelect">
         <n-button tertiary type="warning">
           <template #icon>
             <n-icon><RadioOutline /></n-icon>
           </template>
         </n-button>
       </n-dropdown>
-
-
 
       <!-- 刷新页面 -->
       <n-tooltip placement="bottom" trigger="hover">
@@ -1775,7 +1781,9 @@ async function showLinkHealthInfo() {
   <div v-if="terrainWarningActive" class="terrain-warning-panel">
     <div class="terrain-warning-panel__header">
       <div>
-        <div class="terrain-warning-panel__title">高度预警: {{ terrainWarningTargetLabel }}</div>
+        <div class="terrain-warning-panel__title">
+          高度预警: {{ terrainWarningTargetLabel }}
+        </div>
       </div>
 
       <n-tag :type="terrainWarningIsDanger ? 'error' : 'success'" size="small">
@@ -1911,6 +1919,11 @@ async function showLinkHealthInfo() {
     @routeDraw="startDrawRoute"
     @cancelDraw="showRouteModal = false"
   />
+  <LosAnalyseOptions
+    v-model:show="showLosAnalyseModal"
+    @startLosAnalyse="isRouteVisiable"
+    @cancelLosAnalyse="showLosAnalyseModal = false"
+  />
   <MarkerDialog ref="markerDialog"></MarkerDialog>
   <AltitudeWarning :warningResult="altitudeWarningResult" />
 </template>
@@ -1967,7 +1980,6 @@ async function showLinkHealthInfo() {
   font-size: 16px;
   font-weight: bold;
 }
-
 
 .terrain-warning-panel__metrics {
   display: grid;
