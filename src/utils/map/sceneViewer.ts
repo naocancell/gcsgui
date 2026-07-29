@@ -58,10 +58,10 @@ function initViewer(container: string | Element): Viewer {
   // 水雾特效
   viewer.scene.globe.showGroundAtmosphere = true
   // 设置更高的缩放惯性以使缩放操作更平滑
-  viewer.scene.screenSpaceCameraController.inertiaZoom = 0.9
+  viewer.scene.screenSpaceCameraController.inertiaZoom = 0.3
   // 限制相机缩放
   viewer.scene.screenSpaceCameraController.minimumZoomDistance = 1 //相机的高度的最小值
-  viewer.scene.screenSpaceCameraController.maximumZoomDistance = 10350000 //相机高度的最大值
+  viewer.scene.screenSpaceCameraController.maximumZoomDistance = 13050000 //相机高度的最大值
   // 设置设备像素比，可能会影响渲染性能
   // viewer.resolutionScale = window.devicePixelRatio
   // 视图重绘后确保清晰度

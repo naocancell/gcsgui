@@ -6,6 +6,7 @@ import {
   EllipsoidGeodesic,
   Color,
   Entity,
+  Cartesian2,
 } from 'cesium'
 import { ref } from 'vue'
 import type { AirlinePoint } from '@/types/entityoptions'
@@ -22,6 +23,7 @@ const ANALYSIS_CHUNK_SIZE = 250
 //绘制时候的批次大小
 const DRAW_BATCH_SIZE = 100
 const losEntities: Entity[] = []
+const viewPointEntities: Entity[] = [] 
 
 class LosAnalysisCancelledError extends Error {
   constructor() {
@@ -40,7 +42,8 @@ function yieldToMainThread() {
 
 function clearLosEntities() {
   const viewer = window.viewer
-  if (!viewer || losEntities.length === 0) return
+  if (!viewer) return
+if (losEntities.length === 0 && viewPointEntities.length === 0) return
 
   viewer.entities.suspendEvents()
 
@@ -48,8 +51,13 @@ function clearLosEntities() {
     losEntities.forEach((entity) => {
       viewer.entities.remove(entity)
     })
-
     losEntities.length = 0
+
+    viewPointEntities.forEach((entity) => {
+      viewer.entities.remove(entity)
+    })
+
+    viewPointEntities.length = 0
   } finally {
     viewer.entities.resumeEvents()
   }
@@ -59,8 +67,10 @@ function clearLosEntities() {
 
 function toggleLosEntitiesVisibility() {
   if (losEntities.length === 0) return null
-
   const visible = !losEntities[0].show
+  viewPointEntities.forEach((entity) => {
+    entity.show = visible
+  })
   losEntities.forEach((entity) => {
     entity.show = visible
   })
@@ -443,6 +453,25 @@ export function useRouteLineOfSight() {
         startCarto.latitude,
         startCarto.height,
       )
+      //绘制出来视点位置 并添加到里面
+      const viewPointEntity = window.viewer.entities.add({
+        id:'viewPoint',
+        position: startCartesian,
+        label:{
+          text:"视点",
+          pixelOffset:Cartesian2.fromArray([0,-30]),
+          font: "bold 24px", //设置为16像素
+          fillColor: Color.YELLOW // 设置为红色
+        },
+        point:{
+          pixelSize: 16, // 点的大小（像素）
+          color: Color.YELLOW, // 点的颜色
+          outlineColor: Color.BLACK, // 边框颜色
+          outlineWidth: 2, // 边框宽度（像素）
+          show: true // 是否显示
+        }
+      })
+      viewPointEntities.push(viewPointEntity)
       //根据间距获取到航线上采样点
       const airLineSamples = await sampleRouteByDistance(
         airlinePoints,

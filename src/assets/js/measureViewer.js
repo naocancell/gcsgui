@@ -1386,25 +1386,6 @@ export default class MeasureViewer {
       if (centerPoint == null) {
         centerPoint = pickPoint(event.position)
         if (!centerPoint) return
-
-        aPolygon = this.viewer.entities.add({
-          position: centerPoint,
-          name: 'draw circle',
-          ellipse: {
-            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-            material: this.graphicStyle.material,
-            outline: true,
-            outlineColor: this.graphicStyle.borderColor,
-            outlineWidth: this.graphicStyle.borderWidth,
-            fill: true,
-            semiMajorAxis: new Cesium.CallbackProperty(() => {
-              return radius
-            }, false),
-            semiMinorAxis: new Cesium.CallbackProperty(() => {
-              return radius
-            }, false),
-          },
-        })
       }
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK)
 
@@ -1413,6 +1394,29 @@ export default class MeasureViewer {
         let cartesian2 = pickPoint(move.endPosition)
         if (!cartesian2) return
         radius = Cesium.Cartesian3.distance(centerPoint, cartesian2)
+
+        // Cesium 的椭圆半轴必须大于 0，首次点击只记录圆心，等鼠标移动得到有效半径后再创建实体。
+        if (!aPolygon && radius > 0) {
+          aPolygon = this.viewer.entities.add({
+            position: centerPoint,
+            name: 'draw circle',
+            ellipse: {
+              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+              material: this.graphicStyle.material,
+              outline: true,
+              outlineColor: this.graphicStyle.borderColor,
+              outlineWidth: this.graphicStyle.borderWidth,
+              fill: true,
+              semiMajorAxis: new Cesium.CallbackProperty(() => {
+                return radius
+              }, false),
+              semiMinorAxis: new Cesium.CallbackProperty(() => {
+                return radius
+              }, false),
+            },
+          })
+        }
+
         this.viewer.scene.requestRender()
       }
     }, Cesium.ScreenSpaceEventType.MOUSE_MOVE)
@@ -1427,6 +1431,11 @@ export default class MeasureViewer {
         }
         this.viewer.scene.requestRender()
         this.graphics.push(aPolygon)
+        this._stopDraw()
+      } else {
+        if (aPolygon) {
+          this.viewer.entities.remove(aPolygon)
+        }
         this._stopDraw()
       }
     }, Cesium.ScreenSpaceEventType.RIGHT_CLICK)

@@ -1,11 +1,13 @@
 import { defineStore } from 'pinia'
 import { Airline } from '@/types/entityoptions.ts'
 
+export type RouteActionMode = 'idle' | 'drawing' | 'editing' | 'losPointPicking'
+
 export const useRouteStore = defineStore('RouteStore', {
   state: () => {
     return {
       flyRoute: [] as Airline[], //地图中绘制的航线，用于发送给后端（QT）
-      routeActionMode: 'idle' as 'idle' | 'drawing' | 'editing', //航线绘制模式，idle表示空闲，drawing表示正在绘制，editing表示正在编辑
+      routeActionMode: 'idle' as RouteActionMode,
     }
   },
   actions: {
@@ -54,6 +56,12 @@ export const useRouteStore = defineStore('RouteStore', {
     startEditing() {
       if (this.routeActionMode !== 'idle') return false
       this.routeActionMode = 'editing'
+      return true
+    },
+
+    startLosPointPicking() {
+      if (this.routeActionMode !== 'idle') return false
+      this.routeActionMode = 'losPointPicking'
       return true
     },
 

@@ -128,7 +128,11 @@ const hasSelectedRoute = computed(() => {
 })
 
 const canEditSelectedRoute = computed(() => {
-  return hasSelectedRoute.value && !isRouteEditing.value
+  return (
+    hasSelectedRoute.value &&
+    !isRouteEditing.value &&
+    routeStore.routeActionMode === 'idle'
+  )
 })
 
 const notify = (type: NotificationType, title: string, detail: string) => {
@@ -159,6 +163,11 @@ function isRouteDrawing() {
 }
 
 function warnRouteActionBusy() {
+  if (routeStore.routeActionMode === 'losPointPicking') {
+    uiMsg.warning('请先完成或取消地图选点')
+    return
+  }
+
   if (isRouteDrawing()) {
     uiMsg.warning('请先结束绘制')
     return
@@ -1013,7 +1022,11 @@ function startEditSelectedRoute() {
   }
   //询问routeStore 能否进入编辑状态
   if (!routeStore.startEditing()) {
-    uiMsg.warning('请先结束当前航线绘制或编辑操作')
+    uiMsg.warning(
+      routeStore.routeActionMode === 'losPointPicking'
+        ? '请先完成或取消地图选点'
+        : '请先结束当前航线绘制或编辑操作',
+    )
     return
   }
   routeManage.addAirLine(selectedRoute.value)

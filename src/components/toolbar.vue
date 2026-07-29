@@ -85,7 +85,7 @@ import {
   linkHealthWindowOptions,
   restoreLinkHealthWindow,
 } from '@/utils/linkHealthWindow'
-import LosAnalyseOptions from './page/LosAnalyseOptions.vue'
+import LosAnalyseOptions from './LosAnalyseOptions.vue'
 
 declare global {
   interface Window {
@@ -290,8 +290,17 @@ function openCloseBar() {
   }
   barIsOpen.value = !barIsOpen.value
 }
-//防止上一次绘制没结束
+//是否是在地图选择点状态
+function blockWhileLosPointPicking() {
+  if (useRouteStore().routeActionMode !== 'losPointPicking') return false
+
+  message.warning('请先完成或取消地图选点')
+  return true
+}
+
 function handleEditSelect(key) {
+  if (blockWhileLosPointPicking()) return
+
   const routeStore = useRouteStore()
   if (key === 'createLine') {
     // if (isDrawingRoute.value) {
@@ -314,6 +323,8 @@ function handleEditSelect(key) {
   }
 }
 function handleAnalyseSelect(key) {
+  if (blockWhileLosPointPicking()) return
+
   if (key === 'visibility') {
     store.analysisVars.analysisType = 2
     //弹出参数窗口
@@ -329,6 +340,16 @@ function handleAnalyseSelect(key) {
 async function handleLosAnalyseSelect(key) {
   //通视分析按钮
   if (key === 'losAnalyse') {
+    //先判断是否选中航线
+    const routeManage = window.routeManageViewer
+    const routeId = routeManage?.selectedRouteId
+
+    if (!routeId) {
+      message.info('请选中一条行航线！')
+      return
+    }
+    if (blockWhileLosPointPicking()) return
+
     //弹窗进行参数设置  设置后点击确定或取消按钮再判断是否进行可视分析
     showLosAnalyseModal.value = true
   }
@@ -349,6 +370,8 @@ async function handleLosAnalyseSelect(key) {
 }
 
 function handleDrawSelect(key) {
+  if (blockWhileLosPointPicking()) return
+
   if (key === 'clear') {
     if (window.measureViewer.clearDraw()) {
       message.warning('无可清除图形')
@@ -360,6 +383,8 @@ function handleDrawSelect(key) {
 
 // 测量菜单选中事件
 function handleSelect(key) {
+  if (blockWhileLosPointPicking()) return
+
   if (key === 'distance') {
     measure()
   } else if (key === 'area') {
@@ -827,7 +852,11 @@ function startDrawRoute(routeParams) {
   // }
 
   if (!routeStore.startDrawing()) {
-    message.warning('请先结束当前航线绘制或编辑操作')
+    message.warning(
+      routeStore.routeActionMode === 'losPointPicking'
+        ? '请先完成或取消地图选点'
+        : '请先结束当前航线绘制或编辑操作',
+    )
     return
   }
   //关闭绘制
