@@ -53,12 +53,12 @@ export const useStaticStore = defineStore('staticOptions', {
           },
         ],
         //航线通视分析
-        LosAnalyzeOptions:[
+        LosAnalyzeOptions: [
           { label: '通视分析', key: 'losAnalyse' },
           { label: '停止分析', key: 'stopLosAnalyse' },
-          { label: '隐藏结果', key: 'ifShowLos' },
-
-        ]
+          { label: '显示结果1', key: 'ifShowLosResult1' },
+          { label: '显示结果2', key: 'ifShowLosResult2' },
+        ],
       },
       webskt: {
         ws: null,

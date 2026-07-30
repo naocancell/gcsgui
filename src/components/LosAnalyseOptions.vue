@@ -184,9 +184,9 @@ const rules: FormRules = {
   routeInterval: {
     type: 'number',
     required: true,
-    min: 100,
+    min: 10,
     max: 10000,
-    message: '航线采样间距范围为 10 至 100000 m',
+    message: '航线采样间距范围为 10 至 10000 m',
     trigger: ['input', 'blur'],
   },
   losInterval: {

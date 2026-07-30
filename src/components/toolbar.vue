@@ -95,18 +95,26 @@ declare global {
   }
 }
 
-const { drawLosEntities, stopLosAnalysis, toggleLosEntitiesVisibility } =
+const { drawLosEntities, stopLosAnalysis, toggleLosResultVisibility } =
   useRouteLineOfSight()
-const losResultsVisible = ref(true)
+const losResult1Visible = ref(false)
+const losResult2Visible = ref(false)
 const losAnalyzeOptions = computed(() =>
-  store.menuOptions.LosAnalyzeOptions.map((option) =>
-    option.key === 'ifShowLos'
-      ? {
-          ...option,
-          label: losResultsVisible.value ? '隐藏结果' : '显示结果',
-        }
-      : option,
-  ),
+  store.menuOptions.LosAnalyzeOptions.map((option) => {
+    if (option.key === 'ifShowLosResult1') {
+      return {
+        ...option,
+        label: losResult1Visible.value ? '隐藏结果1' : '显示结果1',
+      }
+    }
+    if (option.key === 'ifShowLosResult2') {
+      return {
+        ...option,
+        label: losResult2Visible.value ? '隐藏结果2' : '显示结果2',
+      }
+    }
+    return option
+  }),
 )
 const selectedPlaneStore = useSelectedPlaneStore()
 const { selectedModel, selectedMeta } = storeToRefs(selectedPlaneStore)
@@ -354,18 +362,28 @@ async function handleLosAnalyseSelect(key) {
     showLosAnalyseModal.value = true
   }
   if (key === 'stopLosAnalyse') {
-    if (!stopLosAnalysis()) {
+    if (stopLosAnalysis()) {
+      losResult1Visible.value = false
+      losResult2Visible.value = false
+    } else {
       message.warning('当前没有正在进行的通视分析')
     }
   }
-  if (key === 'ifShowLos') {
-    const visible = toggleLosEntitiesVisibility()
+  if (key === 'ifShowLosResult1' || key === 'ifShowLosResult2') {
+    const resultType = key === 'ifShowLosResult1' ? 1 : 2
+    const visible = toggleLosResultVisibility(resultType)
     if (visible === null) {
       message.warning('暂无通视分析结果')
       return
     }
-    losResultsVisible.value = visible
-    message.success(visible ? '通视结果已显示' : '通视结果已隐藏')
+    if (resultType === 1) {
+      losResult1Visible.value = visible
+    } else {
+      losResult2Visible.value = visible
+    }
+    message.success(
+      visible ? `通视结果${resultType}已显示` : `通视结果${resultType}已隐藏`,
+    )
   }
 }
 
@@ -382,7 +400,7 @@ function handleDrawSelect(key) {
 }
 
 // 测量菜单选中事件
-function handleSelect(key) {
+function handleMeasureSelect(key) {
   if (blockWhileLosPointPicking()) return
 
   if (key === 'distance') {
@@ -427,7 +445,8 @@ async function handleFile() {
  * 多点距离测量
  */
 function measure() {
-  window.measureViewer.clearDisEntity()
+  //允许多次测量直到点击清楚按钮
+  // window.measureViewer.clearDisEntity()
   window.measureViewer.activate()
 }
 
@@ -453,7 +472,8 @@ function measureEnd() {
  * 面积测量
  */
 function measureArea() {
-  window.measureViewer.clearAreaEntity()
+  //允许多次面积测量
+  // window.measureViewer.clearAreaEntity()
   window.measureViewer.activateAreaMeasure()
 }
 
@@ -1243,7 +1263,10 @@ async function isRouteVisiable(losAnalyesParam: losAnalyesParam) {
     losAnalyesParam.routeInterval,
     losAnalyesParam.losInterval,
   )
-  if (completed) losResultsVisible.value = true
+  if (completed) {
+    losResult1Visible.value = false
+    losResult2Visible.value = true
+  }
 }
 async function showLinkHealthInfo() {
   try {
@@ -1310,7 +1333,7 @@ async function showLinkHealthInfo() {
       <!-- 测量 -->
       <n-dropdown
         :options="store.menuOptions.MeasureOptions"
-        @select="handleSelect"
+        @select="handleMeasureSelect"
       >
         <n-button tertiary type="warning">
           <template #icon>

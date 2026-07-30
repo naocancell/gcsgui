@@ -964,14 +964,14 @@ export default class MeasureViewer {
         fillColor: Cesium.Color.WHITE,
         style: Cesium.LabelStyle.FILL,
         pixelOffset: new Cesium.Cartesian2(20, -60),
-        eyeOffset: new Cesium.Cartesian3(0, 0, 30),
+        eyeOffset: new Cesium.Cartesian3(0, 0, 10),
         horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
         verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
         scale: 0.4,
         showBackground: true,
         backgroundColor: new Cesium.Color(0.165, 0.165, 0.165, 0.99),
         backgroundPadding: new Cesium.Cartesian2(10, 10),
-        disableDepthTestDistance: 99000000,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
         heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
       },
       point: {
@@ -1366,7 +1366,7 @@ export default class MeasureViewer {
   _drawCircle() {
     /**圆半径 */
     let centerPoint = null
-    let radius = 0.0
+    let radius = 0.01
     let aPolygon = undefined
 
     // 辅助拾取地表点函数，优先支持地形起伏
@@ -1415,6 +1415,41 @@ export default class MeasureViewer {
               }, false),
             },
           })
+          const circlePositions = new Cesium.CallbackProperty(() => {
+          if (!centerPoint || radius <= 0) return []
+
+          const transform = Cesium.Transforms.eastNorthUpToFixedFrame(centerPoint)
+          const positions = []
+          const segments = 128
+
+          for (let i = 0; i <= segments; i++) {
+            const angle = (i / segments) * Cesium.Math.TWO_PI
+            const localPoint = new Cesium.Cartesian3(
+              radius * Math.cos(angle),
+              radius * Math.sin(angle),
+              0,
+            )
+
+            positions.push(
+              Cesium.Matrix4.multiplyByPoint(
+                transform,
+                localPoint,
+                new Cesium.Cartesian3(),
+              ),
+            )
+          }
+
+          return positions
+        }, false)
+
+        const borderEntity = this.viewer.entities.add({
+          polyline: {
+            positions: circlePositions,
+            width: this.graphicStyle.borderWidth || 2,
+            material: this.graphicStyle.borderColor,
+            clampToGround: true,
+          },
+        })
         }
 
         this.viewer.scene.requestRender()

@@ -22,8 +22,13 @@ type RouteSample = {
 const ANALYSIS_CHUNK_SIZE = 250
 //绘制时候的批次大小
 const DRAW_BATCH_SIZE = 100
-const losEntities: Entity[] = []
-const viewPointEntities: Entity[] = [] 
+//结果2略高于原航线，避免两条线共面产生深度冲突
+const LOS_RESULT_2_HEIGHT_OFFSET = 0.5
+const losResult1Entities: Entity[] = []
+const losResult2Entities: Entity[] = []
+const viewPointEntities: Entity[] = []
+
+export type LosResultType = 1 | 2
 
 class LosAnalysisCancelledError extends Error {
   constructor() {
@@ -43,15 +48,26 @@ function yieldToMainThread() {
 function clearLosEntities() {
   const viewer = window.viewer
   if (!viewer) return
-if (losEntities.length === 0 && viewPointEntities.length === 0) return
+  if (
+    losResult1Entities.length === 0 &&
+    losResult2Entities.length === 0 &&
+    viewPointEntities.length === 0
+  ) {
+    return
+  }
 
   viewer.entities.suspendEvents()
 
   try {
-    losEntities.forEach((entity) => {
+    losResult1Entities.forEach((entity) => {
       viewer.entities.remove(entity)
     })
-    losEntities.length = 0
+    losResult1Entities.length = 0
+
+    losResult2Entities.forEach((entity) => {
+      viewer.entities.remove(entity)
+    })
+    losResult2Entities.length = 0
 
     viewPointEntities.forEach((entity) => {
       viewer.entities.remove(entity)
@@ -65,14 +81,20 @@ if (losEntities.length === 0 && viewPointEntities.length === 0) return
   viewer.scene.requestRender()
 }
 
-function toggleLosEntitiesVisibility() {
-  if (losEntities.length === 0) return null
-  const visible = !losEntities[0].show
-  viewPointEntities.forEach((entity) => {
+function toggleLosResultVisibility(resultType: LosResultType) {
+  const entities = resultType === 1 ? losResult1Entities : losResult2Entities
+  if (entities.length === 0) return null
+
+  const visible = !entities[0].show
+  entities.forEach((entity) => {
     entity.show = visible
   })
-  losEntities.forEach((entity) => {
-    entity.show = visible
+
+  const viewPointVisible =
+    losResult1Entities.some((entity) => entity.show) ||
+    losResult2Entities.some((entity) => entity.show)
+  viewPointEntities.forEach((entity) => {
+    entity.show = viewPointVisible
   })
   window.viewer?.scene.requestRender()
 
@@ -455,21 +477,21 @@ export function useRouteLineOfSight() {
       )
       //绘制出来视点位置 并添加到里面
       const viewPointEntity = window.viewer.entities.add({
-        id:'viewPoint',
+        id: 'viewPoint',
         position: startCartesian,
-        label:{
-          text:"视点",
-          pixelOffset:Cartesian2.fromArray([0,-30]),
-          font: "bold 24px", //设置为16像素
-          fillColor: Color.YELLOW // 设置为红色
+        label: {
+          text: '视点',
+          pixelOffset: Cartesian2.fromArray([0, -30]),
+          font: 'bold 24px', //设置为16像素
+          fillColor: Color.YELLOW, // 设置为红色
         },
-        point:{
+        point: {
           pixelSize: 16, // 点的大小（像素）
           color: Color.YELLOW, // 点的颜色
           outlineColor: Color.BLACK, // 边框颜色
           outlineWidth: 2, // 边框宽度（像素）
-          show: true // 是否显示
-        }
+          show: true, // 是否显示
+        },
       })
       viewPointEntities.push(viewPointEntity)
       //根据间距获取到航线上采样点
@@ -485,6 +507,13 @@ export function useRouteLineOfSight() {
         1,
         losInterval,
         signal,
+      )
+      const result2Positions = airLineSamples.map((sample) =>
+        Cartesian3.fromRadians(
+          sample.cartographic.longitude,
+          sample.cartographic.latitude,
+          sample.cartographic.height + LOS_RESULT_2_HEIGHT_OFFSET,
+        ),
       )
 
       for (
@@ -503,15 +532,36 @@ export function useRouteLineOfSight() {
         try {
           for (let index = batchStart; index < batchEnd; index++) {
             const sample = airLineSamples[index]
-            const entity = window.viewer.entities.add({
-              name: 'los实体',
+            const result1Entity = window.viewer.entities.add({
+              name: '通视分析结果1',
+              show: false,
               polyline: {
                 positions: [startCartesian, sample.cartesian],
                 width: 1,
                 material: results[index] ? Color.GREEN : Color.RED,
               },
             })
-            losEntities.push(entity)
+            losResult1Entities.push(result1Entity)
+
+            if (index === 0) continue
+
+            const segmentVisible = results[index - 1] && results[index]
+            const segmentColor = segmentVisible ? Color.LIME : Color.RED
+
+            const result2Entity = window.viewer.entities.add({
+              name: '通视分析结果2',
+              show: true,
+              polyline: {
+                positions: [
+                  result2Positions[index - 1],
+                  result2Positions[index],
+                ],
+                width: 5,
+                material: segmentColor,
+                depthFailMaterial: segmentColor,
+              },
+            })
+            losResult2Entities.push(result2Entity)
           }
         } finally {
           window.viewer.entities.resumeEvents()
@@ -551,7 +601,6 @@ export function useRouteLineOfSight() {
         const index = cursor++
         const sample = samples[index]
 
-        // 每条LOS最多约1000个地形采样点，最小间隔200m。
         results[index] = await isVisiable(
           start,
           sample.cartographic,
@@ -576,7 +625,7 @@ export function useRouteLineOfSight() {
     getSelectedRoute,
     drawLosEntities,
     stopLosAnalysis,
-    toggleLosEntitiesVisibility,
+    toggleLosResultVisibility,
     //是否开启大气校正
     ifCalculateRefractionCorrection,
   }
