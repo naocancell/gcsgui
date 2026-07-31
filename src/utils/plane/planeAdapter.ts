@@ -1,7 +1,7 @@
 /*
 后端接收过来的结构转换为固定渲染结构 
  */
-import type { UAVInfo, FP95Aggregate, FP981CAggregate, PlaneState } from "@/types/entityoptions";
+import type { UAVInfo, FP95Aggregate, FP95Frame94Sub1, FP981CAggregate, PlaneState } from "@/types/entityoptions";
 
 
 export function normalizeUAVInfo(uav: UAVInfo): PlaneState {
@@ -58,6 +58,41 @@ export function normalizeFP981C(item: FP981CAggregate): PlaneState {
     pitch: (item.c1?.fy_angle ?? 0) / 100,
     roll: (item.c1?.gz_angle ?? 0) / 100,
     raw: item,
+    showTrail: false,
+  };
+}
+
+export function isValidTransponderTarget(sub1: FP95Frame94Sub1): boolean {
+  return sub1.sAddress !== '000000'
+    && sub1.sAddress !== 'FFFFFF'
+    && Number.isFinite(sub1.adsLon)
+    && Number.isFinite(sub1.adsLat)
+    && sub1.adsLon >= -180
+    && sub1.adsLon <= 180
+    && sub1.adsLat >= -90
+    && sub1.adsLat <= 90
+    && !(sub1.adsLon === 0 && sub1.adsLat === 0)
+}
+
+/** 将 94 帧应答机目标转换为统一渲染结构 */
+export function normalizeTransponder(sub1: FP95Frame94Sub1): PlaneState | null {
+  if (!isValidTransponderTarget(sub1)) return null;
+  const legacySub1 = sub1 as FP95Frame94Sub1 & { ads_yaw?: number };
+  const candidateHeading = sub1.adsYaw ?? legacySub1.ads_yaw ?? 0;
+  const heading = Number.isFinite(candidateHeading) ? candidateHeading : 0;
+  return {
+    id: `transponder:${sub1.sAddress}`,
+    type: "transponder",
+
+    lon: sub1.adsLon,
+    lat: sub1.adsLat,
+    alt: sub1.adsAlt,
+    groundSpeed: sub1.adsVl,
+    verticalSpeed: sub1.adsVu,
+    heading,
+    pitch: 0,
+    roll: 0,
+    raw: sub1,
     showTrail: false,
   };
 }

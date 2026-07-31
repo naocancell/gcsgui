@@ -6,6 +6,7 @@ import type {
   UAVInfo,
   FP95Aggregate,
   FP95EventPayload,
+  FP95Frame94Sub1,
   FP981CAggregate,
   FP981CEventPayload,
   TransponderSwitchConfig,
@@ -19,6 +20,7 @@ import {
   getFp95FlightSwitchCommand,
   type Fp95AvionicsDevice,
 } from '@/utils/plane/fp95AvionicsControl'
+import { isValidTransponderTarget } from '@/utils/plane/planeAdapter'
 import type { RxHealthSnapshot } from '@/types/linkHealth'
 
 // 协议解包类型枚举
@@ -262,6 +264,7 @@ export const useUavStore = defineStore('uav', () => {
       fp95Watchdog = null
     }
     fp95Aggregate.value = null
+    clearTransponderState()
   }
 
   function deactivateUnusedProtocolListeners() {
@@ -576,6 +579,56 @@ export const useUavStore = defineStore('uav', () => {
   // fp95 单机聚合数据
   const fp95Aggregate = shallowRef<FP95Aggregate | null>(null)
   const fp981cMap = shallowRef<Map<string, FP981CAggregate>>(new Map())
+  // 应答机目标池（key = sAddress，value = { data, lastSeen }）
+  const transponderMap = shallowRef<Map<string, FP95Frame94Sub1>>(new Map())
+  const transponderSeen = new Map<string, number>()
+  const transponderFrame94Sequence = new Map<number, number>()
+  const transponderFrame94Fingerprint = new Map<number, string>()
+  const TRANSPONDER_TIMEOUT = 10_000
+  let transponderEvictionTimer: ReturnType<typeof setTimeout> | null = null
+
+  function clearTransponderState() {
+    if (transponderEvictionTimer) {
+      clearTimeout(transponderEvictionTimer)
+      transponderEvictionTimer = null
+    }
+    transponderMap.value = new Map()
+    transponderSeen.clear()
+    transponderFrame94Sequence.clear()
+    transponderFrame94Fingerprint.clear()
+  }
+
+  function evictExpiredTransponderTargets(now: number) {
+    const next = new Map(transponderMap.value)
+    for (const [addr, lastSeen] of transponderSeen) {
+      if (now - lastSeen >= TRANSPONDER_TIMEOUT) {
+        next.delete(addr)
+        transponderSeen.delete(addr)
+      }
+    }
+    if (next.size !== transponderMap.value.size) {
+      transponderMap.value = next
+    }
+  }
+
+  function scheduleTransponderEviction() {
+    if (transponderEvictionTimer) {
+      clearTimeout(transponderEvictionTimer)
+      transponderEvictionTimer = null
+    }
+
+    let nextExpiry = Number.POSITIVE_INFINITY
+    for (const lastSeen of transponderSeen.values()) {
+      nextExpiry = Math.min(nextExpiry, lastSeen + TRANSPONDER_TIMEOUT)
+    }
+    if (!Number.isFinite(nextExpiry)) return
+
+    transponderEvictionTimer = setTimeout(() => {
+      transponderEvictionTimer = null
+      evictExpiredTransponderTargets(Date.now())
+      scheduleTransponderEviction()
+    }, Math.max(0, nextExpiry - Date.now()))
+  }
 
   let uavWatchdog: ReturnType<typeof setTimeout> | null = null
   const UAV_TIMEOUT = 1000
@@ -597,13 +650,45 @@ export const useUavStore = defineStore('uav', () => {
   let fp95Watchdog: ReturnType<typeof setTimeout> | null = null
   const FP95_TIMEOUT = 1000
 
-  function updateFp95Aggregate(value: FP95Aggregate) {
+  function updateFp95Aggregate(value: FP95EventPayload) {
     fp95Aggregate.value = value
     if (fp95Watchdog) clearTimeout(fp95Watchdog)
     fp95Watchdog = setTimeout(() => {
       fp95Aggregate.value = null
       fp95Watchdog = null
     }, FP95_TIMEOUT)
+
+    const now = Date.now()
+    // 仅在后端确认收到一帧新的 94/子帧1 时刷新目标时间。
+    const sub1 = value.frame94?.Sub1
+    if (sub1) {
+      const frame94Sequence = value.frame94Sequence
+      const hasSequence = typeof frame94Sequence === 'number'
+        && Number.isFinite(frame94Sequence)
+      const fingerprint = JSON.stringify(sub1) ?? ''
+      const hasNewFrame94 = hasSequence
+        ? transponderFrame94Sequence.get(value.uavId) !== frame94Sequence
+        : transponderFrame94Fingerprint.get(value.uavId) !== fingerprint
+
+      if (
+        hasNewFrame94
+        && typeof frame94Sequence === 'number'
+        && Number.isFinite(frame94Sequence)
+      ) {
+        transponderFrame94Sequence.set(value.uavId, frame94Sequence)
+      }
+      if (hasNewFrame94 && !hasSequence) {
+        transponderFrame94Fingerprint.set(value.uavId, fingerprint)
+      }
+      if (hasNewFrame94 && isValidTransponderTarget(sub1)) {
+        const next = new Map(transponderMap.value)
+        next.set(sub1.sAddress, sub1)
+        transponderSeen.set(sub1.sAddress, now)
+        transponderMap.value = next
+      }
+    }
+    evictExpiredTransponderTargets(now)
+    scheduleTransponderEviction()
   }
 
   async function controlFp95AvionicsSwitch(
@@ -895,6 +980,7 @@ export const useUavStore = defineStore('uav', () => {
     controlFp95AvionicsSwitch,
     updateFp981cList,
     fp981cMap,
+    transponderMap,
     transponderSwitchConfig,
     transponderSwitchReadback,
     transponderParamConfig,
