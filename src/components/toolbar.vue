@@ -34,7 +34,7 @@ import {
 //引入监听hooks和飞机数据状态管理
 
 import { RulerAlt } from '@vicons/carbon'
-import { TerrainSharp } from '@vicons/material'
+import { TerrainSharp, TramOutlined } from '@vicons/material'
 import { DrawPolygon } from '@vicons/fa'
 import { useMessage } from 'naive-ui'
 import { ref, watch, computed, onBeforeUnmount, onMounted } from 'vue'
@@ -116,6 +116,21 @@ const losAnalyzeOptions = computed(() =>
     return option
   }),
 )
+const obstacleVisible = ref(true)
+const obstacleLoadingOptions = computed(() =>
+   store.menuOptions.obstacleOptions.map((option)=>{
+    if (option.key === 'showObstacle') {
+      return {
+        ...option,
+        label: obstacleVisible.value ? '隐藏障碍物' : '显示障碍物',
+      }
+   }
+   return option
+  })
+)
+ 
+
+
 const selectedPlaneStore = useSelectedPlaneStore()
 const { selectedModel, selectedMeta } = storeToRefs(selectedPlaneStore)
 const terrainWarningApi = ref<ReturnType<typeof useTerrainWarning> | null>(null)
@@ -276,9 +291,16 @@ function activeCompanionMode() {
 function handleObstacleSelect(key) {
   if (key === 'loadObstacle') {
     addAllObstacles()
+    obstacleVisible.value = true
+    return
   }
   if (key === 'showObstacle') {
-    toggleObstaclesVisible()
+    const visible = toggleObstaclesVisible()
+    if (visible === null) {
+      message.warning('请先加载障碍物')
+      return
+    }
+    obstacleVisible.value = visible
   }
 }
 //用于控制显示关闭工具条按钮或打开工具条按钮
@@ -357,7 +379,7 @@ async function handleLosAnalyseSelect(key) {
       return
     }
     if (blockWhileLosPointPicking()) return
-
+    
     //弹窗进行参数设置  设置后点击确定或取消按钮再判断是否进行可视分析
     showLosAnalyseModal.value = true
   }
@@ -456,7 +478,8 @@ function measure() {
 function measureEnd() {
   if (
     window.measureViewer.vertexEntities.length > 0 ||
-    window.measureViewer.activeShapePoints.length > 0
+    window.measureViewer.activeShapePoints.length > 0 ||
+    window.measureViewer.areaEntities.length > 0
   ) {
     window.measureViewer.deactivate()
     window.measureViewer.stopAreaMeasure()
@@ -1159,6 +1182,16 @@ onMounted(async () => {
       warnClearance: terrainWarningClearance.value,
     }, //传递的参数
   )
+   const positions = [Cesium.Cartographic.fromDegrees(107.4219472, 37.8557269)]
+
+  const result = await Cesium.sampleTerrain(
+    window.viewer.terrainProvider,
+    11, // 指定地形等级
+    positions,
+  )
+  const height = result[0]?.height
+
+  console.log('盐池机场海拔高度：', height, '米')
 })
 
 onBeforeUnmount(() => {
@@ -1308,7 +1341,7 @@ async function showLinkHealthInfo() {
         <span>添加数据</span>
       </n-tooltip>
       <!-- 地形分析  这些Options在staticOptions.js中定义 -->
-      <n-dropdown
+      <!-- <n-dropdown
         :options="store.menuOptions.AnalyzeOptions"
         @select="handleAnalyseSelect"
       >
@@ -1317,7 +1350,7 @@ async function showLinkHealthInfo() {
             <n-icon><TerrainSharp /></n-icon>
           </template>
         </n-button>
-      </n-dropdown>
+      </n-dropdown> -->
       <!-- 航线 -->
       <n-dropdown
         :options="store.menuOptions.EditOptions"
@@ -1453,7 +1486,7 @@ async function showLinkHealthInfo() {
       </n-popselect> -->
       <!-- 有用户选择加载机场建筑物-->
       <n-dropdown
-        :options="store.menuOptions.obstacleOptions"
+        :options="obstacleLoadingOptions"
         @select="handleObstacleSelect"
       >
         <n-button tertiary circle type="warning">
@@ -1497,7 +1530,7 @@ async function showLinkHealthInfo() {
         </template>
         <span>通视分析测试</span>
       </n-tooltip> -->
-      <!-- 通视分析 -->
+      <!-- 航线通视分析 -->
       <n-dropdown :options="losAnalyzeOptions" @select="handleLosAnalyseSelect">
         <n-button tertiary type="warning">
           <template #icon>

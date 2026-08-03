@@ -322,6 +322,9 @@ export function useMarkObstacle() {
     }
     // 添加全部障碍物
     function addAllObstacles(): void {
+        // 每次进入加载流程都恢复为显示状态，随后新增的实体也会继承该状态。
+        setObstaclesVisible(true)
+
         let longitude 
         let latitude 
         //磁偏角
@@ -523,8 +526,12 @@ export function useMarkObstacle() {
     }
 
     // 切换显示 / 隐藏
-    function toggleObstaclesVisible(): void {
-        setObstaclesVisible(!obstacleVisible)
+    function toggleObstaclesVisible(): boolean | null {
+        if (obstacleEntities.length === 0) return null
+
+        const visible = !obstacleVisible
+        setObstaclesVisible(visible)
+        return visible
     }
 
     return {

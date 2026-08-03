@@ -226,7 +226,7 @@ const afterCoordInput = () => {
         >
           {{ ifInputCoords ? '取消输入' : '输入坐标' }}
         </n-button>
-        <n-button type="info" size="small">导入文件</n-button>
+        <!-- <n-button type="info" size="small">导入文件</n-button> -->
       </n-row>
       <n-divider v-show="ifInputCoords" />
       <n-dynamic-input

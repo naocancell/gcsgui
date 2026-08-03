@@ -293,8 +293,11 @@ onMounted(() => {
   )
 
   nextTick(() => {
-    if (window.pendingSelectedRouteId != null) {
-      selectRouteById(window.pendingSelectedRouteId)
+    const routeId =
+      window.pendingSelectedRouteId ?? routeManage?.selectedRouteId ?? null
+
+    if (routeId != null) {
+      selectRouteById(routeId)
       window.pendingSelectedRouteId = null
     }
   })

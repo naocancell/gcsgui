@@ -20,6 +20,7 @@ export default class MeasureViewer {
 
     this.activeShapePoints = [] //面积测量-多边形顶点
     this.polygon = undefined
+    this.areaEntities = [] // 已完成的面积测量多边形和标签
     this.measAreaStatus = false //是否在测量面积
 
     this.analyseGraphs = [] //分析工具的图形容器
@@ -634,49 +635,86 @@ export default class MeasureViewer {
 
   //清空绘制（多边形和label）
   clearAreaEntity() {
-    //清除多边形
-    this.viewer.entities.removeById('4399')
-    this.viewer.entities.removeById('4390')
+    this.stopAreaMeasure()
+
+    // 当前多边形可能尚未完成，因此还没有加入 areaEntities。
+    if (this.polygon && !this.areaEntities.includes(this.polygon)) {
+      this.viewer.entities.remove(this.polygon)
+    }
+    this.areaEntities.forEach((entity) => {
+      this.viewer.entities.remove(entity)
+    })
+    this.areaEntities = []
     this.polygon = undefined
     this.activeShapePoints = []
+    this.viewer.scene.requestRender()
   }
 
   activateAreaMeasure() {
-    this.clearAreaEntity()
-    this.handler = new Cesium.ScreenSpaceEventHandler(this.viewer.scene.canvas)
-    this.viewer.scene.globe.depthTestAgainstTerrain = true
-    // 清除可能会用到的监听事件
-    if (this.handler) {
-      this.handler.removeInputAction(Cesium.ScreenSpaceEventType.LEFT_CLICK)
-      this.handler.removeInputAction(Cesium.ScreenSpaceEventType.MOUSE_MOVE)
-      this.handler.removeInputAction(Cesium.ScreenSpaceEventType.RIGHT_CLICK)
+    // 重新进入面积测量时，只取消未完成的本次测量，保留之前的结果。
+    this.stopAreaMeasure()
+    if (this.polygon && !this.areaEntities.includes(this.polygon)) {
+      this.viewer.entities.remove(this.polygon)
     }
+    this.activeShapePoints = []
+    this.polygon = undefined
+
+    this.viewer.scene.globe.depthTestAgainstTerrain = true
     this.handler = new Cesium.ScreenSpaceEventHandler(this.viewer.scene.canvas)
     this.measAreaStatus = true
     this.viewer._element.style.cursor = 'crosshair'
     this.viewer.enableCursorStyle = true
 
+    const areaPoints = []
+    const getRenderableAreaPoints = () => {
+      const points = []
+      const minimumSpacing = 0.05
+
+      areaPoints.forEach((point) => {
+        if (
+          point &&
+          (points.length === 0 ||
+            Cesium.Cartesian3.distance(points.at(-1), point) > minimumSpacing)
+        ) {
+          points.push(point)
+        }
+      })
+
+      if (
+        points.length > 2 &&
+        Cesium.Cartesian3.distance(points[0], points.at(-1)) <= minimumSpacing
+      ) {
+        points.pop()
+      }
+
+      return points
+    }
+
     //鼠标左键--确定选中点
     this.handler.setInputAction((event) => {
       let ray = this.viewer.camera.getPickRay(event.position)
       let earthPosition = this.viewer.scene.globe.pick(ray, this.viewer.scene)
+      if (!earthPosition) return
+
       //鼠标开始点击多边形的第一个点
-      if (this.activeShapePoints.length === 0) {
+      if (areaPoints.length === 0) {
         //将第一个左击的点添加到多边形顶点集合中
-        this.activeShapePoints.push(earthPosition)
+        areaPoints.push(earthPosition)
         //多边形的坐标采用回调的形式
         //边线顶点
         let linePoints = new Cesium.CallbackProperty(() => {
-          return this.activeShapePoints.concat([this.activeShapePoints[0]])
+          return areaPoints.concat([areaPoints[0]])
         }, false)
         //多边形顶点
         let dynamicPositions = new Cesium.CallbackProperty(() => {
-          return new Cesium.PolygonHierarchy(this.activeShapePoints)
+          const points = getRenderableAreaPoints()
+          return points.length >= 3
+            ? new Cesium.PolygonHierarchy(points)
+            : undefined
         }, false)
         //添加一个多边形
         this.polygon = new Cesium.Entity({
           name: 'area polygon',
-          id: '4399',
           polyline: {
             positions: linePoints,
             width: 1,
@@ -686,10 +724,11 @@ export default class MeasureViewer {
           },
           polygon: {
             hierarchy: dynamicPositions,
-            material: Cesium.Color.ORANGERED.withAlpha(0.8),
-            heightReference: Cesium.HeightReference.NONE,
-            // outlineColor: Cesium.Color.RED.withAlpha(0.7),
-            // height: 0
+            material: Cesium.Color.ORANGERED.withAlpha(0.65),
+            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+            classificationType: Cesium.ClassificationType.TERRAIN,
+            arcType: Cesium.ArcType.GEODESIC,
+            zIndex: 10,
           },
         })
         this.polygon.GeoType = 'Polygon'
@@ -697,7 +736,8 @@ export default class MeasureViewer {
       }
       this.viewer.scene.requestRender()
       //将鼠标点击的点添加到多边形顶点集合中
-      this.activeShapePoints.push(earthPosition)
+      areaPoints.push(earthPosition)
+      this.activeShapePoints = areaPoints
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK)
 
     //鼠标移动--实时绘制多边形
@@ -705,33 +745,168 @@ export default class MeasureViewer {
       //获取鼠标所在的位置
       const ray = this.viewer.camera.getPickRay(movement.endPosition)
       const newPosition = this.viewer.scene.globe.pick(ray, this.viewer.scene)
+      if (!newPosition) return
+
       //已经定义了polygon
       if (Cesium.defined(this.polygon)) {
         //删除多边形顶点中最新的一个点
-        this.activeShapePoints.pop()
+        areaPoints.pop()
         //将最新获取到的点添加到多边形顶点集合中
-        this.activeShapePoints.push(newPosition)
-      }
-      if (this.activeShapePoints.length === 3) {
-        this.polygon.polygon.heightReference =
-          Cesium.HeightReference.CLAMP_TO_GROUND
+        areaPoints.push(newPosition)
       }
     }, Cesium.ScreenSpaceEventType.MOUSE_MOVE)
 
     //鼠标右键--结束绘制
-    this.handler.setInputAction((event) => {
+    this.handler.setInputAction(() => {
+      if (!this.polygon) return
+
       //删除最后一个点（重复添加的点）
-      this.activeShapePoints.pop()
-      this.polygon.pottingPoint = this.activeShapePoints
-      this._showResultArea()
+      areaPoints.pop()
+      if (areaPoints.length < 3) {
+        this.viewer.entities.remove(this.polygon)
+        this.polygon = undefined
+        this.activeShapePoints = []
+        this.stopAreaMeasure()
+        return
+      }
+
+      const finalPoints = getRenderableAreaPoints()
+      if (finalPoints.length < 3) {
+        this.viewer.entities.remove(this.polygon)
+        this.polygon = undefined
+        this.activeShapePoints = []
+        this.stopAreaMeasure()
+        return
+      }
+
+      const closedPoints = finalPoints.concat([finalPoints[0]])
+      this.polygon.polyline.positions = closedPoints
+      this.polygon.polygon.hierarchy = new Cesium.PolygonHierarchy(finalPoints)
+      this.polygon.polygon.heightReference =
+        Cesium.HeightReference.CLAMP_TO_GROUND
+      this.polygon.polygon.classificationType =
+        Cesium.ClassificationType.TERRAIN
+      this.polygon.pottingPoint = finalPoints
+
+      const polygonParts = this._splitSelfIntersectingArea(finalPoints)
+      const resultEntities = [this.polygon]
+
+      if (polygonParts.length > 1) {
+        // 自相交轮廓不能直接交给 Cesium 三角剖分，保留原边界并用拆分后的简单多边形填充。
+        this.polygon.polygon = undefined
+        polygonParts.forEach((points) => {
+          const fillEntity = this.viewer.entities.add({
+            name: 'area polygon fill',
+            polygon: {
+              hierarchy: new Cesium.PolygonHierarchy(points),
+              material: Cesium.Color.ORANGERED.withAlpha(0.65),
+              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+              classificationType: Cesium.ClassificationType.TERRAIN,
+              arcType: Cesium.ArcType.GEODESIC,
+              zIndex: 10,
+            },
+          })
+          resultEntities.push(fillEntity)
+        })
+      }
+
+      const label = this._showResultArea(polygonParts)
+      this.areaEntities.push(...resultEntities)
+      if (label) this.areaEntities.push(label)
+      this.activeShapePoints = finalPoints
       this.stopAreaMeasure()
+      this.viewer.scene.requestRender()
     }, Cesium.ScreenSpaceEventType.RIGHT_CLICK)
   }
 
-  _showResultArea() {
-    let text = '面积：' + this.getPolygonArea(this.polygon.pottingPoint)
+  _showResultArea(polygonParts = [this.polygon.pottingPoint]) {
+    const area = polygonParts.reduce(
+      (sum, points) => sum + this._getPolygonAreaSquareMeters(points),
+      0,
+    )
+    let text = '面积：' + this._formatPolygonArea(area)
     let centerPoint = this._getCenterOfGravityPoint(this.polygon.pottingPoint)
-    this._addLabel(centerPoint, text)
+    return this._addLabel(centerPoint, text)
+  }
+
+  _splitSelfIntersectingArea(points) {
+    if (points.length < 4) return [points]
+
+    const localToWorld = Cesium.Transforms.eastNorthUpToFixedFrame(points[0])
+    const worldToLocal = Cesium.Matrix4.inverse(
+      localToWorld,
+      new Cesium.Matrix4(),
+    )
+    const localPoints = points.map((point) =>
+      Cesium.Matrix4.multiplyByPoint(
+        worldToLocal,
+        point,
+        new Cesium.Cartesian3(),
+      ),
+    )
+    const epsilon = 1e-8
+
+    for (let i = 0; i < points.length; i++) {
+      const iNext = (i + 1) % points.length
+      for (let j = i + 1; j < points.length; j++) {
+        const jNext = (j + 1) % points.length
+        const adjacent =
+          i === j || iNext === j || jNext === i || (i === 0 && jNext === 0)
+        if (adjacent) continue
+
+        const a = localPoints[i]
+        const b = localPoints[iNext]
+        const c = localPoints[j]
+        const d = localPoints[jNext]
+        const denominator =
+          (b.x - a.x) * (d.y - c.y) - (b.y - a.y) * (d.x - c.x)
+        if (Math.abs(denominator) <= epsilon) continue
+
+        const t =
+          ((c.x - a.x) * (d.y - c.y) -
+            (c.y - a.y) * (d.x - c.x)) /
+          denominator
+        const u =
+          ((c.x - a.x) * (b.y - a.y) -
+            (c.y - a.y) * (b.x - a.x)) /
+          denominator
+        if (t <= epsilon || t >= 1 - epsilon || u <= epsilon || u >= 1 - epsilon) {
+          continue
+        }
+
+        const localIntersection = new Cesium.Cartesian3(
+          a.x + t * (b.x - a.x),
+          a.y + t * (b.y - a.y),
+          0,
+        )
+        const intersection = Cesium.Matrix4.multiplyByPoint(
+          localToWorld,
+          localIntersection,
+          new Cesium.Cartesian3(),
+        )
+        const intersectionCartographic =
+          Cesium.Cartographic.fromCartesian(intersection)
+        const surfaceIntersection = Cesium.Cartesian3.fromRadians(
+          intersectionCartographic.longitude,
+          intersectionCartographic.latitude,
+          0,
+        )
+
+        const firstPart = [surfaceIntersection]
+        for (let index = iNext; index !== jNext; index = (index + 1) % points.length) {
+          firstPart.push(points[index])
+        }
+
+        const secondPart = [surfaceIntersection]
+        for (let index = jNext; index !== iNext; index = (index + 1) % points.length) {
+          secondPart.push(points[index])
+        }
+
+        return [firstPart, secondPart]
+      }
+    }
+
+    return [points]
   }
   /*角度*/
   _Angle(p1, p2, p3) {
@@ -777,8 +952,13 @@ export default class MeasureViewer {
   }
 
   getPolygonArea(points) {
-    let res = 0
     if (points.length < 3) return "0.0000 平方米";
+
+    return this._formatPolygonArea(this._getPolygonAreaSquareMeters(points))
+  }
+
+  _getPolygonAreaSquareMeters(points) {
+    if (points.length < 3) return 0
 
     // 使用叉乘计算多边形投影面积（更准确且支持凹多边形）
     let p0 = points[0];
@@ -789,8 +969,11 @@ export default class MeasureViewer {
       let cross = Cesium.Cartesian3.cross(v1, v2, new Cesium.Cartesian3());
       Cesium.Cartesian3.add(sumCross, cross, sumCross);
     }
-    res = Cesium.Cartesian3.magnitude(sumCross) / 2.0;
+    return Cesium.Cartesian3.magnitude(sumCross) / 2.0
+  }
 
+  _formatPolygonArea(area) {
+    let res = area
     if (res < 1000000) {
       res = Math.abs(res).toFixed(4) + ' 平方米'
     } else {
@@ -816,11 +999,9 @@ export default class MeasureViewer {
   }
   _addLabel(centerPoint, text) {
     if (!centerPoint) return;
-    this.viewer.entities.removeById('4390');
     return this.viewer.entities.add(
       new Cesium.Entity({
         name: 'area label',
-        id: '4390',
         position: centerPoint,
         label: {
           text: text,

@@ -6,7 +6,7 @@ import {
   ScreenSpaceEventHandler,
   ScreenSpaceEventType,
 } from 'cesium'
-import { onBeforeUnmount, ref } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { type FormInst, type FormRules, useMessage } from 'naive-ui'
 import { useRouteStore } from '@/store/RouteStore'
 import { cartesian2ToCartesian3 } from '@/utils/map/coordinate'
@@ -43,6 +43,7 @@ const losAnalyseParams = ref<LosAnalyseParams>({
 let pointPickHandler: ScreenSpaceEventHandler | null = null
 let pointPickCanvas: HTMLCanvasElement | null = null
 let previousCursor = ''
+let reopeningAfterMapPick = false
 
 function finishMapPointPick(reopenParams: boolean) {
   if (pointPickHandler && !pointPickHandler.isDestroyed()) {
@@ -62,6 +63,8 @@ function finishMapPointPick(reopenParams: boolean) {
   }
 
   if (reopenParams) {
+    // 弹窗已经隐藏时，说明这次是地图选点完成或取消后的恢复。
+    reopeningAfterMapPick = !props.show
     emit('update:show', true)
   }
 }
@@ -185,7 +188,7 @@ const rules: FormRules = {
     type: 'number',
     required: true,
     min: 10,
-    max: 10000,
+    max: 1000000,
     message: '航线采样间距范围为 10 至 10000 m',
     trigger: ['input', 'blur'],
   },
@@ -210,7 +213,34 @@ const done = async () => {
 const cancel = () => {
   emit('cancelLosAnalyse')
 }
+//默认设置为第一个航点的经纬度高度
+watch(
+  () => props.show,
+  (show) => {
+    if (!show) return
 
+    // 地图选点后只恢复弹窗，不用航点 1 覆盖当前视点参数。
+    if (reopeningAfterMapPick) {
+      reopeningAfterMapPick = false
+      return
+    }
+
+    const routeManage = window.routeManageViewer
+    const routeId = routeManage?.selectedRouteId
+    const firstPoint = routeManage?.routesMap?.get(String(routeId))?.line
+      ?.points?.[0]
+
+    if (!firstPoint) return
+
+    losAnalyseParams.value.viewPointLon = Number(
+      Number(firstPoint.lon).toFixed(6),
+    )
+    losAnalyseParams.value.viewPointLat = Number(
+      Number(firstPoint.lat).toFixed(6),
+    )
+    losAnalyseParams.value.viewPointAlt = Number(firstPoint.alt)
+  },
+)
 onBeforeUnmount(() => {
   finishMapPointPick(false)
 })
@@ -290,7 +320,7 @@ onBeforeUnmount(() => {
               placeholder="500"
               :step="100"
               :min="10"
-              :max="100000"
+              :max="1000000"
             />
           </n-form-item>
 

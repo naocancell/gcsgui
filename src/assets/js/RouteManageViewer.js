@@ -1162,12 +1162,6 @@ flyToRoute(line, duration = 1.5) {
       }
 
       if (!this.selectRoute(entity._routeId)) return
-
-      const routeItem = this.routesMap.get(String(entity._routeId))
-
-      if (routeItem && this.onRouteSelected) {
-        this.onRouteSelected(String(entity._routeId), routeItem.line)
-      }
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK)
   }
 
@@ -1209,6 +1203,11 @@ flyToRoute(line, duration = 1.5) {
     })
 
     this.viewer.scene.requestRender()
+
+    // 地图点击和代码调用统一从这里通知 Vue 面板同步单选状态。
+    if (this.onRouteSelected) {
+      this.onRouteSelected(routeId, routeItem.line)
+    }
 
     return true
   }

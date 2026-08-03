@@ -19,27 +19,27 @@ export const useStaticStore = defineStore('staticOptions', {
       menuOptions: {
         obstacleOptions: [
           { label: '加载障碍物', key: 'loadObstacle' },
-          { label: '隐藏/显示', key: 'showObstacle' },
+          { label: '隐藏障碍物', key: 'showObstacle' },
         ],
         EditOptions: [
           { label: '绘制航线', key: 'createLine' },
           { label: '航线管理', key: 'manage' },
-          { label: '标记障碍物', key: 'marker' },
+          { label: '标记障碍', key: 'marker' },
         ],
         sceneOptions: [
           { label: '三维伴飞', value: 'companion' },
-          { label: '不跟随', value: 'untrace' },
+          { label: '取消伴飞', value: 'untrace' },
         ],
         MeasureOptions: [
           { label: '距离测量', key: 'distance' },
           { label: '面积测量', key: 'area' },
-          { label: '清除', key: 'clear' },
+          { label: '清除测量', key: 'clear' },
         ],
         DrawOptions: [
-          { label: '多边形', key: 'polygon' },
           { label: '矩形', key: 'rec' },
           { label: '圆形', key: 'circle' },
-          { label: '清除', key: 'clear' },
+          { label: '多边形', key: 'polygon' },
+          { label: '清除形状', key: 'clear' },
         ],
         AnalyzeOptions: [
           { label: '通视分析', key: 'visibility' },
