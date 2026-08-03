@@ -195,7 +195,9 @@ export type FP95Frame94Sub1 = {
     frame94?: FP95Frame94 | null
   }
 
-  export type FP95EventPayload = FP95Aggregate
+  export type FP95EventPayload = FP95Aggregate & {
+    frame94Sequence?: number
+  }
 
   export interface FP981CFrameC1 {
     fy_angle?: number;
@@ -226,7 +228,7 @@ export type FP95Frame94Sub1 = {
   export type FP981CEventPayload = FP981CAggregate[];
   
   //将不同的飞机结构体统一用于渲染
-  export type PlaneType = "uavInfo" | "fp95" | "fp981c";;
+  export type PlaneType = "uavInfo" | "fp95" | "fp981c" | "transponder";
 
   // 渲染层结构
   export interface PlaneState {
@@ -240,7 +242,7 @@ export type FP95Frame94Sub1 = {
     roll?: number;// 滚转角
     groundSpeed?: number;// 地速
     verticalSpeed: number; // 垂直速度 m/s
-    raw: UAVInfo | FP95Aggregate | FP981CAggregate; // 保留原始数据，点击时用
+    raw: UAVInfo | FP95Aggregate | FP981CAggregate | FP95Frame94Sub1; // 保留原始数据，点击时用
     showTrail?: boolean; // 是否显示轨迹
   }
 

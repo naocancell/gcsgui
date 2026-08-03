@@ -14,7 +14,7 @@ use crate::uplink::{
     UplinkHandle,
 };
 
-const RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn command_context(aircraft_id: u8) -> UplinkFrameContext {
     UplinkFrameContext {
@@ -249,4 +249,3 @@ pub async fn query_weight_params(
         _ => Err("重量参数查询收到非预期回报".to_string()),
     }
 }
-

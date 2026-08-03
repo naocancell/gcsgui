@@ -28,6 +28,7 @@ import { useUavStore } from '@/store/uavStore'
 import type {
   UAVInfo,
   FP95Aggregate,
+  FP95Frame94Sub1,
   FP981CAggregate,
   PlaneType,
   PlaneState,
@@ -37,6 +38,7 @@ import {
   normalizeUAVInfo,
   normalizeFP95,
   normalizeFP981C,
+  normalizeTransponder,
 } from '@/utils/plane/planeAdapter'
 import { PLANE_CONFIG } from '@/utils/plane/planeConfig'
 
@@ -94,6 +96,10 @@ const allPlaneMap = computed(() => {
     const plane = normalizeFP981C(item)
     map.set(plane.id, plane)
   })
+  store.transponderMap?.forEach((sub1: FP95Frame94Sub1) => {
+    const plane = normalizeTransponder(sub1)
+    if (plane) map.set(plane.id, plane)
+  })
   return map
 })
 
@@ -125,6 +131,11 @@ const panelTitle = computed(() => {
   if (plane.type === 'fp981c') {
     const raw = plane.raw as FP981CAggregate
     return `FP981C ${raw.uav_id}`
+  }
+
+  if (plane.type === 'transponder') {
+    const raw = plane.raw as FP95Frame94Sub1
+    return `应答机 ${raw.sAddress}`
   }
 
   return '飞机信息'
@@ -292,6 +303,44 @@ const infoRows = computed<InfoRow[]>(() => {
       {
         label: 'Roll',
         value: `${(plane.roll ?? 0).toFixed(1)} deg`,
+      },
+    ]
+  }
+
+  if (plane.type === 'transponder') {
+    const raw = plane.raw as FP95Frame94Sub1
+    return [
+      {
+        label: '地址类型',
+        value: raw.addressType,
+      },
+      {
+        label: 'S模式地址',
+        value: raw.sAddress,
+      },
+      {
+        label: '经度',
+        value: raw.adsLon.toFixed(6),
+      },
+      {
+        label: '纬度',
+        value: raw.adsLat.toFixed(6),
+      },
+      {
+        label: '高度',
+        value: `${raw.adsAlt.toFixed(1)} m`,
+      },
+      {
+        label: '水平速度',
+        value: `${raw.adsVl.toFixed(1)} m/s`,
+      },
+      {
+        label: '垂直速度',
+        value: `${raw.adsVu.toFixed(1)} m/s`,
+      },
+      {
+        label: '航向角',
+        value: `${plane.heading.toFixed(1)} °`,
       },
     ]
   }

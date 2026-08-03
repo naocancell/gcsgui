@@ -7,6 +7,12 @@ import CollisionDetection from '@/components/CollisionDetection.vue'
 import RouteManagePage from '@/components/page/RouteManagePage.vue'
 import { useMessage } from 'naive-ui'
 import { useStaticStore } from '@/store/staticOptions.js'
+import { useUavStore } from '@/store/uavStore'
+import { listen } from '@tauri-apps/api/event'
+import {
+  startHomeWindowDataListeners,
+  subscribeHomeWindowConfigChanges,
+} from '@/utils/homeWindowData'
 
 export default defineComponent({
   name: 'HomePage',
@@ -25,6 +31,7 @@ export default defineComponent({
       staticStore: useStaticStore(),
       timeId: undefined,
       msgbox: true,
+      configChangedUnlisten: null as (() => void) | null,
     }
   },
   mounted() {
@@ -34,6 +41,24 @@ export default defineComponent({
     } else {
       this.setNetworkTimer()
     }
+
+    const uavStore = useUavStore()
+    startHomeWindowDataListeners(uavStore).catch((err) => {
+      this.message.error('主窗口数据服务挂载失败: ' + err)
+    })
+    subscribeHomeWindowConfigChanges(uavStore, (handler) =>
+      listen('comms-config-changed', async () => {
+        try {
+          await handler()
+        } catch (err) {
+          this.message.error('主窗口数据服务重载失败: ' + err)
+        }
+      }),
+    ).then((unlisten) => {
+      this.configChangedUnlisten = unlisten
+    }).catch((err) => {
+      this.message.error('主窗口通信配置监听挂载失败: ' + err)
+    })
 
     // 网络状态监测
     window.addEventListener('online', () => {
@@ -47,6 +72,10 @@ export default defineComponent({
       // 	关闭网络检测定时器
       this.timeId && clearInterval(this.timeId)
     })
+  },
+  beforeUnmount() {
+    this.configChangedUnlisten?.()
+    this.configChangedUnlisten = null
   },
   computed: {
     setPageStyle: function () {

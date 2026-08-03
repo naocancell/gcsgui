@@ -3,11 +3,12 @@ import { watch } from 'vue'
 import { useUavStore } from '@/store/uavStore.ts'
 import { PlaneState } from '@/types/entityoptions'
 import { PLANE_CONFIG } from '@/utils/plane/planeConfig'
-import { UAVInfo, FP981CAggregate } from '@/types/entityoptions'
+import { UAVInfo, FP95Frame94Sub1, FP981CAggregate } from '@/types/entityoptions'
 import {
   normalizeUAVInfo,
   normalizeFP95,
   normalizeFP981C,
+  normalizeTransponder,
 } from '@/utils/plane/planeAdapter'
 export function useLoadPlane() {
   //获取飞机的状态管理store
@@ -332,7 +333,7 @@ export function useLoadPlane() {
 
     // 监听 store 中两类飞机数据的变化 把不同结构的数据 normalize 成统一 PlaneState。
     stopWatch = watch(
-      () => [store.uavInfoMap, store.fp95Aggregate, store.fp981cMap], //同时监听
+      () => [store.uavInfoMap, store.fp95Aggregate, store.fp981cMap, store.transponderMap], //同时监听
       () => {
         //将UAVInfo和FP95数据转换成统一格式 用于加载飞机
         const planes: PlaneState[] = []
@@ -349,6 +350,13 @@ export function useLoadPlane() {
         store.fp981cMap?.forEach((item: FP981CAggregate) => {
           planes.push(normalizeFP981C(item))
         })
+
+        // 将应答机目标转换成统一 PlaneState
+        store.transponderMap?.forEach((sub1: FP95Frame94Sub1) => {
+          const tp = normalizeTransponder(sub1)
+          if (tp) planes.push(tp)
+        })
+
         // 用统一后的飞机列表更新 Cesium 模型
         updatePlanes(viewer, planes)
       },
@@ -358,7 +366,6 @@ export function useLoadPlane() {
       },
     )
 
-    // 兼容数秒级遥测；连续 10 秒无数据才判定离线并移除。
     const planeOfflineTimeout = 1_000
     intervalId = window.setInterval(() => {
       const now = Date.now()

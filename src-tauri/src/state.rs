@@ -1,4 +1,5 @@
 use dashmap::DashMap;
+use serde::Serialize;
 use std::sync::Arc;
 use std::sync::{Mutex, RwLock};
 use std::time::Instant;
@@ -10,6 +11,15 @@ use crate::protocol::uav_info::UAVInfo;
 struct TimedFP95Aggregate {
     aggregate: crate::protocol::fp95::FP95Aggregate,
     last_seen: Instant,
+    frame94_sequence: u64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FP95EventPayload {
+    #[serde(flatten)]
+    aggregate: crate::protocol::fp95::FP95Aggregate,
+    frame94_sequence: u64,
 }
 
 /// 代表一条处于活动状态的物理链路句柄
@@ -125,8 +135,15 @@ impl AppState {
         let state = guard.get_or_insert_with(|| TimedFP95Aggregate {
             aggregate: Default::default(),
             last_seen: received_at,
+            frame94_sequence: 0,
         });
         state.aggregate.uav_id = uav_id;
+        if matches!(
+            &parsed,
+            crate::protocol::fp95::ParsedSubFrame::Frame94(_)
+        ) {
+            state.frame94_sequence = state.frame94_sequence.wrapping_add(1);
+        }
         state.aggregate.merge(parsed);
         state.last_seen = received_at;
     }
@@ -135,7 +152,7 @@ impl AppState {
         &self,
         now: Instant,
         timeout: std::time::Duration,
-    ) -> Option<crate::protocol::fp95::FP95Aggregate> {
+    ) -> Option<FP95EventPayload> {
         let mut guard = self.fp95_state.lock().expect("FP95 state mutex poisoned");
         if guard
             .as_ref()
@@ -143,7 +160,10 @@ impl AppState {
         {
             *guard = None;
         }
-        guard.as_ref().map(|state| state.aggregate.clone())
+        guard.as_ref().map(|state| FP95EventPayload {
+            aggregate: state.aggregate.clone(),
+            frame94_sequence: state.frame94_sequence,
+        })
     }
 
     pub fn replace_rx_health(&self, snapshot: crate::router::rx_arbiter::RxHealthSnapshot) {
