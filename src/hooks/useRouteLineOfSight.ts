@@ -65,6 +65,8 @@ const TERRAIN_REQUEST_RETRY_DELAY_MS = 20
 const DRAW_BATCH_SIZE = 100
 //结果2略高于原航线，避免两条线共面产生深度冲突
 const LOS_RESULT_2_HEIGHT_OFFSET = 0.5
+//固定间距采样点与航点累计距离足够接近时视为同一个点。
+const ROUTE_SAMPLE_DISTANCE_EPSILON = 0.001
 const losResult1Entities: Entity[] = []
 const losResult2Entities: Entity[] = []
 const viewPointEntities: Entity[] = []
@@ -363,6 +365,30 @@ export function useRouteLineOfSight() {
     const ellipsoid = Ellipsoid.WGS84 //WGS84 地球椭球体对象。
     const samples: RouteSample[] = [] //航线上采样点
 
+    //航点可能恰好也是固定间距采样点，此时用精确航点坐标替换，避免重复点。
+    function appendSample(distance: number, cartographic: Cartographic) {
+      const sample: RouteSample = {
+        distance,
+        cartographic,
+        cartesian: ellipsoid.cartographicToCartesian(
+          cartographic,
+          new Cartesian3(),
+        ),
+      }
+      const lastSample = samples.at(-1)
+
+      if (
+        lastSample &&
+        Math.abs(lastSample.distance - distance) <=
+          ROUTE_SAMPLE_DISTANCE_EPSILON
+      ) {
+        samples[samples.length - 1] = sample
+        return
+      }
+
+      samples.push(sample)
+    }
+
     let accumulatedDistance = 0 //累计距离
     let nextSampleDistance = 0 //下一个采样点的距离
     let timeCheckCounter = 0
@@ -396,7 +422,10 @@ export function useRouteLineOfSight() {
       // 当前航段的近似三维长度。
       const segment3dDistance = Math.hypot(horizontalDistance, heightDifference)
 
-      if (segment3dDistance === 0) continue
+      if (segment3dDistance === 0) {
+        appendSample(accumulatedDistance, end)
+        continue
+      }
       //当前航段的累计总距离
       const segmentEndDistance = accumulatedDistance + segment3dDistance
       //如果下一个采样点还落在当前航段内
@@ -425,38 +454,16 @@ export function useRouteLineOfSight() {
           // 高度在航点之间线性变化。
           sampleCartographic.height = start.height + heightDifference * fraction
 
-          samples.push({
-            distance: nextSampleDistance,
-            cartographic: sampleCartographic,
-            cartesian: ellipsoid.cartographicToCartesian(
-              sampleCartographic,
-              new Cartesian3(),
-            ),
-          })
+          appendSample(nextSampleDistance, sampleCartographic)
         }
 
         nextSampleDistance += interval
       }
 
       accumulatedDistance = segmentEndDistance
-    }
 
-    // 如果终点不刚好落在500米倍数处，额外保留航线终点。
-    const lastPoint = routePoints.at(-1)!
-    const lastSampleDistance = samples.at(-1)?.distance ?? -1
-
-    if (accumulatedDistance - lastSampleDistance > 0.001) {
-      const cartographic = Cartographic.fromDegrees(
-        lastPoint.lon,
-        lastPoint.lat,
-        lastPoint.alt,
-      )
-
-      samples.push({
-        distance: accumulatedDistance,
-        cartographic,
-        cartesian: ellipsoid.cartographicToCartesian(cartographic),
-      })
+      //每个航段终点都是原始航点，必须加入分析采样序列。
+      appendSample(accumulatedDistance, end)
     }
 
     return samples
@@ -658,7 +665,7 @@ export function useRouteLineOfSight() {
     async function loadTerrainTile(group: TerrainTileGroup) {
       //检查地形瓦片缓存中是否存已经
       const cachedTile = terrainTileCache.get(group.key)
-      if (cachedTile) return cachedTile 
+      if (cachedTile) return cachedTile
       //立即执行异步函数 请求对应的地形瓦片并缓存
       const tilePromise = (async (): Promise<CachedTerrainTile | null> => {
         let requestPromise

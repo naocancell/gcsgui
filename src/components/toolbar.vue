@@ -1182,7 +1182,24 @@ onMounted(async () => {
       warnClearance: terrainWarningClearance.value,
     }, //传递的参数
   )
-   const positions = [Cesium.Cartographic.fromDegrees(107.4219472, 37.8557269)]
+   const positions = [
+    // Cesium.Cartographic.fromDegrees(109.1801986, 21.6083409),
+    // Cesium.Cartographic.fromDegrees(109.0942906,21.0563956),
+    // Cesium.Cartographic.fromDegrees(109.0970023,21.0600092),
+    // Cesium.Cartographic.fromDegrees(109.1684108, 21.6147329),
+    // Cesium.Cartographic.fromDegrees(109.1202941, 21.5712331),
+    // Cesium.Cartographic.fromDegrees(109.0210713, 21.4682243),
+    // Cesium.Cartographic.fromDegrees(109.0521853, 21.273367),
+    // Cesium.Cartographic.fromDegrees(109.0843282, 21.0720289),
+    Cesium.Cartographic.fromDegrees(107.4219485, 37.8557285),
+    Cesium.Cartographic.fromDegrees(110.093484, 22.395758),
+    Cesium.Cartographic.fromDegrees(109.97489, 22.396414),
+    Cesium.Cartographic.fromDegrees(109.682106, 22.14533),
+    Cesium.Cartographic.fromDegrees(109.530916, 21.763838),
+    Cesium.Cartographic.fromDegrees(109.612228,21.539554),
+    Cesium.Cartographic.fromDegrees(109.495786,20.007391),
+    Cesium.Cartographic.fromDegrees(53.424175,20.007391),
+  ]
 
   const result = await Cesium.sampleTerrain(
     window.viewer.terrainProvider,
