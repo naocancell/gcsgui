@@ -75,7 +75,11 @@ import {
 } from '@/store/selectedPlaneStore'
 import { useTerrainWarning } from '@/hooks/useTerrainWarning'
 import { useMarkObstacle } from '@/hooks/useMarkObstacle.ts'
-import { useRouteLineOfSight } from '@/hooks/useRouteLineOfSight.ts'
+import {
+  useRouteLineOfSight,
+  type LosResultType,
+  type LosViewPointNumber,
+} from '@/hooks/useRouteLineOfSight.ts'
 import {
   exitApplicationOnClose,
   restoreTelemetryWindow,
@@ -86,6 +90,7 @@ import {
   restoreLinkHealthWindow,
 } from '@/utils/linkHealthWindow'
 import LosAnalyseOptions from './LosAnalyseOptions.vue'
+import type { RouteLosAnalyseParams } from '@/types/routeLineOfSight'
 
 declare global {
   interface Window {
@@ -95,27 +100,52 @@ declare global {
   }
 }
 
-const { drawLosEntities, stopLosAnalysis, toggleLosResultVisibility } =
-  useRouteLineOfSight()
-const losResult1Visible = ref(false)
-const losResult2Visible = ref(false)
-const losAnalyzeOptions = computed(() =>
-  store.menuOptions.LosAnalyzeOptions.map((option) => {
-    if (option.key === 'ifShowLosResult1') {
-      return {
-        ...option,
-        label: losResult1Visible.value ? '隐藏结果1' : '显示结果1',
-      }
-    }
-    if (option.key === 'ifShowLosResult2') {
-      return {
-        ...option,
-        label: losResult2Visible.value ? '隐藏结果2' : '显示结果2',
-      }
-    }
-    return option
-  }),
-)
+const {
+  drawLosEntities,
+  stopLosAnalysis,
+  toggleLosViewPointResultVisibility,
+  toggleFinalLosResultVisibility,
+} = useRouteLineOfSight()
+const losViewPointResultVisible = ref([
+  { result1: false, result2: false },
+  { result1: false, result2: false },
+])
+const finalLosResultVisible = ref(false)
+const losViewPointNumbers: LosViewPointNumber[] = [1, 2]
+const losResultSelectionMap = {
+  viewPoint1Result1: { viewPointNumber: 1, resultType: 1 },
+  viewPoint1Result2: { viewPointNumber: 1, resultType: 2 },
+  viewPoint2Result1: { viewPointNumber: 2, resultType: 1 },
+  viewPoint2Result2: { viewPointNumber: 2, resultType: 2 },
+} as const
+
+function resetLosResultVisibility() {
+  losViewPointResultVisible.value.forEach((result) => {
+    result.result1 = false
+    result.result2 = false
+  })
+  finalLosResultVisible.value = false
+}
+
+const losAnalyzeOptions = computed(() => [
+  ...store.menuOptions.LosAnalyzeOptions,
+  ...losViewPointNumbers.map((viewPointNumber) => ({
+    label: `视点${viewPointNumber}结果`,
+    key: `viewPoint${viewPointNumber}Results`,
+    children: ([1, 2] as LosResultType[]).map((resultType) => ({
+      label: losViewPointResultVisible.value[viewPointNumber - 1][
+        `result${resultType}` as 'result1' | 'result2'
+      ]
+        ? `隐藏结果${resultType}`
+        : `显示结果${resultType}`,
+      key: `viewPoint${viewPointNumber}Result${resultType}`,
+    })),
+  })),
+  {
+    label: finalLosResultVisible.value ? '隐藏最终结果' : '显示最终结果',
+    key: 'toggleFinalLosResult',
+  },
+])
 const obstacleVisible = ref(true)
 const obstacleLoadingOptions = computed(() =>
    store.menuOptions.obstacleOptions.map((option)=>{
@@ -385,27 +415,38 @@ async function handleLosAnalyseSelect(key) {
   }
   if (key === 'stopLosAnalyse') {
     if (stopLosAnalysis()) {
-      losResult1Visible.value = false
-      losResult2Visible.value = false
+      resetLosResultVisibility()
     } else {
       message.warning('当前没有正在进行的通视分析')
     }
   }
-  if (key === 'ifShowLosResult1' || key === 'ifShowLosResult2') {
-    const resultType = key === 'ifShowLosResult1' ? 1 : 2
-    const visible = toggleLosResultVisibility(resultType)
+  const selection =
+    losResultSelectionMap[key as keyof typeof losResultSelectionMap]
+  if (selection) {
+    const { viewPointNumber, resultType } = selection
+    const visible = toggleLosViewPointResultVisibility(
+      viewPointNumber,
+      resultType,
+    )
     if (visible === null) {
-      message.warning('暂无通视分析结果')
+      message.warning(`暂无视点${viewPointNumber}的分析结果`)
       return
     }
-    if (resultType === 1) {
-      losResult1Visible.value = visible
-    } else {
-      losResult2Visible.value = visible
-    }
+    losViewPointResultVisible.value[viewPointNumber - 1][
+      `result${resultType}` as 'result1' | 'result2'
+    ] = visible
     message.success(
-      visible ? `通视结果${resultType}已显示` : `通视结果${resultType}已隐藏`,
+      `视点${viewPointNumber}结果${resultType}已${visible ? '显示' : '隐藏'}`,
     )
+  }
+  if (key === 'toggleFinalLosResult') {
+    const visible = toggleFinalLosResultVisibility()
+    if (visible === null) {
+      message.warning('暂无最终分析结果')
+      return
+    }
+    finalLosResultVisible.value = visible
+    message.success(`最终结果已${visible ? '显示' : '隐藏'}`)
   }
 }
 
@@ -1298,30 +1339,30 @@ async function showTelemetryInfo() {
     console.error('打开独立航电窗口失败:', err)
   }
 }
-//通视分析时候得参数类型限定
-type losAnalyesParam = {
-  viewPointLon: number
-  viewPointLat: number
-  viewPointAlt: number
-  routeInterval: number
-  losInterval: number
-  isCalculateRefractionCorrection: boolean
-}
-async function isRouteVisiable(losAnalyesParam: losAnalyesParam) {
+async function isRouteVisiable(losAnalyesParam: RouteLosAnalyseParams) {
   showLosAnalyseModal.value = false
-  const viewPositionCarto = Cartographic.fromDegrees(
-    losAnalyesParam.viewPointLon,
-    losAnalyesParam.viewPointLat,
-    losAnalyesParam.viewPointAlt,
+  resetLosResultVisibility()
+  const viewPositionCartographics = losAnalyesParam.viewPoints.map(
+    (viewPoint) =>
+      Cartographic.fromDegrees(
+        viewPoint.longitude,
+        viewPoint.latitude,
+        viewPoint.altitude,
+      ),
   )
   const completed = await drawLosEntities(
-    viewPositionCarto,
+    viewPositionCartographics,
     losAnalyesParam.routeInterval,
     losAnalyesParam.losInterval,
   )
   if (completed) {
-    losResult1Visible.value = false
-    losResult2Visible.value = true
+    resetLosResultVisibility()
+    if (losAnalyesParam.isDualViewPointMode) {
+      finalLosResultVisible.value = true
+    } else {
+      losViewPointResultVisible.value[0].result2 = true
+    }
+    message.success('通视分析完成')
   }
 }
 async function showLinkHealthInfo() {

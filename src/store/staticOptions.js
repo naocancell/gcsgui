@@ -56,8 +56,6 @@ export const useStaticStore = defineStore('staticOptions', {
         LosAnalyzeOptions: [
           { label: '通视分析', key: 'losAnalyse' },
           { label: '停止分析', key: 'stopLosAnalyse' },
-          { label: '显示结果1', key: 'ifShowLosResult1' },
-          { label: '显示结果2', key: 'ifShowLosResult2' },
         ],
       },
       webskt: {

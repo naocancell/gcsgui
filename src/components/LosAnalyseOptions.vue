@@ -11,16 +11,23 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { type FormInst, type FormRules, useMessage } from 'naive-ui'
 import { useRouteStore } from '@/store/RouteStore'
 import type { AirlinePoint } from '@/types/entityoptions'
+import type {
+  LosViewPoint,
+  RouteLosAnalyseParams,
+} from '@/types/routeLineOfSight'
 import { cartesian2ToCartesian3 } from '@/utils/map/coordinate'
 
-type LosAnalyseParams = {
-  viewPointLon: number
-  viewPointLat: number
-  viewPointAlt: number
-  routeInterval: number
-  losInterval: number
-  isCalculateRefractionCorrection: boolean
+type ViewPointIndex = 0 | 1
+
+type EditableViewPoint = LosViewPoint & {
+  useRelativeHeight: boolean
+  appliedWaypointIndex: number | null
 }
+
+type LosAnalyseForm = Omit<
+  RouteLosAnalyseParams,
+  'isDualViewPointMode' | 'viewPoints'
+>
 
 const props = defineProps<{
   show?: boolean
@@ -28,7 +35,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   //开始、结束地图选点时候控制是否开启模态框
   (event: 'update:show', show: boolean): void
-  (event: 'startLosAnalyse', params: LosAnalyseParams): void
+  (event: 'startLosAnalyse', params: RouteLosAnalyseParams): void
   (event: 'cancelLosAnalyse'): void
 }>()
 const message = useMessage()
@@ -36,13 +43,35 @@ const routeStore = useRouteStore()
 const formRef = ref<FormInst | null>(null)
 const routeWaypoints = ref<AirlinePoint[]>([])
 const selectedWaypointIndex = ref<number | null>(null)
-const appliedWaypointIndex = ref<number | null>(null)
-const useRelativeViewPointHeight = ref(false)
+const isDualViewPointMode = ref(false)
+const activeViewPointIndex = ref<ViewPointIndex>(0)
 const terrainHeightLoading = ref(false)
-const isSelectedWaypointApplied = computed(
-  () =>
-    selectedWaypointIndex.value !== null &&
-    selectedWaypointIndex.value === appliedWaypointIndex.value,
+const viewPoints = ref<[EditableViewPoint, EditableViewPoint]>([
+  {
+    longitude: 110.093484,
+    latitude: 22.395758,
+    altitude: 100,
+    useRelativeHeight: true,
+    appliedWaypointIndex: null,
+  },
+  {
+    longitude: 110.093484,
+    latitude: 22.395758,
+    altitude: 100,
+    useRelativeHeight: true,
+    appliedWaypointIndex: null,
+  },
+])
+const losAnalyseForm = ref<LosAnalyseForm>({
+  routeInterval: 500,
+  losInterval: 200,
+  isCalculateRefractionCorrection: true,
+})
+const activeViewPoint = computed(
+  () => viewPoints.value[activeViewPointIndex.value],
+)
+const enabledViewPointIndexes = computed<ViewPointIndex[]>(() =>
+  isDualViewPointMode.value ? [0, 1] : [0],
 )
 const waypointOptions = computed(() =>
   routeWaypoints.value.map((point, index) => ({
@@ -50,18 +79,27 @@ const waypointOptions = computed(() =>
     value: index,
   })),
 )
-const losAnalyseParams = ref<LosAnalyseParams>({
-  viewPointLon: 110.093484,
-  viewPointLat: 22.395758,
-  viewPointAlt: 1800,
-  routeInterval: 500,
-  losInterval: 200,
-  isCalculateRefractionCorrection: true,
-})
+
 let pointPickHandler: ScreenSpaceEventHandler | null = null
 let pointPickCanvas: HTMLCanvasElement | null = null
 let previousCursor = ''
 let reopeningAfterMapPick = false
+
+function getViewPointLabel(index: ViewPointIndex) {
+  return isDualViewPointMode.value ? `视点${index + 1}` : '视点'
+}
+
+function isSelectedWaypointApplied(index: ViewPointIndex) {
+  return (
+    selectedWaypointIndex.value !== null &&
+    selectedWaypointIndex.value === viewPoints.value[index].appliedWaypointIndex
+  )
+}
+
+function setDualViewPointMode(checked: boolean) {
+  isDualViewPointMode.value = checked
+  if (!checked) activeViewPointIndex.value = 0
+}
 
 function finishMapPointPick(reopenParams: boolean) {
   if (pointPickHandler && !pointPickHandler.isDestroyed()) {
@@ -98,7 +136,7 @@ function handleMapPointPickKeydown(event: KeyboardEvent) {
   cancelMapPointPick()
 }
 
-function startMapPointPick() {
+function startMapPointPick(viewPointIndex: ViewPointIndex) {
   if (routeStore.routeActionMode === 'drawing') {
     message.warning('请先结束当前航线绘制')
     return
@@ -110,7 +148,6 @@ function startMapPointPick() {
   if (routeStore.routeActionMode === 'losPointPicking') return
 
   const viewer = window.viewer
-
   if (!viewer) {
     message.error('地图尚未初始化')
     return
@@ -129,7 +166,6 @@ function startMapPointPick() {
     pointPickHandler.setInputAction(
       (event: ScreenSpaceEventHandler.PositionedEvent) => {
         const position = cartesian2ToCartesian3(viewer, event.position)
-
         if (!position) {
           message.warning('未选中有效的地图位置，请重新选择')
           return
@@ -139,7 +175,6 @@ function startMapPointPick() {
         const longitude = CesiumMath.toDegrees(cartographic.longitude)
         const latitude = CesiumMath.toDegrees(cartographic.latitude)
         const height = cartographic.height
-
         if (
           !Number.isFinite(longitude) ||
           !Number.isFinite(latitude) ||
@@ -149,18 +184,17 @@ function startMapPointPick() {
           return
         }
 
-        losAnalyseParams.value.viewPointLon = Number(longitude.toFixed(6))
-        losAnalyseParams.value.viewPointLat = Number(latitude.toFixed(6))
-        if (!useRelativeViewPointHeight.value) {
-          losAnalyseParams.value.viewPointAlt = Math.max(
-            -2000,
-            Number(height.toFixed(2)),
-          )
+        const viewPoint = viewPoints.value[viewPointIndex]
+        viewPoint.longitude = Number(longitude.toFixed(6))
+        viewPoint.latitude = Number(latitude.toFixed(6))
+        if (!viewPoint.useRelativeHeight) {
+          viewPoint.altitude = Math.max(-2000, Number(height.toFixed(2)))
         }
-        appliedWaypointIndex.value = null
+        viewPoint.appliedWaypointIndex = null
+        activeViewPointIndex.value = viewPointIndex
 
         finishMapPointPick(true)
-        message.success('视点位置已更新')
+        message.success(`${getViewPointLabel(viewPointIndex)}位置已更新`)
       },
       ScreenSpaceEventType.LEFT_CLICK,
     )
@@ -170,7 +204,11 @@ function startMapPointPick() {
     )
     window.addEventListener('keydown', handleMapPointPickKeydown)
     emit('update:show', false)
-    message.info('请在地图上单击选择视点，按 Esc 或右键取消')
+    message.info(
+      `请在地图上单击选择${getViewPointLabel(
+        viewPointIndex,
+      )}，按 Esc 或右键取消`,
+    )
   } catch (error) {
     console.error('启动地图选点失败:', error)
     finishMapPointPick(true)
@@ -178,40 +216,13 @@ function startMapPointPick() {
   }
 }
 
-//传递参数
-const rules = computed<FormRules>(() => ({
-  viewPointLon: {
-    type: 'number',
-    required: true,
-    min: -180,
-    max: 180,
-    message: '经度范围为 -180° 至 180°',
-    trigger: ['input', 'blur'],
-  },
-  viewPointLat: {
-    type: 'number',
-    required: true,
-    min: -90,
-    max: 90,
-    message: '纬度范围为 -90° 至 90°',
-    trigger: ['input', 'blur'],
-  },
-  viewPointAlt: {
-    type: 'number',
-    required: true,
-    min: useRelativeViewPointHeight.value ? 0 : -2000,
-    max: 100000,
-    message: useRelativeViewPointHeight.value
-      ? '视点离地高度范围为 0 至 100000 m'
-      : '视点海拔高度范围为 -2000 至 100000 m',
-    trigger: ['input', 'blur'],
-  },
+const rules: FormRules = {
   routeInterval: {
     type: 'number',
     required: true,
     min: 10,
     max: 1000000,
-    message: '航线采样间距范围为 10 至 10000 m',
+    message: '航线采样间距范围为 10 至 1000000 m',
     trigger: ['input', 'blur'],
   },
   losInterval: {
@@ -222,63 +233,59 @@ const rules = computed<FormRules>(() => ({
     message: '视线采样间距范围为 10 至 10000 m',
     trigger: ['input', 'blur'],
   },
-}))
+}
 
-let terrainHeightCache:
-  | { longitude: number; latitude: number; height: number }
-  | undefined
+const terrainHeightCache = new Map<string, number>()
 
-async function getLevel13TerrainHeight() {
+async function getLevel13TerrainHeight(viewPointIndex: ViewPointIndex) {
   const viewer = window.viewer
-  if (!viewer) {
-    throw new Error('地图尚未初始化')
-  }
+  if (!viewer) throw new Error('地图尚未初始化')
 
-  const longitude = Number(losAnalyseParams.value.viewPointLon)
-  const latitude = Number(losAnalyseParams.value.viewPointLat)
+  const viewPoint = viewPoints.value[viewPointIndex]
+  const longitude = Number(viewPoint.longitude)
+  const latitude = Number(viewPoint.latitude)
   if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) {
-    throw new Error('视点经纬度无效')
+    throw new Error(`${getViewPointLabel(viewPointIndex)}经纬度无效`)
   }
 
-  if (
-    terrainHeightCache?.longitude === longitude &&
-    terrainHeightCache.latitude === latitude
-  ) {
-    return terrainHeightCache.height
-  }
+  const cacheKey = `${longitude}/${latitude}`
+  const cachedHeight = terrainHeightCache.get(cacheKey)
+  if (cachedHeight !== undefined) return cachedHeight
 
   const [terrainPosition] = await sampleTerrain(viewer.terrainProvider, 13, [
     Cartographic.fromDegrees(longitude, latitude),
   ])
   const terrainHeight = Number(terrainPosition?.height)
   if (!Number.isFinite(terrainHeight)) {
-    throw new Error('无法获取视点位置的地形高度')
+    throw new Error(
+      `无法获取${getViewPointLabel(viewPointIndex)}位置的地形高度`,
+    )
   }
 
-  terrainHeightCache = {
-    longitude,
-    latitude,
-    height: terrainHeight,
-  }
+  terrainHeightCache.set(cacheKey, terrainHeight)
   return terrainHeight
 }
 
-async function setRelativeHeightMode(checked: boolean) {
-  if (checked === useRelativeViewPointHeight.value) return
+async function setRelativeHeightMode(
+  viewPointIndex: ViewPointIndex,
+  checked: boolean,
+) {
+  const viewPoint = viewPoints.value[viewPointIndex]
+  if (checked === viewPoint.useRelativeHeight) return
 
   terrainHeightLoading.value = true
   try {
-    const terrainHeight = await getLevel13TerrainHeight()
-    const currentHeight = Number(losAnalyseParams.value.viewPointAlt)
+    const terrainHeight = await getLevel13TerrainHeight(viewPointIndex)
+    const currentHeight = Number(viewPoint.altitude)
     if (!Number.isFinite(currentHeight)) {
-      throw new Error('视点高度无效')
+      throw new Error(`${getViewPointLabel(viewPointIndex)}高度无效`)
     }
 
-    losAnalyseParams.value.viewPointAlt = checked
+    viewPoint.altitude = checked
       ? Number(Math.max(0, currentHeight - terrainHeight).toFixed(2))
       : Number((currentHeight + terrainHeight).toFixed(2))
-    useRelativeViewPointHeight.value = checked
-    appliedWaypointIndex.value = null
+    viewPoint.useRelativeHeight = checked
+    viewPoint.appliedWaypointIndex = null
   } catch (error) {
     console.error('切换视点高度模式失败:', error)
     message.error(error instanceof Error ? error.message : '地形高度查询失败')
@@ -287,8 +294,23 @@ async function setRelativeHeightMode(checked: boolean) {
   }
 }
 
-function clearAppliedWaypoint() {
-  appliedWaypointIndex.value = null
+function clearAppliedWaypoint(viewPointIndex: ViewPointIndex) {
+  viewPoints.value[viewPointIndex].appliedWaypointIndex = null
+}
+
+function validateViewPoint(viewPointIndex: ViewPointIndex) {
+  const viewPoint = viewPoints.value[viewPointIndex]
+  return (
+    Number.isFinite(Number(viewPoint.longitude)) &&
+    Number(viewPoint.longitude) >= -180 &&
+    Number(viewPoint.longitude) <= 180 &&
+    Number.isFinite(Number(viewPoint.latitude)) &&
+    Number(viewPoint.latitude) >= -90 &&
+    Number(viewPoint.latitude) <= 90 &&
+    Number.isFinite(Number(viewPoint.altitude)) &&
+    Number(viewPoint.altitude) >= (viewPoint.useRelativeHeight ? 0 : -2000) &&
+    Number(viewPoint.altitude) <= 100000
+  )
 }
 
 const done = async () => {
@@ -299,68 +321,120 @@ const done = async () => {
     return
   }
 
-  let viewPointAlt = losAnalyseParams.value.viewPointAlt
-  if (useRelativeViewPointHeight.value) {
-    terrainHeightLoading.value = true
-    try {
-      const terrainHeight = await getLevel13TerrainHeight()
-      viewPointAlt = Number((terrainHeight + viewPointAlt).toFixed(2))
-    } catch (error) {
-      console.error('解析视点相对高度失败:', error)
-      message.error(error instanceof Error ? error.message : '地形高度查询失败')
-      return
-    } finally {
-      terrainHeightLoading.value = false
-    }
+  const invalidViewPoint = enabledViewPointIndexes.value.find(
+    (index) => !validateViewPoint(index),
+  )
+  if (invalidViewPoint !== undefined) {
+    activeViewPointIndex.value = invalidViewPoint
+    message.warning(`请检查${getViewPointLabel(invalidViewPoint)}参数`)
+    return
   }
 
-  emit('startLosAnalyse', {
-    ...losAnalyseParams.value,
-    viewPointAlt,
-  })
+  terrainHeightLoading.value = true
+  try {
+    const resolvedViewPoints = await Promise.all(
+      enabledViewPointIndexes.value.map(
+        async (index): Promise<LosViewPoint> => {
+          const viewPoint = viewPoints.value[index]
+          const terrainHeight = viewPoint.useRelativeHeight
+            ? await getLevel13TerrainHeight(index)
+            : 0
+          return {
+            longitude: Number(viewPoint.longitude),
+            latitude: Number(viewPoint.latitude),
+            altitude: Number((viewPoint.altitude + terrainHeight).toFixed(2)),
+          }
+        },
+      ),
+    )
+
+    emit('startLosAnalyse', {
+      ...losAnalyseForm.value,
+      isDualViewPointMode: isDualViewPointMode.value,
+      viewPoints: resolvedViewPoints,
+    })
+  } catch (error) {
+    console.error('解析视点高度失败:', error)
+    message.error(error instanceof Error ? error.message : '地形高度查询失败')
+  } finally {
+    terrainHeightLoading.value = false
+  }
 }
+
 const cancel = () => {
   emit('cancelLosAnalyse')
 }
-//参数为是否弹出已将某航点设为视点的提示框
-function setWaypointAsViewpoint(showMessage = true) {
-  const index = selectedWaypointIndex.value
-  const point = index === null ? undefined : routeWaypoints.value[index]
 
-  if (!point) {
-    message.warning('请先选择一个航点')
-    return
-  }
+async function applyWaypointToViewPoint(
+  viewPointIndex: ViewPointIndex,
+  waypointIndex: number,
+  showMessage: boolean,
+) {
+  const point = routeWaypoints.value[waypointIndex]
+  if (!point) return false
 
   const longitude = Number(point.lon)
   const latitude = Number(point.lat)
   const altitude = Number(point.alt)
   if (
-    //检查经纬度和高度是否为有效数字
     !Number.isFinite(longitude) ||
     !Number.isFinite(latitude) ||
     !Number.isFinite(altitude)
   ) {
-    message.warning('该航点的坐标或高度无效')
+    if (showMessage) message.warning('该航点的坐标或高度无效')
+    return false
+  }
+
+  const useRelativeHeight = viewPoints.value[viewPointIndex].useRelativeHeight
+  viewPoints.value[viewPointIndex] = {
+    longitude: Number(longitude.toFixed(6)),
+    latitude: Number(latitude.toFixed(6)),
+    altitude,
+    useRelativeHeight: false,
+    appliedWaypointIndex: waypointIndex,
+  }
+
+  if (useRelativeHeight) {
+    const terrainHeight = await getLevel13TerrainHeight(viewPointIndex)
+    viewPoints.value[viewPointIndex].altitude = Number(
+      Math.max(0, altitude - terrainHeight).toFixed(2),
+    )
+    viewPoints.value[viewPointIndex].useRelativeHeight = true
+  }
+  activeViewPointIndex.value = viewPointIndex
+
+  if (showMessage) {
+    message.success(
+      `已将航点 ${point.nPt || waypointIndex + 1} 设置为${getViewPointLabel(
+        viewPointIndex,
+      )}`,
+    )
+  }
+  return true
+}
+
+async function setWaypointAsViewpoint(viewPointIndex: ViewPointIndex) {
+  const waypointIndex = selectedWaypointIndex.value
+  if (waypointIndex === null) {
+    message.warning('请先选择一个航点')
     return
   }
 
-  losAnalyseParams.value.viewPointLon = Number(longitude.toFixed(6))
-  losAnalyseParams.value.viewPointLat = Number(latitude.toFixed(6))
-  losAnalyseParams.value.viewPointAlt = altitude
-  useRelativeViewPointHeight.value = false
-  appliedWaypointIndex.value = index
-
-  if (showMessage) {
-    message.success(`已将航点 ${point.nPt || index + 1} 设置为视点`)
+  terrainHeightLoading.value = true
+  try {
+    await applyWaypointToViewPoint(viewPointIndex, waypointIndex, true)
+  } catch (error) {
+    console.error('设置航点为视点失败:', error)
+    message.error(error instanceof Error ? error.message : '地形高度查询失败')
+  } finally {
+    terrainHeightLoading.value = false
   }
 }
 
-// 打开弹窗时加载当前选中航线，并默认使用第一个航点。
+// 打开弹窗时加载当前选中航线。视点1使用首个航点，视点2使用最后一个航点。
 watch(
-  //写成箭头函数是侦听某个具体 props 属性
   () => props.show,
-  (show) => {
+  async (show) => {
     if (!show) return
 
     // 地图选点结束后只恢复弹窗，保留刚选取的坐标。
@@ -372,16 +446,33 @@ watch(
     const routeManage = window.routeManageViewer
     const routeId = routeManage?.selectedRouteId
     const points = routeManage?.routesMap?.get(String(routeId))?.line?.points
-
     routeWaypoints.value = Array.isArray(points) ? points : []
-    //第一次默认设置第一个航点为视点
     selectedWaypointIndex.value = routeWaypoints.value.length ? 0 : null
-    if (selectedWaypointIndex.value !== null) {
-      //第一次设置不弹出提示框:false
-      setWaypointAsViewpoint(false)
+    activeViewPointIndex.value = 0
+
+    if (routeWaypoints.value.length) {
+      viewPoints.value.forEach((viewPoint) => {
+        viewPoint.useRelativeHeight = true
+      })
+      terrainHeightLoading.value = true
+      try {
+        await Promise.all([
+          applyWaypointToViewPoint(0, 0, false),
+          applyWaypointToViewPoint(1, routeWaypoints.value.length - 1, false),
+        ])
+      } catch (error) {
+        console.error('初始化视点失败:', error)
+        message.error(
+          error instanceof Error ? error.message : '地形高度查询失败',
+        )
+      } finally {
+        activeViewPointIndex.value = 0
+        terrainHeightLoading.value = false
+      }
     }
   },
 )
+
 onBeforeUnmount(() => {
   finishMapPointPick(false)
 })
@@ -402,18 +493,26 @@ onBeforeUnmount(() => {
       <n-form
         ref="formRef"
         class="los-options-form"
-        :model="losAnalyseParams"
+        :model="losAnalyseForm"
         :rules="rules"
         label-placement="left"
         label-width="140"
         require-mark-placement="right-hanging"
       >
-        <!-- 视点经纬度高度设置 -->
+        <n-form-item label="分析模式">
+          <n-checkbox
+            :checked="isDualViewPointMode"
+            :disabled="terrainHeightLoading"
+            @update:checked="setDualViewPointMode"
+          >
+            开启双视点模式
+          </n-checkbox>
+        </n-form-item>
+
         <n-form-item label="航点列表">
-          <n-input-group class="waypoint-picker">
+          <div class="waypoint-controls">
             <n-select
               v-model:value="selectedWaypointIndex"
-              class="waypoint-select"
               :options="waypointOptions"
               :placeholder="
                 waypointOptions.length ? '请选择航点' : '当前航线没有航点'
@@ -421,94 +520,127 @@ onBeforeUnmount(() => {
               :disabled="waypointOptions.length === 0 || terrainHeightLoading"
               filterable
             />
-            <n-button
-              attr-type="button"
-              :type="isSelectedWaypointApplied ? 'success' : 'primary'"
-              class="waypoint-apply-button"
-              :disabled="selectedWaypointIndex === null || terrainHeightLoading"
-              @click="setWaypointAsViewpoint()"
-            >
-              <template #icon>
-                <n-icon>
-                  <CheckmarkCircleOutline v-if="isSelectedWaypointApplied" />
-                  <LocationOutline v-else />
-                </n-icon>
-              </template>
-              {{ isSelectedWaypointApplied ? '已设为视点' : '设为视点' }}
-            </n-button>
-          </n-input-group>
+            <n-button-group class="viewpoint-action-group">
+              <n-button
+                v-for="index in enabledViewPointIndexes"
+                :key="index"
+                attr-type="button"
+                :type="isSelectedWaypointApplied(index) ? 'success' : 'primary'"
+                :disabled="
+                  selectedWaypointIndex === null || terrainHeightLoading
+                "
+                @click="setWaypointAsViewpoint(index)"
+              >
+                <template #icon>
+                  <n-icon>
+                    <CheckmarkCircleOutline
+                      v-if="isSelectedWaypointApplied(index)"
+                    />
+                    <LocationOutline v-else />
+                  </n-icon>
+                </template>
+                {{
+                  isDualViewPointMode
+                    ? `设为视点${index + 1}`
+                    : isSelectedWaypointApplied(index)
+                      ? '已设为视点'
+                      : '设为视点'
+                }}
+              </n-button>
+            </n-button-group>
+          </div>
         </n-form-item>
 
         <n-form-item label="视点位置">
-          <n-button
-            attr-type="button"
-            type="primary"
-            secondary
-            block
-            :disabled="terrainHeightLoading"
-            @click="startMapPointPick"
-          >
-            <template #icon>
-              <n-icon><LocationOutline /></n-icon>
-            </template>
-            地图选点
-          </n-button>
+          <n-button-group class="viewpoint-action-group map-pick-group">
+            <n-button
+              v-for="index in enabledViewPointIndexes"
+              :key="index"
+              attr-type="button"
+              type="primary"
+              secondary
+              :disabled="terrainHeightLoading"
+              @click="startMapPointPick(index)"
+            >
+              <template #icon>
+                <n-icon><LocationOutline /></n-icon>
+              </template>
+              {{ isDualViewPointMode ? `选择视点${index + 1}` : '地图选点' }}
+            </n-button>
+          </n-button-group>
         </n-form-item>
 
-        <n-form-item label="视点高度模式">
+        <n-form-item v-if="isDualViewPointMode" label="参数编辑">
+          <n-radio-group
+            v-model:value="activeViewPointIndex"
+            class="viewpoint-segment"
+            name="active-view-point"
+            size="small"
+          >
+            <n-radio-button :value="0" label="视点1" />
+            <n-radio-button :value="1" label="视点2" />
+          </n-radio-group>
+        </n-form-item>
+
+        <n-form-item :label="isDualViewPointMode ? '高度模式' : '视点高度模式'">
           <n-checkbox
-            :checked="useRelativeViewPointHeight"
+            :checked="activeViewPoint.useRelativeHeight"
             :disabled="terrainHeightLoading"
-            @update:checked="setRelativeHeightMode"
+            @update:checked="
+              setRelativeHeightMode(activeViewPointIndex, $event)
+            "
           >
             使用相对高度（离地）
           </n-checkbox>
         </n-form-item>
 
-        <n-form-item label="视点经度/°" path="viewPointLon">
+        <n-form-item :label="isDualViewPointMode ? '经度/°' : '视点经度/°'">
           <n-input-number
-            v-model:value="losAnalyseParams.viewPointLon"
+            v-model:value="activeViewPoint.longitude"
             placeholder="110"
             :min="-180"
             :max="180"
             :step="0.000001"
             :precision="6"
-            @update:value="clearAppliedWaypoint"
+            @update:value="clearAppliedWaypoint(activeViewPointIndex)"
           />
         </n-form-item>
 
-        <n-form-item label="视点纬度/°" path="viewPointLat">
+        <n-form-item :label="isDualViewPointMode ? '纬度/°' : '视点纬度/°'">
           <n-input-number
-            v-model:value="losAnalyseParams.viewPointLat"
+            v-model:value="activeViewPoint.latitude"
             placeholder="23"
             :min="-90"
             :max="90"
             :step="0.000001"
             :precision="6"
-            @update:value="clearAppliedWaypoint"
+            @update:value="clearAppliedWaypoint(activeViewPointIndex)"
           />
         </n-form-item>
 
         <n-form-item
           :label="
-            useRelativeViewPointHeight ? '视点离地高度/m' : '视点海拔高度/m'
+            activeViewPoint.useRelativeHeight
+              ? '离地高度/m'
+              : isDualViewPointMode
+                ? '海拔高度/m'
+                : '视点海拔高度/m'
           "
-          path="viewPointAlt"
         >
           <n-input-number
-            v-model:value="losAnalyseParams.viewPointAlt"
-            :placeholder="useRelativeViewPointHeight ? '100' : '1800'"
+            v-model:value="activeViewPoint.altitude"
+            :placeholder="activeViewPoint.useRelativeHeight ? '100' : '1800'"
             :step="100"
-            :min="useRelativeViewPointHeight ? 0 : -2000"
+            :min="activeViewPoint.useRelativeHeight ? 0 : -2000"
             :max="100000"
             :disabled="terrainHeightLoading"
-            @update:value="clearAppliedWaypoint"
+            @update:value="clearAppliedWaypoint(activeViewPointIndex)"
           />
         </n-form-item>
 
         <n-form-item label="航线采样间距/m" path="routeInterval">
           <n-input-number
-            v-model:value="losAnalyseParams.routeInterval"
+            v-model:value="losAnalyseForm.routeInterval"
             placeholder="500"
             :step="100"
             :min="10"
@@ -518,20 +650,13 @@ onBeforeUnmount(() => {
 
         <n-form-item label="视线采样间距/m" path="losInterval">
           <n-input-number
-            v-model:value="losAnalyseParams.losInterval"
+            v-model:value="losAnalyseForm.losInterval"
             placeholder="200"
             :step="10"
             :min="10"
             :max="10000"
           />
         </n-form-item>
-        <!-- 是否考虑大气折射开关 -->
-        <!-- <n-form-item label="大气折射">
-            <n-switch v-model:value="losAnalyseParams.isCalculateRefractionCorrection">
-              <template #checked>是</template>
-              <template #unchecked>否</template>
-            </n-switch>
-          </n-form-item> -->
       </n-form>
       <n-space class="los-options-actions" justify="center">
         <n-button
@@ -542,7 +667,7 @@ onBeforeUnmount(() => {
         >
           确定
         </n-button>
-        <n-button @click="cancel" type="warning" size="small">取消</n-button>
+        <n-button type="warning" size="small" @click="cancel">取消</n-button>
       </n-space>
     </div>
   </n-modal>
@@ -550,23 +675,47 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .los-options-modal {
-  width: min(560px, calc(100vw - 32px));
+  width: min(620px, calc(100vw - 32px));
 }
 
 .los-options-content,
 .los-options-form,
-.waypoint-picker {
+.waypoint-controls,
+.map-pick-group,
+.viewpoint-segment {
   width: 100%;
 }
 
-.waypoint-select {
+.waypoint-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+.waypoint-controls > .n-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.viewpoint-action-group {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+}
+
+.viewpoint-action-group > .n-button {
   min-width: 0;
   flex: 1;
 }
 
-.waypoint-apply-button {
-  flex: none;
-  min-width: 116px;
+.map-pick-group > .n-button {
+  width: 50%;
+}
+
+.viewpoint-segment :deep(.n-radio-button) {
+  width: 50%;
+  text-align: center;
 }
 
 .los-options-actions {

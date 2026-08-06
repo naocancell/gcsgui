@@ -12,6 +12,7 @@ import { ref } from 'vue'
 import type { AirlinePoint } from '@/types/entityoptions'
 import type { Rectangle, TerrainData, TilingScheme } from 'cesium'
 import { useMessage, MessageReactive } from 'naive-ui'
+import { mergeLosVisibilityResults } from '@/utils/map/losResults'
 // 获取 message 实例
 
 type RouteSample = {
@@ -63,12 +64,13 @@ const TERRAIN_TILE_LRU_CAPACITY = 512
 const TERRAIN_REQUEST_RETRY_DELAY_MS = 20
 //绘制时候的批次大小
 const DRAW_BATCH_SIZE = 100
-//结果2略高于原航线，避免两条线共面产生深度冲突
-const LOS_RESULT_2_HEIGHT_OFFSET = 0.5
+//各结果2使用不同高度偏移，避免同时显示时产生深度冲突。
+const LOS_RESULT_2_HEIGHT_OFFSET_STEP = 0.5
 //固定间距采样点与航点累计距离足够接近时视为同一个点。
 const ROUTE_SAMPLE_DISTANCE_EPSILON = 0.001
-const losResult1Entities: Entity[] = []
-const losResult2Entities: Entity[] = []
+const losResult1EntitiesByViewPoint: [Entity[], Entity[]] = [[], []]
+const losResult2EntitiesByViewPoint: [Entity[], Entity[]] = [[], []]
+const finalLosResultEntities: Entity[] = []
 const viewPointEntities: Entity[] = []
 const terrainProviderIds = new WeakMap<object, number>()
 const terrainTileLru = new Map<string, CachedTerrainTile>()
@@ -104,6 +106,7 @@ function cacheTerrainTile(key: string, tile: CachedTerrainTile) {
 }
 
 export type LosResultType = 1 | 2
+export type LosViewPointNumber = 1 | 2
 
 class LosAnalysisCancelledError extends Error {
   constructor() {
@@ -134,8 +137,9 @@ function clearLosEntities() {
   const viewer = window.viewer
   if (!viewer) return
   if (
-    losResult1Entities.length === 0 &&
-    losResult2Entities.length === 0 &&
+    losResult1EntitiesByViewPoint.every((entities) => entities.length === 0) &&
+    losResult2EntitiesByViewPoint.every((entities) => entities.length === 0) &&
+    finalLosResultEntities.length === 0 &&
     viewPointEntities.length === 0
   ) {
     return
@@ -144,15 +148,18 @@ function clearLosEntities() {
   viewer.entities.suspendEvents()
 
   try {
-    losResult1Entities.forEach((entity) => {
-      viewer.entities.remove(entity)
+    losResult1EntitiesByViewPoint.forEach((entities) => {
+      entities.forEach((entity) => viewer.entities.remove(entity))
+      entities.length = 0
     })
-    losResult1Entities.length = 0
 
-    losResult2Entities.forEach((entity) => {
-      viewer.entities.remove(entity)
+    losResult2EntitiesByViewPoint.forEach((entities) => {
+      entities.forEach((entity) => viewer.entities.remove(entity))
+      entities.length = 0
     })
-    losResult2Entities.length = 0
+
+    finalLosResultEntities.forEach((entity) => viewer.entities.remove(entity))
+    finalLosResultEntities.length = 0
 
     viewPointEntities.forEach((entity) => {
       viewer.entities.remove(entity)
@@ -166,8 +173,25 @@ function clearLosEntities() {
   viewer.scene.requestRender()
 }
 
-function toggleLosResultVisibility(resultType: LosResultType) {
-  const entities = resultType === 1 ? losResult1Entities : losResult2Entities
+function updateViewPointEntitiesVisibility() {
+  const finalResultVisible = finalLosResultEntities.some(
+    (entity) => entity.show,
+  )
+
+  viewPointEntities.forEach((entity, index) => {
+    entity.show =
+      finalResultVisible ||
+      losResult1EntitiesByViewPoint[index]?.some(
+        (resultEntity) => resultEntity.show,
+      ) ||
+      losResult2EntitiesByViewPoint[index]?.some(
+        (resultEntity) => resultEntity.show,
+      ) ||
+      false
+  })
+}
+
+function toggleEntitiesVisibility(entities: Entity[]) {
   if (entities.length === 0) return null
 
   const visible = !entities[0].show
@@ -175,15 +199,26 @@ function toggleLosResultVisibility(resultType: LosResultType) {
     entity.show = visible
   })
 
-  const viewPointVisible =
-    losResult1Entities.some((entity) => entity.show) ||
-    losResult2Entities.some((entity) => entity.show)
-  viewPointEntities.forEach((entity) => {
-    entity.show = viewPointVisible
-  })
+  updateViewPointEntitiesVisibility()
   window.viewer?.scene.requestRender()
 
   return visible
+}
+
+function toggleLosViewPointResultVisibility(
+  viewPointNumber: LosViewPointNumber,
+  resultType: LosResultType,
+) {
+  const viewPointIndex = viewPointNumber - 1
+  const entities =
+    resultType === 1
+      ? losResult1EntitiesByViewPoint[viewPointIndex]
+      : losResult2EntitiesByViewPoint[viewPointIndex]
+  return toggleEntitiesVisibility(entities)
+}
+
+function toggleFinalLosResultVisibility() {
+  return toggleEntitiesVisibility(finalLosResultEntities)
 }
 export function useRouteLineOfSight() {
   //开始分析的时候一直显示消息
@@ -534,9 +569,9 @@ export function useRouteLineOfSight() {
     return true
   }
 
-  //绘制观察点到采样点的los 传入一个观察点
+  //绘制观察点到采样点的 LOS，结果1保留各视点结果，结果2合并各视点结果。
   async function drawLosEntities(
-    startCarto: Cartographic,
+    startCartographics: Cartographic[],
     routeInterval = 500,
     losInterval = 200,
   ) {
@@ -548,6 +583,10 @@ export function useRouteLineOfSight() {
 
     if (losAnalysing.value) {
       message.warning('正在进行无线电通视分析，请稍后！')
+      return
+    }
+    if (startCartographics.length === 0) {
+      message.warning('请至少设置一个视点')
       return
     }
     //一直显示正在进行通视分析
@@ -562,31 +601,36 @@ export function useRouteLineOfSight() {
     activeAnalysisController = controller
 
     try {
-      const startCartesian = Cartesian3.fromRadians(
-        startCarto.longitude,
-        startCarto.latitude,
-        startCarto.height,
+      const startCartesians = startCartographics.map((start) =>
+        Cartesian3.fromRadians(start.longitude, start.latitude, start.height),
       )
-      //绘制出来视点位置 并添加到里面
-      const viewPointEntity = window.viewer.entities.add({
-        id: 'viewPoint',
-        position: startCartesian,
-        label: {
-          text: '视点',
-          pixelOffset: Cartesian2.fromArray([0, 20]),
-          font: 'bold 30px', //设置为16像素
-          fillColor: Color.YELLOW, // 设置为红色
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        },
-        point: {
-          pixelSize: 16, // 点的大小（像素）
-          color: Color.YELLOW, // 点的颜色
-          outlineColor: Color.BLACK, // 边框颜色
-          outlineWidth: 2, // 边框宽度（像素）
-          show: true, // 是否显示
-        },
-      })
-      viewPointEntities.push(viewPointEntity)
+      //绘制视点位置
+      window.viewer.entities.suspendEvents()
+      try {
+        startCartesians.forEach((position, index) => {
+          const viewPointEntity = window.viewer.entities.add({
+            id: `los-view-point-${index + 1}`,
+            position,
+            label: {
+              text: startCartesians.length === 1 ? '视点' : `视点${index + 1}`,
+              pixelOffset: Cartesian2.fromArray([0, 20]),
+              font: 'bold 30px',
+              fillColor: Color.YELLOW,
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            },
+            point: {
+              pixelSize: 16,
+              color: Color.YELLOW,
+              outlineColor: Color.BLACK,
+              outlineWidth: 2,
+              show: false,
+            },
+          })
+          viewPointEntities.push(viewPointEntity)
+        })
+      } finally {
+        window.viewer.entities.resumeEvents()
+      }
       //根据间距获取到航线上采样点
       const airLineSamples = await sampleRouteByDistance(
         airlinePoints,
@@ -594,17 +638,35 @@ export function useRouteLineOfSight() {
         signal,
       )
 
-      const results = await analyseWithTerrainBatches(
-        airLineSamples,
-        startCarto,
-        losInterval,
-        signal,
+      const resultsByViewPoint: boolean[][] = []
+      for (const startCartographic of startCartographics) {
+        resultsByViewPoint.push(
+          await analyseWithTerrainBatches(
+            airLineSamples,
+            startCartographic,
+            losInterval,
+            signal,
+          ),
+        )
+      }
+      const mergedResults = mergeLosVisibilityResults(resultsByViewPoint)
+      const viewPointResult2Positions = resultsByViewPoint.map(
+        (_, viewPointIndex) =>
+          airLineSamples.map((sample) =>
+            Cartesian3.fromRadians(
+              sample.cartographic.longitude,
+              sample.cartographic.latitude,
+              sample.cartographic.height +
+                LOS_RESULT_2_HEIGHT_OFFSET_STEP * (viewPointIndex + 1),
+            ),
+          ),
       )
-      const result2Positions = airLineSamples.map((sample) =>
+      const finalResultPositions = airLineSamples.map((sample) =>
         Cartesian3.fromRadians(
           sample.cartographic.longitude,
           sample.cartographic.latitude,
-          sample.cartographic.height + LOS_RESULT_2_HEIGHT_OFFSET,
+          sample.cartographic.height +
+            LOS_RESULT_2_HEIGHT_OFFSET_STEP * (resultsByViewPoint.length + 1),
         ),
       )
 
@@ -624,42 +686,72 @@ export function useRouteLineOfSight() {
         try {
           for (let index = batchStart; index < batchEnd; index++) {
             const sample = airLineSamples[index]
-            const result1Entity = window.viewer.entities.add({
-              name: '通视分析结果1',
-              show: false,
-              polyline: {
-                positions: [startCartesian, sample.cartesian],
-                width: 1,
-                material: results[index] ? Color.GREEN : Color.RED,
-              },
+            startCartesians.forEach((startCartesian, viewPointIndex) => {
+              const result1Entity = window.viewer.entities.add({
+                name: `通视分析结果1-视点${viewPointIndex + 1}`,
+                show: false,
+                polyline: {
+                  positions: [startCartesian, sample.cartesian],
+                  width: 1,
+                  material: resultsByViewPoint[viewPointIndex][index]
+                    ? Color.GREEN
+                    : Color.RED,
+                },
+              })
+              losResult1EntitiesByViewPoint[viewPointIndex].push(result1Entity)
             })
-            losResult1Entities.push(result1Entity)
 
             if (index === 0) continue
 
-            const segmentVisible = results[index - 1] && results[index]
-            const segmentColor = segmentVisible ? Color.LIME : Color.RED
+            resultsByViewPoint.forEach((results, viewPointIndex) => {
+              const segmentVisible = results[index - 1] && results[index]
+              const segmentColor = segmentVisible ? Color.LIME : Color.RED
+              const positions = viewPointResult2Positions[viewPointIndex]
 
-            const result2Entity = window.viewer.entities.add({
-              name: '通视分析结果2',
-              show: true,
+              const result2Entity = window.viewer.entities.add({
+                name: `通视分析结果2-视点${viewPointIndex + 1}`,
+                show: false,
+                polyline: {
+                  positions: [positions[index - 1], positions[index]],
+                  width: 5,
+                  material: segmentColor,
+                  depthFailMaterial: segmentColor,
+                },
+              })
+              losResult2EntitiesByViewPoint[viewPointIndex].push(result2Entity)
+            })
+
+            const finalSegmentVisible =
+              mergedResults[index - 1] && mergedResults[index]
+            const finalSegmentColor = finalSegmentVisible
+              ? Color.LIME
+              : Color.RED
+
+            const finalResultEntity = window.viewer.entities.add({
+              name: '通视分析最终结果',
+              show: false,
               polyline: {
                 positions: [
-                  result2Positions[index - 1],
-                  result2Positions[index],
+                  finalResultPositions[index - 1],
+                  finalResultPositions[index],
                 ],
                 width: 5,
-                material: segmentColor,
-                depthFailMaterial: segmentColor,
+                material: finalSegmentColor,
+                depthFailMaterial: finalSegmentColor,
               },
             })
-            losResult2Entities.push(result2Entity)
+            finalLosResultEntities.push(finalResultEntity)
           }
         } finally {
           window.viewer.entities.resumeEvents()
         }
       }
 
+      if (startCartographics.length > 1) {
+        toggleEntitiesVisibility(finalLosResultEntities)
+      } else {
+        toggleEntitiesVisibility(losResult2EntitiesByViewPoint[0])
+      }
       window.viewer.scene.requestRender()
       return true
     } catch (error) {
@@ -900,7 +992,8 @@ export function useRouteLineOfSight() {
     getSelectedRoute,
     drawLosEntities,
     stopLosAnalysis,
-    toggleLosResultVisibility,
+    toggleLosViewPointResultVisibility,
+    toggleFinalLosResultVisibility,
     //是否开启大气校正
     ifCalculateRefractionCorrection,
   }
