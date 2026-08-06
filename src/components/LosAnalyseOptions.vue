@@ -228,7 +228,7 @@ let terrainHeightCache:
   | { longitude: number; latitude: number; height: number }
   | undefined
 
-async function getLevel11TerrainHeight() {
+async function getLevel13TerrainHeight() {
   const viewer = window.viewer
   if (!viewer) {
     throw new Error('地图尚未初始化')
@@ -247,7 +247,7 @@ async function getLevel11TerrainHeight() {
     return terrainHeightCache.height
   }
 
-  const [terrainPosition] = await sampleTerrain(viewer.terrainProvider, 11, [
+  const [terrainPosition] = await sampleTerrain(viewer.terrainProvider, 13, [
     Cartographic.fromDegrees(longitude, latitude),
   ])
   const terrainHeight = Number(terrainPosition?.height)
@@ -268,7 +268,7 @@ async function setRelativeHeightMode(checked: boolean) {
 
   terrainHeightLoading.value = true
   try {
-    const terrainHeight = await getLevel11TerrainHeight()
+    const terrainHeight = await getLevel13TerrainHeight()
     const currentHeight = Number(losAnalyseParams.value.viewPointAlt)
     if (!Number.isFinite(currentHeight)) {
       throw new Error('视点高度无效')
@@ -303,7 +303,7 @@ const done = async () => {
   if (useRelativeViewPointHeight.value) {
     terrainHeightLoading.value = true
     try {
-      const terrainHeight = await getLevel11TerrainHeight()
+      const terrainHeight = await getLevel13TerrainHeight()
       viewPointAlt = Number((terrainHeight + viewPointAlt).toFixed(2))
     } catch (error) {
       console.error('解析视点相对高度失败:', error)

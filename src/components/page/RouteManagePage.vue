@@ -64,7 +64,7 @@ let weatherChart: EChartsType | undefined = undefined
 let profileChartResizeObserver: ResizeObserver | null = null
 
 const MAX_ROUTE_PROFILE_SAMPLES = 5000
-const ROUTE_PROFILE_TERRAIN_LEVEL = 11
+const ROUTE_PROFILE_TERRAIN_LEVEL = 13
 
 const routeStore = useRouteStore()
 const sStore = useStaticStore()
@@ -853,7 +853,11 @@ function updateMapRoute(options?: {
 
   // 编辑状态下不要 selectRoute，否则会把 mode 从 editing 打回 selected，
   // 导致地图失去拖拽/右键/高亮，
-  if (!isRouteEditing.value) {
+  const selectedRouteId = String(selectedRoute.value.unicode)
+  const isAlreadySelected =
+    String(routeManage.selectedRouteId ?? '') === selectedRouteId
+
+  if (!isRouteEditing.value && !isAlreadySelected) {
     routeManage.selectRoute?.(selectedRoute.value.unicode)
   }
 

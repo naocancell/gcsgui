@@ -49,7 +49,7 @@ import LayerManager from '@/components/LayerManager.vue'
 import CollisionDetection from './CollisionDetection.vue'
 import AltitudeWarning from './AltitudeWarning.vue'
 import { useLayerStore } from '@/store/layerManagerStore.ts'
-import { Cartesian3, Cartographic } from 'cesium'
+import { Cartesian3, Cartographic,sampleTerrainMostDetailed } from 'cesium'
 import * as Cesium from 'cesium'
 import {
   ByDirectionAndLen,
@@ -1178,7 +1178,7 @@ onMounted(async () => {
       distance: terrainWarningDistance.value,
       steps: 50, //每1000米采样10个点
       intervalMs: 10,
-      terrainLevel: 11,
+      terrainLevel: 13,
       warnClearance: terrainWarningClearance.value,
     }, //传递的参数
   )
@@ -1198,17 +1198,23 @@ onMounted(async () => {
     Cesium.Cartographic.fromDegrees(109.530916, 21.763838),
     Cesium.Cartographic.fromDegrees(109.612228,21.539554),
     Cesium.Cartographic.fromDegrees(109.495786,20.007391),
-    Cesium.Cartographic.fromDegrees(53.424175,20.007391),
+    Cesium.Cartographic.fromDegrees(109.536614,19.739022),
+    Cesium.Cartographic.fromDegrees(109.632882,19.551391),
+    Cesium.Cartographic.fromDegrees(109.998914,19.153206),
+    Cesium.Cartographic.fromDegrees(110.281251,18.78065),
+    Cesium.Cartographic.fromDegrees(53.424175,16.748239),
+    Cesium.Cartographic.fromDegrees(53.424851,16.741347),
+    Cesium.Cartographic.fromDegrees(53.584866,16.73893),
+    Cesium.Cartographic.fromDegrees(53.67826,16.768164),
+    Cesium.Cartographic.fromDegrees(53.770862,16.799745),
   ]
 
   const result = await Cesium.sampleTerrain(
     window.viewer.terrainProvider,
-    11, // 指定地形等级
+    13,
     positions,
   )
-  const height = result[0]?.height
-
-  console.log('盐池机场海拔高度：', height, '米')
+   console.log('海拔高度：', result.map((pos) => pos.height))
 })
 
 onBeforeUnmount(() => {

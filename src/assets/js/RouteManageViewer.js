@@ -759,21 +759,21 @@ flyToRoute(line, duration = 1.5) {
         pixelSize: 7,
         outlineColor: Cesium.Color.RED,
         outlineWidth: 2,
-        disableDepthTestDistance: 1500000,//在一定距离条件下，关闭这个实体的深度测试。
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
       },
       label: {
         text: '航点 ' + (index + 1),
         font: '2.5rem sans-serif',
         fillColor: Cesium.Color.WHITE,
         style: Cesium.LabelStyle.FILL,
-        eyeOffset: new Cartesian3(0, 0, 50),
-        horizontalOrigin: Cesium.HorizontalOrigin.RIGHT,
-        verticalOrigin: Cesium.VerticalOrigin.TOP,
+        pixelOffset: new Cesium.Cartesian2(0, -12),
+        horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
         scale: 0.4,
         showBackground: true,
         backgroundColor: new Cesium.Color(0.165, 0.165, 0.165, 0.99),
         backgroundPadding: new Cesium.Cartesian2(15, 7),
-        disableDepthTestDistance: 1500000,//在一定距离条件下，关闭这个实体的深度测试
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
       },
     })
     //用于判断选中类型、选中的是第几个用于删除

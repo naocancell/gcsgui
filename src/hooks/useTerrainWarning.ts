@@ -90,7 +90,7 @@ export function useTerrainWarning(
     distance = 1000,
     steps = 20,
     intervalMs = 0,
-    terrainLevel = 11,
+    terrainLevel = 13,
     warnClearance = 100,
   } = options
   //设施最大最最小范围

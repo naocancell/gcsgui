@@ -24,7 +24,7 @@
 <script setup lang="ts">
 import PlaneInfo from './PlaneInfo.vue'
 import { onMounted, onUnmounted, ref } from 'vue'
-import { Viewer, Ion, CustomDataSource } from 'cesium'
+import { Viewer, Ion, CustomDataSource,createWorldTerrainAsync } from 'cesium'
 import * as Cesium from 'cesium'
 import { NIcon, NTooltip } from 'naive-ui'
 import { LocateOutline } from '@vicons/ionicons5'
@@ -71,7 +71,7 @@ const flyToInitialLocation = () => {
 
 // 组件加载就监听显示飞机实施的位置
   const {init,clearAll} = useLoadPlane();
-onMounted(() => {
+onMounted(async () => {
   //初始化
   viewer = initViewer(viewerDivRef.value as HTMLElement)
   // 显示帧率
@@ -141,9 +141,11 @@ onMounted(() => {
   window.measureViewer = new MeasureViewer(viewer)
 
   //添加天地图影像
-  viewer.imageryLayers.addImageryProvider(
-    getTDTProvider(TDTLayerType.Img, TDTProjectionType.WebMercator),
-  )
+  // viewer.imageryLayers.addImageryProvider(
+  //   getTDTProvider(TDTLayerType.Img, TDTProjectionType.WebMercator),
+  // )
+  const imageryProvider = await Cesium.createWorldImageryAsync()
+  viewer.imageryLayers.addImageryProvider(imageryProvider)
   //添加天地图影像注记
   viewer.imageryLayers.addImageryProvider(
     getTDTProvider(TDTLayerType.Cia, TDTProjectionType.WebMercator),
@@ -152,7 +154,8 @@ onMounted(() => {
   // 检查设备联网状态，添加三维地形服务
   if (window.navigator.onLine) {
     // 如果断网环境执行该语句，航线绘制、三维伴飞等功能出现异常
-    viewer.terrainProvider = getTDTTerrainProvider()
+    // viewer.terrainProvider = getTDTTerrainProvider()
+    viewer.terrainProvider = await createWorldTerrainAsync()
   }
 
   // 标记点图层，存储所有地标点

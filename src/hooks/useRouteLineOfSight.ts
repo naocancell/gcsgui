@@ -57,9 +57,9 @@ type TerrainTileGroup = {
 
 const MAIN_THREAD_TIME_BUDGET_MS = 8
 const TIME_BUDGET_CHECK_INTERVAL = 32
-const TERRAIN_SAMPLE_BATCH_SIZE = 100
-const TERRAIN_SAMPLE_LEVEL = 11
-const TERRAIN_TILE_CONCURRENCY = 4
+const TERRAIN_SAMPLE_LEVEL = 13
+const TERRAIN_TILE_CONCURRENCY = 10
+const TERRAIN_TILE_LRU_CAPACITY = 512
 const TERRAIN_REQUEST_RETRY_DELAY_MS = 20
 //绘制时候的批次大小
 const DRAW_BATCH_SIZE = 100
@@ -70,6 +70,38 @@ const ROUTE_SAMPLE_DISTANCE_EPSILON = 0.001
 const losResult1Entities: Entity[] = []
 const losResult2Entities: Entity[] = []
 const viewPointEntities: Entity[] = []
+const terrainProviderIds = new WeakMap<object, number>()
+const terrainTileLru = new Map<string, CachedTerrainTile>()
+let nextTerrainProviderId = 1
+
+function getTerrainProviderId(terrainProvider: object) {
+  let providerId = terrainProviderIds.get(terrainProvider)
+  if (providerId !== undefined) return providerId
+
+  providerId = nextTerrainProviderId++
+  terrainProviderIds.set(terrainProvider, providerId)
+  return providerId
+}
+
+function getCachedTerrainTile(key: string) {
+  const tile = terrainTileLru.get(key)
+  if (!tile) return undefined
+
+  terrainTileLru.delete(key)
+  terrainTileLru.set(key, tile)
+  return tile
+}
+
+function cacheTerrainTile(key: string, tile: CachedTerrainTile) {
+  terrainTileLru.delete(key)
+  terrainTileLru.set(key, tile)
+
+  while (terrainTileLru.size > TERRAIN_TILE_LRU_CAPACITY) {
+    const oldestKey = terrainTileLru.keys().next().value as string | undefined
+    if (oldestKey === undefined) break
+    terrainTileLru.delete(oldestKey)
+  }
+}
 
 export type LosResultType = 1 | 2
 
@@ -541,9 +573,10 @@ export function useRouteLineOfSight() {
         position: startCartesian,
         label: {
           text: '视点',
-          pixelOffset: Cartesian2.fromArray([0, -30]),
-          font: 'bold 24px', //设置为16像素
+          pixelOffset: Cartesian2.fromArray([0, 20]),
+          font: 'bold 30px', //设置为16像素
           fillColor: Color.YELLOW, // 设置为红色
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
         point: {
           pixelSize: 16, // 点的大小（像素）
@@ -656,16 +689,19 @@ export function useRouteLineOfSight() {
     }
     //地形瓦片划分规则
     const tilingScheme = terrainProvider.tilingScheme
-    //地形瓦片缓存
-    const terrainTileCache = new Map<
+    const terrainProviderId = getTerrainProviderId(terrainProvider)
+    const terrainTileRequests = new Map<
       string,
       Promise<CachedTerrainTile | null>
     >()
     //根据某瓦片分组加载对应的 Cesium 地形瓦片，并使用缓存避免同一个瓦片被重复请求。
     async function loadTerrainTile(group: TerrainTileGroup) {
-      //检查地形瓦片缓存中是否存已经
-      const cachedTile = terrainTileCache.get(group.key)
+      const cacheKey = `${terrainProviderId}/${group.key}`
+      const cachedTile = getCachedTerrainTile(cacheKey)
       if (cachedTile) return cachedTile
+
+      const pendingRequest = terrainTileRequests.get(cacheKey)
+      if (pendingRequest) return pendingRequest
       //立即执行异步函数 请求对应的地形瓦片并缓存
       const tilePromise = (async (): Promise<CachedTerrainTile | null> => {
         let requestPromise
@@ -689,7 +725,7 @@ export function useRouteLineOfSight() {
         try {
           const terrainData = (await requestPromise) as TerrainDataWithMesh
           throwIfCancelled(signal)
-          return {
+          const tile = {
             terrainData,
             rectangle: tilingScheme.tileXYToRectangle(
               group.x,
@@ -697,12 +733,14 @@ export function useRouteLineOfSight() {
               TERRAIN_SAMPLE_LEVEL,
             ),
           }
+          cacheTerrainTile(cacheKey, tile)
+          return tile
         } catch (error) {
           if (error instanceof LosAnalysisCancelledError) throw error
           return null
         }
       })()
-      terrainTileCache.set(group.key, tilePromise)
+      terrainTileRequests.set(cacheKey, tilePromise)
       return tilePromise
     }
     //从地形瓦片中获取高度  返回结果是否需要创建mesh
@@ -765,9 +803,10 @@ export function useRouteLineOfSight() {
       }
     }
 
-    async function sampleTerrainWithCache(positions: Cartographic[]) {
-      const tileGroups = new Map<string, TerrainTileGroup>()
-
+    function addPositionsToTerrainGroups(
+      positions: Cartographic[],
+      tileGroups: Map<string, TerrainTileGroup>,
+    ) {
       for (const position of positions) {
         const tileXY = tilingScheme.positionToTileXY(
           position,
@@ -791,7 +830,11 @@ export function useRouteLineOfSight() {
         }
         group.positions.push(position)
       }
+    }
 
+    async function sampleTerrainGroups(
+      tileGroups: Map<string, TerrainTileGroup>,
+    ) {
       const groups = Array.from(tileGroups.values())
       let cursor = 0
 
@@ -813,47 +856,8 @@ export function useRouteLineOfSight() {
       start.latitude,
       start.height,
     )
-    let pendingLines: PendingLosLine[] = []
-    let pendingCartographics: Cartographic[] = []
-
-    async function flushPendingBatch() {
-      if (pendingLines.length === 0) return
-
-      const linesToEvaluate = pendingLines
-      const cartographicsToSample = pendingCartographics
-      pendingLines = []
-      pendingCartographics = []
-
-      if (cartographicsToSample.length > 0) {
-        await sampleTerrainWithCache(cartographicsToSample)
-        throwIfCancelled(signal)
-      }
-
-      let sliceStartedAt = performance.now()
-      for (const { index, lineSamples } of linesToEvaluate) {
-        results[index] = await evaluateLineVisibility(lineSamples, signal)
-
-        if (hasExceededTimeBudget(sliceStartedAt)) {
-          sliceStartedAt = await yieldAndCheckCancellation(signal)
-        }
-      }
-    }
-
-    async function sampleOversizedLine(lineSamples: LosLineSamples) {
-      for (
-        let offset = 0;
-        offset < lineSamples.cartographics.length;
-        offset += TERRAIN_SAMPLE_BATCH_SIZE
-      ) {
-        const positions = lineSamples.cartographics.slice(
-          offset,
-          offset + TERRAIN_SAMPLE_BATCH_SIZE,
-        )
-        await sampleTerrainWithCache(positions)
-        throwIfCancelled(signal)
-      }
-    }
-
+    const pendingLines: PendingLosLine[] = []
+    const tileGroups = new Map<string, TerrainTileGroup>()
     let sliceStartedAt = performance.now()
 
     for (let index = 0; index < samples.length; index++) {
@@ -865,32 +869,25 @@ export function useRouteLineOfSight() {
         signal,
       )
 
-      if (lineSamples.cartographics.length > TERRAIN_SAMPLE_BATCH_SIZE) {
-        await flushPendingBatch()
-        await sampleOversizedLine(lineSamples)
-        results[index] = await evaluateLineVisibility(lineSamples, signal)
-      } else {
-        const nextBatchSize =
-          pendingCartographics.length + lineSamples.cartographics.length
-
-        if (
-          pendingLines.length > 0 &&
-          nextBatchSize > TERRAIN_SAMPLE_BATCH_SIZE
-        ) {
-          await flushPendingBatch()
-          sliceStartedAt = performance.now()
-        }
-
-        pendingLines.push({ index, lineSamples })
-        pendingCartographics.push(...lineSamples.cartographics)
-      }
+      pendingLines.push({ index, lineSamples })
+      addPositionsToTerrainGroups(lineSamples.cartographics, tileGroups)
 
       if (hasExceededTimeBudget(sliceStartedAt)) {
         sliceStartedAt = await yieldAndCheckCancellation(signal)
       }
     }
 
-    await flushPendingBatch()
+    await sampleTerrainGroups(tileGroups)
+    throwIfCancelled(signal)
+
+    sliceStartedAt = performance.now()
+    for (const { index, lineSamples } of pendingLines) {
+      results[index] = await evaluateLineVisibility(lineSamples, signal)
+
+      if (hasExceededTimeBudget(sliceStartedAt)) {
+        sliceStartedAt = await yieldAndCheckCancellation(signal)
+      }
+    }
 
     return results
   }

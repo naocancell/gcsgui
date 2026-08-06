@@ -847,6 +847,11 @@ export const drawEcharts_RouteDetection = (
     value: [distance, routeHeight[index]],
     waypoint: routeArr[index],
   }))
+  const profileMaxDistance = Math.max(
+    0,
+    xData[xData.length - 1] ?? 0,
+    routeDistanceArr[routeDistanceArr.length - 1] ?? 0,
+  )
 
   // 绘制图表
   myChart.setOption(
@@ -892,14 +897,9 @@ export const drawEcharts_RouteDetection = (
         formatter: (params: any) => {
           const items = Array.isArray(params) ? params : [params]
           const distance = Number(items[0]?.axisValue ?? 0)
-          const maxDistance = Math.max(
-            0,
-            xData[xData.length - 1] ?? 0,
-            routeDistanceArr[routeDistanceArr.length - 1] ?? 0,
-          )
           const waypointHitTolerance = Math.max(
             1,
-            (maxDistance / Math.max(myChart.getWidth(), 1)) * 2,
+            (profileMaxDistance / Math.max(myChart.getWidth(), 1)) * 2,
           )
           let nearestWaypointIndex = -1
           let nearestWaypointDistance = Number.POSITIVE_INFINITY
@@ -950,6 +950,7 @@ export const drawEcharts_RouteDetection = (
         type: 'value',
         boundaryGap: false,
         min: 0,
+        max: profileMaxDistance > 0 ? profileMaxDistance : undefined,
         name: '距离/m',
         nameTextStyle: {
           fontWeight: 'bolder',
