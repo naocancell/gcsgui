@@ -28,6 +28,8 @@ pub struct ActiveLink {
     pub link_type: String,
     /// 链路名称（作为主键标识）
     pub name: String,
+    /// 链路实例代数，重启同名链路时递增
+    pub generation: u64,
     /// 物理端点参数摘要（用于热重载判断物理配置是否变更）
     pub endpoint_info: String,
     /// 该链路绑定的协议类型
@@ -104,6 +106,9 @@ pub struct AppState {
     /// TX 层：当前已打开的所有物理链路集合 (Key 为 链路名称/ID)
     pub active_links: Arc<DashMap<String, ActiveLink>>,
 
+    /// 为每次物理链路实例分配单调递增的代数
+    pub next_link_generation: Arc<AtomicU64>,
+
     /// 全链路遥测指标埋点统计器
     pub metrics: Arc<LinkMetrics>,
 
@@ -120,9 +125,14 @@ impl AppState {
             uav_seen: Arc::new(DashMap::new()),
             fp981c_seen: Arc::new(DashMap::new()),
             active_links: Arc::new(DashMap::new()),
+            next_link_generation: Arc::new(AtomicU64::new(0)),
             metrics: Arc::new(LinkMetrics::default()),
             rx_health: Arc::new(RwLock::new(Default::default())),
         }
+    }
+
+    pub fn allocate_link_generation(&self) -> u64 {
+        self.next_link_generation.fetch_add(1, Ordering::Relaxed) + 1
     }
 
     pub fn merge_fp95(
@@ -138,10 +148,7 @@ impl AppState {
             frame94_sequence: 0,
         });
         state.aggregate.uav_id = uav_id;
-        if matches!(
-            &parsed,
-            crate::protocol::fp95::ParsedSubFrame::Frame94(_)
-        ) {
+        if matches!(&parsed, crate::protocol::fp95::ParsedSubFrame::Frame94(_)) {
             state.frame94_sequence = state.frame94_sequence.wrapping_add(1);
         }
         state.aggregate.merge(parsed);

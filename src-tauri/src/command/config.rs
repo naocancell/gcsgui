@@ -7,7 +7,8 @@ async fn apply_comms_hot_reload(
     state: &tauri::State<'_, state::AppState>,
     router_tx: &tauri::State<'_, crate::comms::RouterTx>,
     new_config: &CommsConfig,
-) {
+) -> Result<(), String> {
+    let mut failures = Vec::new();
     // 1. 检查现存 UDP 链路：如果不满足新配置要求（配置被删除、被禁用或参数变化），先停止并移除
     let existing_udp_names: Vec<String> = state
         .active_links
@@ -20,7 +21,14 @@ async fn apply_comms_hot_reload(
         let matching_config = new_config.udp.iter().find(|cfg| cfg.name == name);
         let should_remove = match matching_config {
             Some(cfg) if cfg.enabled => {
-                let expected_endpoint = format!("{}:{}:{}", cfg.ip, cfg.port, cfg.interface_ip);
+                let expected_endpoint = format!(
+                    "{:?}:{}:{}:{}:{}",
+                    cfg.mode,
+                    cfg.ip,
+                    cfg.port,
+                    cfg.effective_target_port(),
+                    cfg.interface_ip
+                );
                 if let Some(link) = state.active_links.get(&name) {
                     link.endpoint_info != expected_endpoint || link.protocol != cfg.protocol
                 } else {
@@ -48,13 +56,18 @@ async fn apply_comms_hot_reload(
                 udp.name.clone(),
                 udp.ip.clone(),
                 udp.port,
+                udp.effective_target_port(),
                 udp.interface_ip.clone(),
+                udp.mode,
                 udp.protocol,
             )
             .await
             {
                 Ok(msg) => log::info!("[热重载] 启动 UDP 成功: {}", msg),
-                Err(e) => log::error!("[热重载] 启动 UDP [{}] 失败: {}", udp.name, e),
+                Err(e) => {
+                    log::error!("[热重载] 启动 UDP [{}] 失败: {}", udp.name, e);
+                    failures.push(format!("UDP [{}]: {}", udp.name, e));
+                }
             }
         }
     }
@@ -104,9 +117,21 @@ async fn apply_comms_hot_reload(
             .await
             {
                 Ok(msg) => log::info!("[热重载] 启动串口成功: {}", msg),
-                Err(e) => log::error!("[热重载] 启动串口 [{}] 失败: {}", serial.name, e),
+                Err(e) => {
+                    log::error!("[热重载] 启动串口 [{}] 失败: {}", serial.name, e);
+                    failures.push(format!("串口 [{}]: {}", serial.name, e));
+                }
             }
         }
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "配置已保存，但以下链路启动失败: {}",
+            failures.join("; ")
+        ))
     }
 }
 
@@ -120,9 +145,10 @@ pub async fn save_comms_config(
     app: tauri::AppHandle,
     state: tauri::State<'_, state::AppState>,
     router_tx: tauri::State<'_, crate::comms::RouterTx>,
-    config: CommsConfig,
+    mut config: CommsConfig,
 ) -> Result<String, String> {
+    config.normalize();
     config.save(&app)?;
-    apply_comms_hot_reload(&app, &state, &router_tx, &config).await;
+    apply_comms_hot_reload(&app, &state, &router_tx, &config).await?;
     Ok("配置保存并成功应用热重载！".to_string())
 }

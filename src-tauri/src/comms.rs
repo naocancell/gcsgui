@@ -20,6 +20,8 @@ pub enum ProtocolType {
 pub struct RawData {
     /// 来源链路名称，路由层据此查找绑定的协议类型
     pub source_link: String,
+    /// 链路实例代数，链路重启后递增，用于丢弃旧队列数据
+    pub link_generation: u64,
     /// 原始字节
     pub data: Vec<u8>,
     /// 到达时间戳

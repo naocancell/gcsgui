@@ -53,49 +53,64 @@
             <span>通信链路详情</span>
             <span class="section-sub">COMMUNICATION LINKS</span>
           </div>
-          <div v-if="uavStore.rxHealth.links.length === 0" style="color: var(--text-tertiary); font-size: 12px; padding: 10px;">
-            暂无链路数据
+          <div v-if="configuredLinkHealth.length === 0" class="links-empty-state">
+            暂无配置链路
           </div>
           <div class="links-layout" v-else>
-            <div class="link-card" v-for="(link, idx) in uavStore.rxHealth.links" :key="idx">
+            <div class="link-card" v-for="item in configuredLinkHealth" :key="item.config.id">
               <div class="column-heading" style="border-bottom: 1px solid var(--border-light); padding-bottom: 8px; margin-bottom: 8px;">
                 <div>
-                  <h3>{{ link.linkName }}</h3>
-                  <p>协议: {{ link.protocol }} | UAV ID: {{ link.uavId }}</p>
+                  <h3>{{ item.config.name }}</h3>
+                  <p>{{ formatLinkEndpoint(item.config) }}</p>
+                  <p>协议: {{ item.config.protocol }}</p>
                 </div>
-                <div class="status" :class="{
-                  'online': link.state === 'healthy',
-                  'recovering': link.state === 'suspect' || link.state === 'recovering',
-                  'offline': link.state === 'down'
-                }">
+                <div class="status" :class="statusClass(item.state)">
                   <span class="status-dot"></span>
-                  <span>{{ link.state.toUpperCase() }}</span>
+                  <span>{{ statusLabel(item.state) }}</span>
                 </div>
               </div>
-              
-              <div class="link-metrics">
-                <div class="metric-item">
-                  <span class="metric-label">时效 (Fresh/Valid)</span>
-                  <span class="metric-value" v-if="link.state === 'down'">-</span>
-                  <span class="metric-value" v-else>{{ link.freshAgeMs }} / {{ link.validAgeMs }} ms</span>
-                </div>
-                <div class="metric-item">
-                  <span class="metric-label">延迟 (Relative/EWMA)</span>
-                  <span class="metric-value">{{ formatMs(link.relativeDelayMs) }} / {{ formatMs(link.delayEwmaMs) }} ms</span>
-                </div>
-                <div class="metric-item">
-                  <span class="metric-label">抖动 (Jitter)</span>
-                  <span class="metric-value">{{ formatMs(link.jitterEwmaMs) }} ms</span>
-                </div>
-                <div class="metric-item">
-                  <span class="metric-label">已接收帧数</span>
-                  <span class="metric-value">{{ link.deliveredFrames }} (First Wins: {{ link.firstArrivalWins }})</span>
-                </div>
-                <div class="metric-item">
-                  <span class="metric-label">丢包/重复/过期/冲突</span>
-                  <span class="metric-value" style="color: var(--accent-warning);">
-                    {{ link.missedFrames }} / {{ link.duplicateFrames }} / {{ link.staleFrames }} / {{ link.conflictFrames }}
-                  </span>
+
+              <div v-if="item.snapshots.length === 0" class="link-no-data">
+                {{ item.config.enabled ? '已启用，等待首帧数据' : '链路已禁用' }}
+              </div>
+              <div v-else class="link-aircraft-list">
+                <div
+                  v-for="snapshot in item.snapshots"
+                  :key="`${snapshot.protocol}-${snapshot.uavId}`"
+                  class="link-aircraft"
+                >
+                  <div class="link-aircraft-header">
+                    <span>UAV {{ snapshot.uavId }} ({{ snapshot.protocol }})</span>
+                    <div class="status" :class="statusClass(snapshot.state)">
+                      <span class="status-dot"></span>
+                      <span>{{ statusLabel(snapshot.state) }}</span>
+                    </div>
+                  </div>
+                  <div class="link-metrics">
+                    <div class="metric-item">
+                      <span class="metric-label">时效 (Fresh/Valid)</span>
+                      <span class="metric-value" v-if="snapshot.state === 'down'">-</span>
+                      <span class="metric-value" v-else>{{ snapshot.freshAgeMs }} / {{ snapshot.validAgeMs }} ms</span>
+                    </div>
+                    <div class="metric-item">
+                      <span class="metric-label">延迟 (Relative/EWMA)</span>
+                      <span class="metric-value">{{ formatMs(snapshot.relativeDelayMs) }} / {{ formatMs(snapshot.delayEwmaMs) }} ms</span>
+                    </div>
+                    <div class="metric-item">
+                      <span class="metric-label">抖动 (Jitter)</span>
+                      <span class="metric-value">{{ formatMs(snapshot.jitterEwmaMs) }} ms</span>
+                    </div>
+                    <div class="metric-item">
+                      <span class="metric-label">已接收帧数</span>
+                      <span class="metric-value">{{ snapshot.deliveredFrames }} (First Wins: {{ snapshot.firstArrivalWins }})</span>
+                    </div>
+                    <div class="metric-item">
+                      <span class="metric-label">丢包/重复/过期/冲突</span>
+                      <span class="metric-value" style="color: var(--accent-warning);">
+                        {{ snapshot.missedFrames }} / {{ snapshot.duplicateFrames }} / {{ snapshot.staleFrames }} / {{ snapshot.conflictFrames }}
+                      </span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -110,6 +125,11 @@
 import { ref, computed, onBeforeUnmount } from 'vue'
 import { darkTheme } from 'naive-ui'
 import { useUavStore } from '@/store/uavStore'
+import {
+    mergeConfiguredLinkHealth,
+    type LinkHealthDisplayState,
+} from '@/store/linkHealth'
+import type { LinkDraft } from '@/store/commsConfig'
 
 const props = defineProps({
     standalone: {
@@ -121,7 +141,33 @@ const props = defineProps({
 const emit = defineEmits(['minimize', 'close'])
 const uavStore = useUavStore()
 
+const configuredLinkHealth = computed(() =>
+    mergeConfiguredLinkHealth(uavStore.links, uavStore.rxHealth.links),
+)
+
 const formatMs = (val: number | null | undefined) => val != null ? val.toFixed(1) : '-'
+
+function formatLinkEndpoint(link: LinkDraft) {
+    if (link.kind === 'serial') {
+        return `串口 ${link.portName || '-'} · ${link.baudRate} baud`
+    }
+    const mode = link.kind === 'udp-unicast' ? 'UDP 点播' : 'UDP 组播'
+    const interfaceIp = link.interfaceIp ? ` · 网卡 ${link.interfaceIp}` : ''
+    return `${mode} · 监听 ${link.localPort || '-'} · 目标 ${link.ip || '-'}:${link.targetPort || '-'}${interfaceIp}`
+}
+
+function statusClass(state: LinkHealthDisplayState) {
+    return {
+        online: state === 'healthy',
+        recovering: state === 'suspect' || state === 'recovering',
+        offline: state === 'down',
+        disabled: state === 'disabled',
+    }
+}
+
+function statusLabel(state: LinkHealthDisplayState) {
+    return state === 'disabled' ? 'DISABLED' : state.toUpperCase()
+}
 
 const naiveThemeOverrides = {
     common: {
@@ -317,6 +363,9 @@ onBeforeUnmount(() => {
 .offline { color: var(--accent-red); background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.2); }
 .offline .status-dot { background: var(--accent-red); }
 
+.disabled { color: var(--text-tertiary); background: rgb(255 255 255 / 3%); }
+.disabled .status-dot { background: var(--text-tertiary); }
+
 .transponder-section {
     margin-top: 16px;
     padding: 16px;
@@ -399,6 +448,12 @@ onBeforeUnmount(() => {
     gap: 16px;
 }
 
+.links-empty-state {
+    color: var(--text-tertiary);
+    font-size: 12px;
+    padding: 10px 0;
+}
+
 .link-card {
     background: var(--surface-primary);
     border: 1px solid var(--border-light);
@@ -428,6 +483,35 @@ onBeforeUnmount(() => {
     color: var(--text-tertiary);
     font-size: 10px;
     line-height: 1.35;
+}
+
+.link-no-data {
+    margin-top: 8px;
+    padding: 12px 10px;
+    color: var(--text-tertiary);
+    background: var(--surface-under);
+    border-radius: 6px;
+    font-size: 11px;
+}
+
+.link-aircraft-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.link-aircraft {
+    padding-top: 8px;
+    border-top: 1px solid var(--border-light);
+}
+
+.link-aircraft-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--text-secondary);
+    font-size: 11px;
 }
 
 .link-metrics {

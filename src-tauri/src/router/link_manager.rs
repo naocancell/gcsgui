@@ -13,7 +13,31 @@ use std::time::{Duration, Instant};
 
 struct RouterCore {
     arbiter: RxArbiter,
-    link_buffers: HashMap<String, BytesMut>,
+    link_buffers: HashMap<String, LinkBuffer>,
+    link_generations: HashMap<String, u64>,
+}
+struct LinkBuffer {
+    generation: u64,
+    protocol: ProtocolType,
+    data: BytesMut,
+}
+
+impl LinkBuffer {
+    fn new(generation: u64, protocol: ProtocolType) -> Self {
+        Self {
+            generation,
+            protocol,
+            data: BytesMut::new(),
+        }
+    }
+
+    fn reset_if_source_changed(&mut self, generation: u64, protocol: ProtocolType) {
+        if self.generation != generation || self.protocol != protocol {
+            self.generation = generation;
+            self.protocol = protocol;
+            self.data.clear();
+        }
+    }
 }
 
 impl RouterCore {
@@ -21,7 +45,30 @@ impl RouterCore {
         Self {
             arbiter: RxArbiter::new(config),
             link_buffers: HashMap::new(),
+            link_generations: HashMap::new(),
         }
+    }
+
+    fn sync_link_generations(&mut self, active_link_generations: &HashMap<String, u64>) {
+        let reset_links: Vec<String> = self
+            .link_generations
+            .iter()
+            .filter_map(|(name, generation)| {
+                (active_link_generations.get(name) != Some(generation)).then(|| name.clone())
+            })
+            .collect();
+
+        for name in reset_links {
+            self.link_generations.remove(&name);
+            self.link_buffers.remove(&name);
+            self.arbiter.reset_link(&name);
+        }
+
+        self.link_generations.extend(
+            active_link_generations
+                .iter()
+                .map(|(name, generation)| (name.clone(), *generation)),
+        );
     }
 
     fn process_raw(
@@ -35,12 +82,13 @@ impl RouterCore {
         let buffer = self
             .link_buffers
             .entry(raw.source_link.clone())
-            .or_default();
-        buffer.extend_from_slice(&raw.data);
+            .or_insert_with(|| LinkBuffer::new(raw.link_generation, protocol));
+        buffer.reset_if_source_changed(raw.link_generation, protocol);
+        buffer.data.extend_from_slice(&raw.data);
 
         match protocol {
             ProtocolType::FP981C => extract_and_process_fp981c(
-                buffer,
+                &mut buffer.data,
                 &raw.source_link,
                 raw.received_at,
                 active_protocol_links,
@@ -48,10 +96,10 @@ impl RouterCore {
                 app_state,
             ),
             ProtocolType::UAVInfo => {
-                extract_and_process_uav_info(buffer, raw.received_at, app_state)
+                extract_and_process_uav_info(&mut buffer.data, raw.received_at, app_state)
             }
             ProtocolType::FP95 => extract_and_process_fp95(
-                buffer,
+                &mut buffer.data,
                 &raw.source_link,
                 raw.received_at,
                 active_protocol_links,
@@ -61,9 +109,9 @@ impl RouterCore {
             ),
         }
 
-        if buffer.len() > 4096 {
+        if buffer.data.len() > 4096 {
             log::warn!("链路 {} 缓冲区溢出，执行清空", raw.source_link);
-            buffer.clear();
+            buffer.data.clear();
             app_state.metrics.inc_overflow();
         }
     }
@@ -100,10 +148,14 @@ pub async fn start_router(
         tokio::select! {
             raw = rx.recv() => {
                 let Some(raw) = raw else { break };
+                router.sync_link_generations(&active_link_generations(&app_state));
                 let protocol = {
                     let Some(link) = app_state.active_links.get(&raw.source_link) else {
                         continue;
                     };
+                    if raw.link_generation != link.generation {
+                        continue;
+                    }
                     let mut lock = link
                         .last_raw_rx
                         .lock()
@@ -115,6 +167,7 @@ pub async fn start_router(
                 router.process_raw(raw, protocol, active, &app_state, &response_coordinator);
             }
             _ = maintenance.tick() => {
+                router.sync_link_generations(&active_link_generations(&app_state));
                 let active = active_links_by_protocol(&app_state);
                 app_state.replace_rx_health(router.maintenance(Instant::now(), &active));
             }
@@ -140,6 +193,14 @@ fn active_links_by_protocol(app_state: &AppState) -> HashMap<ProtocolType, HashS
             .insert(link.key().clone());
     }
     result
+}
+
+fn active_link_generations(app_state: &AppState) -> HashMap<String, u64> {
+    app_state
+        .active_links
+        .iter()
+        .map(|link| (link.key().clone(), link.generation))
+        .collect()
 }
 
 // ==================== FP981C 切帧 + 解析 ====================
@@ -389,3 +450,4 @@ fn accept_decision(decision: RxDecision, app_state: &AppState) -> bool {
         }
     }
 }
+

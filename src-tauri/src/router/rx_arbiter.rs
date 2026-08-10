@@ -258,6 +258,13 @@ impl RxArbiter {
         self.all_links_missing.get(&stream).copied().unwrap_or(0)
     }
 
+    pub fn reset_link(&mut self, source_link: &str) {
+        self.links.retain(|key, _| key.source_link != source_link);
+        for record in self.arrivals.values_mut() {
+            record.expected_links.remove(source_link);
+        }
+    }
+
     fn close_expired_observations(&mut self, now: Instant) {
         let expired: Vec<_> = self
             .arrivals
@@ -473,3 +480,5 @@ fn ewma(previous: Option<f64>, sample: f64) -> f64 {
     const ALPHA: f64 = 0.2;
     previous.map_or(sample, |value| ALPHA * sample + (1.0 - ALPHA) * value)
 }
+
+
