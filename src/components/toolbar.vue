@@ -92,6 +92,7 @@ import {
 } from '@/utils/linkHealthWindow'
 import LosAnalyseOptions from './LosAnalyseOptions.vue'
 import type { RouteLosAnalyseParams } from '@/types/routeLineOfSight'
+import type { LinkDraft, LinkKind } from '@/store/commsConfig'
 
 declare global {
   interface Window {
@@ -717,76 +718,28 @@ const serialProtocolOptions = [
   { label: 'FP95', value: 'FP95' },
 ]
 
-async function startMainSerialService() {
-  try {
-    await uavStore.startMainSerialService()
-    message.success('主链路串口接收服务已启动')
-  } catch (err) {
-    message.error('启动主链路串口接收服务失败: ' + err)
-  }
+const linkKindOptions = [
+  { label: 'UDP 点播', value: 'udp-unicast' as LinkKind },
+  { label: 'UDP 组播', value: 'udp-multicast' as LinkKind },
+  { label: '串口', value: 'serial' as LinkKind },
+]
+
+const udpProtocolOptions = [
+  { label: 'FP981C', value: 'FP981C' },
+  { label: 'FP95', value: 'FP95' },
+  { label: 'UAVInfo', value: 'UAVInfo' },
+]
+
+function addCommunicationLink() {
+  uavStore.addLink('udp-multicast')
 }
 
-async function stopMainSerialService() {
-  try {
-    await uavStore.stopMainSerialService()
-    message.success('主链路串口接收服务已停止')
-  } catch (err) {
-    message.error('停止主链路串口接收服务失败: ' + err)
-  }
+function updateCommunicationLinkKind(link: LinkDraft, kind: LinkKind) {
+  uavStore.updateLinkKind(link, kind)
 }
 
-async function startSubSerialService() {
-  try {
-    await uavStore.startSubSerialService()
-    message.success('副链路串口接收服务已启动')
-  } catch (err) {
-    message.error('启动副链路串口接收服务失败: ' + err)
-  }
-}
-
-async function stopSubSerialService() {
-  try {
-    await uavStore.stopSubSerialService()
-    message.success('副链路串口接收服务已停止')
-  } catch (err) {
-    message.error('停止副链路串口接收服务失败: ' + err)
-  }
-}
-
-async function startUavInfoService() {
-  try {
-    await uavStore.startUavService()
-    message.success('UAVInfo 组播接收服务已启动')
-  } catch (err) {
-    message.error('启动 UAVInfo 接收服务失败: ' + err)
-  }
-}
-
-async function stopUavInfoService() {
-  try {
-    await uavStore.stopUavService()
-    message.success('UAVInfo 组播接收服务已停止')
-  } catch (err) {
-    message.error('停止 UAVInfo 接收服务失败: ' + err)
-  }
-}
-
-async function startFp95Service() {
-  try {
-    await uavStore.startFp95Service()
-    message.success('FP95 (ADSB) 组播接收服务已启动')
-  } catch (err) {
-    message.error('启动 FP95 接收服务失败: ' + err)
-  }
-}
-
-async function stopFp95Service() {
-  try {
-    await uavStore.stopFp95Service()
-    message.success('FP95 (ADSB) 组播接收服务已停止')
-  } catch (err) {
-    message.error('停止 FP95 接收服务失败: ' + err)
-  }
+function removeCommunicationLink(link: LinkDraft) {
+  uavStore.removeLink(link.id)
 }
 
 watch(
@@ -1743,202 +1696,113 @@ async function showLinkHealthInfo() {
     <template #header>
       <div style="font-weight: bold; font-size: 16px">多通道通信配置</div>
     </template>
-    <div style="margin: 1rem 1rem 0.5rem 1rem">
-      <n-tabs type="segment" animated>
-        <!-- 通道一：UAVInfo -->
-        <n-tab-pane name="uavinfo" tab="UAVInfo 遥测接收">
-          <n-form
-            :model="uavStore"
-            label-placement="left"
-            label-width="auto"
-            style="margin-top: 1.2rem"
+    <div
+      style="margin: 1rem 1rem 0.5rem 1rem; max-height: 70vh; overflow-y: auto"
+    >
+      <n-space justify="end" style="margin-bottom: 0.8rem">
+        <n-button @click="addCommunicationLink" type="primary" size="small">
+          新增链路
+        </n-button>
+      </n-space>
+
+      <div v-if="uavStore.links.length === 0" class="comms-empty-state">
+        暂无链路，请点击“新增链路”。
+      </div>
+
+      <div
+        v-for="link in uavStore.links"
+        :key="link.id"
+        class="comms-link-card"
+      >
+        <div class="comms-link-card__header">
+          <n-input v-model:value="link.name" placeholder="链路名称" />
+          <n-select
+            :value="link.kind"
+            :options="linkKindOptions"
+            style="width: 140px"
+            @update:value="updateCommunicationLinkKind(link, $event)"
+          />
+          <n-button
+            quaternary
+            type="error"
+            size="small"
+            @click="removeCommunicationLink(link)"
           >
-            <n-form-item label="组播地址">
-              <n-input v-model:value="uavStore.udpIp" placeholder="226.0.1.9" />
+            删除
+          </n-button>
+        </div>
+
+        <n-form
+          :model="link"
+          label-placement="left"
+          label-width="auto"
+          size="small"
+        >
+          <n-form-item label="协议类型">
+            <n-select
+              v-model:value="link.protocol"
+              :options="link.kind === 'serial' ? serialProtocolOptions : udpProtocolOptions"
+              placeholder="请选择协议"
+            />
+          </n-form-item>
+
+          <template v-if="link.kind !== 'serial'">
+            <n-form-item label="目标地址">
+              <n-input v-model:value="link.ip" placeholder="组播地址或远端 IPv4" />
             </n-form-item>
-            <n-form-item label="本地接收端口">
+            <n-form-item label="本地监听端口">
               <n-input-number
-                v-model:value="uavStore.udpPort"
+                v-model:value="link.localPort"
+                :min="1"
+                :max="65535"
                 :show-button="false"
-                placeholder="8999"
               />
             </n-form-item>
             <n-form-item label="目标发送端口">
               <n-input-number
-                v-model:value="uavStore.udpTargetPort"
+                v-model:value="link.targetPort"
+                :min="1"
+                :max="65535"
                 :show-button="false"
-                placeholder="9001"
               />
             </n-form-item>
             <n-form-item label="网卡绑定">
               <n-select
-                v-model:value="uavStore.udpInterface"
+                v-model:value="link.interfaceIp"
                 :options="interfaceOptions"
                 placeholder="请选择网卡"
               />
             </n-form-item>
-            <n-form-item label="运行状态">
-              <n-tag :type="uavStore.isServiceRunning ? 'success' : 'error'">
-                {{ uavStore.isServiceRunning ? '监听中' : '已停止' }}
-              </n-tag>
-            </n-form-item>
-          </n-form>
-          <n-space justify="center" style="margin-top: 1rem">
-            <n-button @click="startUavInfoService" type="primary" size="small">
-              开启通信
-            </n-button>
-            <n-button @click="stopUavInfoService" type="warning" size="small">
-              关闭通信
-            </n-button>
-          </n-space>
-        </n-tab-pane>
+          </template>
 
-        <!-- 通道二：FP95 (ADSB) -->
-        <n-tab-pane name="fp95" tab="FP95 (ADSB) 接收">
-          <n-form
-            :model="uavStore"
-            label-placement="left"
-            label-width="auto"
-            style="margin-top: 1.2rem"
-          >
-            <n-form-item label="组播地址">
-              <n-input
-                v-model:value="uavStore.fp95Ip"
-                placeholder="226.0.1.9"
-              />
-            </n-form-item>
-            <n-form-item label="本地接收端口">
-              <n-input-number
-                v-model:value="uavStore.fp95Port"
-                :show-button="false"
-                placeholder="8999"
-              />
-            </n-form-item>
-            <n-form-item label="网卡绑定">
-              <n-select
-                v-model:value="uavStore.fp95Interface"
-                :options="interfaceOptions"
-                placeholder="请选择网卡"
-              />
-            </n-form-item>
-            <n-form-item label="运行状态">
-              <n-tag :type="uavStore.isFp95Running ? 'success' : 'error'">
-                {{ uavStore.isFp95Running ? '监听中' : '已停止' }}
-              </n-tag>
-            </n-form-item>
-          </n-form>
-          <n-space justify="center" style="margin-top: 1rem">
-            <n-button @click="startFp95Service" type="primary" size="small">
-              开启通信
-            </n-button>
-            <n-button @click="stopFp95Service" type="warning" size="small">
-              关闭通信
-            </n-button>
-          </n-space>
-        </n-tab-pane>
-
-        <!-- 通道三：主链路 (串口) -->
-        <n-tab-pane name="main_serial" tab="主链路 (串口)">
-          <n-form
-            :model="uavStore"
-            label-placement="left"
-            label-width="auto"
-            style="margin-top: 1.2rem"
-          >
+          <template v-else>
             <n-form-item label="串口号">
               <n-select
-                v-model:value="uavStore.mainSerialPort"
+                v-model:value="link.portName"
                 :options="portOptions"
                 placeholder="请选择串口号"
               />
             </n-form-item>
             <n-form-item label="波特率">
               <n-select
-                v-model:value="uavStore.mainSerialBaud"
+                v-model:value="link.baudRate"
                 :options="baudRateOptions"
                 placeholder="请选择波特率"
               />
             </n-form-item>
-            <n-form-item label="协议类型">
-              <n-select
-                v-model:value="uavStore.mainSerialProtocol"
-                :options="serialProtocolOptions"
-                placeholder="请选择协议"
-              />
-            </n-form-item>
-            <n-form-item label="运行状态">
-              <n-tag :type="uavStore.isMainSerialRunning ? 'success' : 'error'">
-                {{ uavStore.isMainSerialRunning ? '监听中' : '已停止' }}
-              </n-tag>
-            </n-form-item>
-          </n-form>
-          <n-space justify="center" style="margin-top: 1rem">
-            <n-button
-              @click="startMainSerialService"
-              type="primary"
-              size="small"
-            >
-              开启通信
-            </n-button>
-            <n-button
-              @click="stopMainSerialService"
-              type="warning"
-              size="small"
-            >
-              关闭通信
-            </n-button>
-          </n-space>
-        </n-tab-pane>
+          </template>
 
-        <!-- 通道四：副链路 (串口) -->
-        <n-tab-pane name="sub_serial" tab="副链路 (串口)">
-          <n-form
-            :model="uavStore"
-            label-placement="left"
-            label-width="auto"
-            style="margin-top: 1.2rem"
-          >
-            <n-form-item label="串口号">
-              <n-select
-                v-model:value="uavStore.subSerialPort"
-                :options="portOptions"
-                placeholder="请选择串口号"
-              />
-            </n-form-item>
-            <n-form-item label="波特率">
-              <n-select
-                v-model:value="uavStore.subSerialBaud"
-                :options="baudRateOptions"
-                placeholder="请选择波特率"
-              />
-            </n-form-item>
-            <n-form-item label="协议类型">
-              <n-select
-                v-model:value="uavStore.subSerialProtocol"
-                :options="serialProtocolOptions"
-                placeholder="请选择协议"
-              />
-            </n-form-item>
-            <n-form-item label="运行状态">
-              <n-tag :type="uavStore.isSubSerialRunning ? 'success' : 'error'">
-                {{ uavStore.isSubSerialRunning ? '监听中' : '已停止' }}
-              </n-tag>
-            </n-form-item>
-          </n-form>
-          <n-space justify="center" style="margin-top: 1rem">
-            <n-button
-              @click="startSubSerialService"
-              type="primary"
-              size="small"
+          <n-form-item label="启用链路">
+            <n-switch v-model:value="link.enabled" />
+            <n-tag
+              :type="link.enabled ? 'success' : 'default'"
+              style="margin-left: 0.6rem"
             >
-              开启通信
-            </n-button>
-            <n-button @click="stopSubSerialService" type="warning" size="small">
-              关闭通信
-            </n-button>
-          </n-space>
-        </n-tab-pane>
-      </n-tabs>
+              {{ link.enabled ? '已启用' : '已停用' }}
+            </n-tag>
+          </n-form-item>
+        </n-form>
+      </div>
       <n-divider style="margin: 1rem 0 0.8rem 0" />
       <n-space justify="center" style="margin-bottom: 0.8rem">
         <n-button @click="handleSaveConfig" type="success" size="small">
@@ -2099,6 +1963,32 @@ async function showLinkHealthInfo() {
 </template>
 
 <style>
+.comms-empty-state {
+  padding: 1.5rem;
+  color: #999;
+  text-align: center;
+  border: 1px dashed #555;
+  border-radius: 6px;
+}
+
+.comms-link-card {
+  padding: 0.8rem;
+  margin-bottom: 0.8rem;
+  border: 1px solid #3d3d3d;
+  border-radius: 6px;
+}
+
+.comms-link-card__header {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  margin-bottom: 0.8rem;
+}
+
+.comms-link-card__header .n-input {
+  flex: 1;
+}
+
 .panel-toolbar989834y34 {
   position: absolute;
   top: 10px;

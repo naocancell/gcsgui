@@ -10,16 +10,17 @@ pub use health::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// One protocol-specific aircraft sequence stream shared by all subframes.
 pub struct StreamKey {
     pub protocol: ProtocolType,
     pub uav_id: u8,
-    pub frame_id: u8,
 }
 
 #[derive(Debug, Clone)]
 pub struct FrameObservation {
     pub source_link: String,
     pub stream: StreamKey,
+    pub frame_id: u8,
     pub raw_sequence: u8,
     pub frame: [u8; 32],
     pub received_at: Instant,
@@ -257,6 +258,13 @@ impl RxArbiter {
         self.all_links_missing.get(&stream).copied().unwrap_or(0)
     }
 
+    pub fn reset_link(&mut self, source_link: &str) {
+        self.links.retain(|key, _| key.source_link != source_link);
+        for record in self.arrivals.values_mut() {
+            record.expected_links.remove(source_link);
+        }
+    }
+
     fn close_expired_observations(&mut self, now: Instant) {
         let expired: Vec<_> = self
             .arrivals
@@ -472,3 +480,5 @@ fn ewma(previous: Option<f64>, sample: f64) -> f64 {
     const ALPHA: f64 = 0.2;
     previous.map_or(sample, |value| ALPHA * sample + (1.0 - ALPHA) * value)
 }
+
+

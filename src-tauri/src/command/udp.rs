@@ -1,16 +1,33 @@
+use crate::config::comms::UdpMode;
 use crate::parse_protocol;
 use crate::state;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::mpsc;
 
+fn resolve_udp_target(ip: &str, mode: UdpMode) -> Result<Option<std::net::Ipv4Addr>, String> {
+    let target_ip: std::net::Ipv4Addr = ip
+        .parse()
+        .map_err(|e| format!("UDP 目标 IPv4 地址解析失败: {}", e))?;
+
+    if mode == UdpMode::Multicast && !target_ip.is_multicast() {
+        return Err(format!("UDP 组播地址必须位于组播地址范围: {}", ip));
+    }
+    if mode == UdpMode::Unicast && target_ip.is_multicast() {
+        return Err(format!("UDP 点播地址不能使用组播地址: {}", ip));
+    }
+
+    Ok((mode == UdpMode::Multicast).then_some(target_ip))
+}
 pub async fn start_udp_internal(
     state: &state::AppState,
     router_tx: &crate::comms::RouterTx,
     name: String,
     ip: String,
     port: u16,
+    target_port: u16,
     interface_ip: String,
+    mode: UdpMode,
     protocol_type: crate::comms::ProtocolType,
 ) -> Result<String, String> {
     let link_name = name.clone();
@@ -19,10 +36,14 @@ pub async fn start_udp_internal(
         return Err(format!("该 UDP 链路 [{}] 已存在", link_name));
     }
 
+    let generation = state.allocate_link_generation();
+    let target_port = if target_port == 0 { port } else { target_port };
+    let multicast_ip = resolve_udp_target(&ip, mode)?;
+
     let bind_addr = format!("0.0.0.0:{}", port)
         .parse()
         .map_err(|e: std::net::AddrParseError| format!("本地绑定地址解析失败: {}", e))?;
-    let target_addr = format!("{}:{}", ip, port)
+    let target_addr = format!("{}:{}", ip, target_port)
         .parse()
         .map_err(|e: std::net::AddrParseError| format!("目标地址解析失败: {}", e))?;
 
@@ -30,7 +51,7 @@ pub async fn start_udp_internal(
         name: link_name.clone(),
         bind_addr,
         target_addr,
-        multicast_ip: ip.parse().ok(),
+        multicast_ip,
         interface_ip: interface_ip.parse().ok(),
         buffer_size: 65535,
     };
@@ -41,11 +62,15 @@ pub async fn start_udp_internal(
         .await
         .map_err(|e| format!("启动 UDP 内核失败: {}", e))?;
 
-    let endpoint_info = format!("{}:{}:{}", ip, port, interface_ip);
+    let endpoint_info = format!(
+        "{:?}:{}:{}:{}:{}",
+        mode, ip, port, target_port, interface_ip
+    );
 
     let active_link = state::ActiveLink {
         link_type: "UDP".to_string(),
         name: link_name.clone(),
+        generation,
         endpoint_info,
         protocol: protocol_type,
         transport,
@@ -68,6 +93,7 @@ pub async fn start_udp_internal(
                     let _ = router_tx_clone
                         .send(crate::comms::RawData {
                             source_link: ln_clone.clone(),
+                            link_generation: generation,
                             data: payload,
                             received_at,
                         })
@@ -91,7 +117,9 @@ pub async fn start_udp_listener(
     name: String,
     ip: String,
     port: u16,
+    target_port: Option<u16>,
     interface_ip: String,
+    mode: Option<UdpMode>,
     protocol: String,
 ) -> Result<String, String> {
     let protocol_type = parse_protocol(&protocol)?;
@@ -101,7 +129,9 @@ pub async fn start_udp_listener(
         name,
         ip,
         port,
+        target_port.unwrap_or(port),
         interface_ip,
+        mode.unwrap_or_default(),
         protocol_type,
     )
     .await

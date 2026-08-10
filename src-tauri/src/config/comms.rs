@@ -10,16 +10,37 @@ pub struct CommsConfig {
     pub udp: Vec<UdpConfig>,
     pub serial: Vec<SerialConfig>,
 }
+#[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum UdpMode {
+    Unicast,
+    #[default]
+    Multicast,
+}
 
 #[derive(Default, Serialize, Deserialize, Clone, Debug)]
 pub struct UdpConfig {
     pub name: String,
+    #[serde(default)]
+    pub mode: UdpMode,
     pub ip: String,
     pub port: u16,
+    #[serde(default)]
+    pub target_port: u16,
     pub interface_ip: String,
     pub protocol: ProtocolType,
     pub enabled: bool,
     pub auto_connect: bool,
+}
+
+impl UdpConfig {
+    pub fn effective_target_port(&self) -> u16 {
+        if self.target_port == 0 {
+            self.port
+        } else {
+            self.target_port
+        }
+    }
 }
 
 #[derive(Default, Serialize, Deserialize, Clone, Debug)]
@@ -58,6 +79,14 @@ fn default_parity() -> ParityConfig {
 }
 
 impl CommsConfig {
+    pub fn normalize(&mut self) {
+        for udp in &mut self.udp {
+            if udp.target_port == 0 {
+                udp.target_port = udp.port;
+            }
+        }
+    }
+
     pub fn file_path(app: &AppHandle) -> Result<PathBuf, String> {
         let mut path = app
             .path()
@@ -82,10 +111,16 @@ impl CommsConfig {
         }
 
         match fs::read_to_string(&path) {
-            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
-                log::warn!("解析 comms.json 失败, 使用默认值: {}", e);
-                Self::default()
-            }),
+            Ok(content) => match serde_json::from_str::<Self>(&content) {
+                Ok(mut config) => {
+                    config.normalize();
+                    config
+                }
+                Err(e) => {
+                    log::warn!("解析 comms.json 失败, 使用默认值: {}", e);
+                    Self::default()
+                }
+            },
             Err(e) => {
                 log::error!("读取配置文件报错: {}", e);
                 Self::default()
@@ -102,8 +137,10 @@ impl CommsConfig {
             }
         }
 
-        let json_str =
-            serde_json::to_string_pretty(self).map_err(|e| format!("JSON 序列化失败: {}", e))?;
+        let mut normalized = self.clone();
+        normalized.normalize();
+        let json_str = serde_json::to_string_pretty(&normalized)
+            .map_err(|e| format!("JSON 序列化失败: {}", e))?;
         fs::write(&path, json_str).map_err(|e| format!("写入 comms.json 失败: {}", e))?;
         log::info!("配置成功写入: {:?}", path);
         Ok(())

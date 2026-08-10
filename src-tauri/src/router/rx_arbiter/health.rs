@@ -108,7 +108,9 @@ impl RxArbiter {
                         .as_ref()
                         .is_some_and(|recovery| recovery.source_links.contains(&key.source_link))
             });
-            let state = if recovering {
+            let state = if runtime.last_fresh_rx.is_none() {
+                LinkHealthState::Down
+            } else if recovering {
                 LinkHealthState::Recovering
             } else if runtime.last_fresh_rx.is_some() && fresh_age <= self.config.suspect_after {
                 LinkHealthState::Healthy

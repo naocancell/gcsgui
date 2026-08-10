@@ -18,6 +18,7 @@ pub async fn start_serial_internal(
         return Err(format!("该串口链路 [{}] 已存在", link_name));
     }
 
+    let generation = state.allocate_link_generation();
     let config = comms_core::SerialConfig {
         name: link_name.clone(),
         port_name: port_name.clone(),
@@ -36,6 +37,7 @@ pub async fn start_serial_internal(
     let active_link = state::ActiveLink {
         link_type: "SERIAL".to_string(),
         name: link_name.clone(),
+        generation,
         endpoint_info,
         protocol: protocol_type,
         transport,
@@ -58,6 +60,7 @@ pub async fn start_serial_internal(
                     let _ = router_tx_clone
                         .send(crate::comms::RawData {
                             source_link: ln_clone.clone(),
+                            link_generation: generation,
                             data: payload,
                             received_at,
                         })

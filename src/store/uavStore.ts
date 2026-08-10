@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, shallowRef } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import { listen, emit, type UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import type {
@@ -22,47 +22,45 @@ import {
 } from '@/utils/plane/fp95AvionicsControl'
 import { isValidTransponderTarget } from '@/utils/plane/planeAdapter'
 import type { RxHealthSnapshot } from '@/types/linkHealth'
-
-// 协议解包类型枚举
-const enum Protocol {
-  FP95 = "FP95",
-  FP981C = "FP981C",
-  UAVInfo = "UAVInfo"
-}
-
-export type SerialProtocol = Protocol.FP95 | Protocol.FP981C
+import {
+  createDefaultLinkDrafts,
+  createLinkDraft,
+  fromCommsConfig,
+  toCommsConfig,
+  validateLinkDrafts,
+  type LinkDraft,
+  type LinkKind,
+  type PersistedCommsConfig,
+} from './commsConfig'
 
 export const useUavStore = defineStore('uav', () => {
   const uavInfo = ref<UAVInfo | null>(null)
-  
-  // UAVInfo 通道参数
-  const udpName = ref('UAVInfo_UDP')
-  const udpIp = ref('226.0.1.9')
-  const udpPort = ref(8999)
-  const udpTargetPort = ref(9001)
-  const udpInterface = ref('0.0.0.0')
-  const isServiceRunning = ref(false)
 
-  // FP95 通道参数 (默认 0.0.0.0:0)
-  const fp95Name = ref('FP95_UDP')
-  const fp95Ip = ref('226.0.1.9')
-  const fp95Port = ref(8999)
-  const fp95Interface = ref('0.0.0.0')
-  const isFp95Running = ref(false)
+  const links = ref<LinkDraft[]>(createDefaultLinkDrafts())
 
-  // 主链路串口参数 (默认绑定 FP981C)
-  const mainSerialName = ref('主链路')
-  const mainSerialPort = ref('')
-  const mainSerialBaud = ref(115200)
-  const mainSerialProtocol = ref<SerialProtocol>(Protocol.FP981C)
-  const isMainSerialRunning = ref(false)
+  const findLink = (predicate: (link: LinkDraft) => boolean) =>
+    links.value.find(predicate)
+  const uavInfoLink = computed(() =>
+    findLink((link) => link.kind !== 'serial' && link.protocol === 'UAVInfo'),
+  )
+  const fp95UdpLink = computed(() =>
+    findLink((link) => link.kind !== 'serial' && link.protocol === 'FP95'),
+  )
+  const mainSerialLink = computed(() =>
+    findLink((link) => link.kind === 'serial' && link.name === '主链路')
+      ?? findLink((link) => link.kind === 'serial'),
+  )
+  const subSerialLink = computed(() => {
+    const serialLinks = links.value.filter((link) => link.kind === 'serial')
+    return serialLinks.find((link) => link.name === '副链路')
+      ?? serialLinks[1]
+      ?? serialLinks[0]
+  })
 
-  // 副链路串口参数 (默认绑定 FP981C)
-  const subSerialName = ref('副链路')
-  const subSerialPort = ref('')
-  const subSerialBaud = ref(115200)
-  const subSerialProtocol = ref<SerialProtocol>(Protocol.FP981C)
-  const isSubSerialRunning = ref(false)
+  // 保留路由下发使用的兼容名称，真正的配置来源是 links。
+  const udpName = computed(() => uavInfoLink.value?.name ?? 'UAVInfo_UDP')
+  const isServiceRunning = computed(() => uavInfoLink.value?.enabled ?? false)
+  const isFp95Running = computed(() => fp95UdpLink.value?.enabled ?? false)
 
   // 可用串口号列表
   const availablePorts = ref<string[]>([])
@@ -84,25 +82,24 @@ export const useUavStore = defineStore('uav', () => {
   let healthListenerGeneration = 0
 
   function needsFp95Listening() {
-    return isFp95Running.value
-      || (isMainSerialRunning.value && mainSerialProtocol.value === Protocol.FP95)
-      || (isSubSerialRunning.value && subSerialProtocol.value === Protocol.FP95)
+    return links.value.some((link) => link.enabled && link.protocol === 'FP95')
   }
 
   function needsFp981cListening() {
-    return (isMainSerialRunning.value && mainSerialProtocol.value === Protocol.FP981C)
-      || (isSubSerialRunning.value && subSerialProtocol.value === Protocol.FP981C)
+    return links.value.some((link) => link.enabled && link.protocol === 'FP981C')
+  }
+
+  function needsUavInfoListening() {
+    return links.value.some((link) => link.enabled && link.protocol === 'UAVInfo')
   }
 
   function needsHealthListening() {
-    return isServiceRunning.value
-      || isFp95Running.value
-      || isMainSerialRunning.value
-      || isSubSerialRunning.value
+    return links.value.some((link) => link.enabled)
   }
 
   // 监听 uav-info-event 事件
   async function startListening() {
+    if (!needsUavInfoListening()) return
     if (unlisten) return
     unlisten = await listen<UAVInfo[]>('uav-info-event', (event) => {
      updateUavInfoList(event.payload)
@@ -287,6 +284,11 @@ export const useUavStore = defineStore('uav', () => {
 
   async function syncProtocolListeners() {
     deactivateUnusedProtocolListeners()
+    if (needsUavInfoListening()) {
+      await startListening()
+    } else {
+      stopListening()
+    }
     if (needsFp95Listening()) {
       await startFp95Listening(fp95ListenerGeneration)
     }
@@ -298,90 +300,97 @@ export const useUavStore = defineStore('uav', () => {
     }
   }
 
-  // 启动 UAVInfo 接收服务
-  async function startUavService() {
+  async function setLegacyLinkEnabled(
+    link: LinkDraft | undefined,
+    enabled: boolean,
+    errorMessage: string,
+  ) {
+    if (!link) return
+    const previous = link.enabled
+    link.enabled = enabled
     try {
-      isServiceRunning.value = true
       const status = await saveCommsConfig()
       console.log(status)
-      await startListening()
     } catch (err) {
-      isServiceRunning.value = false
+      link.enabled = previous
       deactivateUnusedProtocolListeners()
-      console.error('启动并保存 UAVInfo UDP 后台接收失败', err)
+      console.error(errorMessage, err)
       throw err
     }
   }
 
-  // 停止 UAVInfo 接收服务
+  // 保留旧调用方的服务控制函数，配置本身由动态 links 列表维护。
+  async function startUavService() {
+    await setLegacyLinkEnabled(
+      uavInfoLink.value,
+      true,
+      '启动并保存 UAVInfo UDP 后台接收失败',
+    )
+  }
+
   async function stopUavService() {
-    try {
-      isServiceRunning.value = false
-      const status = await saveCommsConfig()
-      console.log(status)
-      stopListening()
-      uavInfoMap.value = new Map()   // 清空真正渲染用的数据
-      //关闭定时器
-      if (uavWatchdog) {
-        clearTimeout(uavWatchdog)
-        uavWatchdog = null
-      }
-      uavInfo.value = null
-    } catch (err) {
-      console.error('停止并保存 UAVInfo UDP 后台接收失败', err)
-      throw err
+    await setLegacyLinkEnabled(
+      uavInfoLink.value,
+      false,
+      '停止并保存 UAVInfo UDP 后台接收失败',
+    )
+    stopListening()
+    uavInfoMap.value = new Map()
+    if (uavWatchdog) {
+      clearTimeout(uavWatchdog)
+      uavWatchdog = null
     }
+    uavInfo.value = null
   }
 
-  // 启动 FP95 接收服务
   async function startFp95Service() {
     if (isFp95Running.value) return
     const lifecycleGeneration = ++fp95ServiceGeneration
     try {
-      isFp95Running.value = true
-      const status = await saveCommsConfig()
-      console.log(status)
+      await setLegacyLinkEnabled(
+        fp95UdpLink.value,
+        true,
+        '启动并保存 FP95 UDP 后台接收失败',
+      )
       if (
         lifecycleGeneration !== fp95ServiceGeneration
         || !isFp95Running.value
       ) return
     } catch (err) {
       if (lifecycleGeneration === fp95ServiceGeneration) {
-        isFp95Running.value = false
         deactivateUnusedProtocolListeners()
       }
-      console.error('启动并保存 FP95 UDP 后台接收失败', err)
       throw err
     }
   }
 
-  // 停止 FP95 接收服务
   async function stopFp95Service() {
     fp95ServiceGeneration += 1
-    isFp95Running.value = false
-    deactivateUnusedProtocolListeners()
-
-    try {
-      const status = await saveCommsConfig()
-      console.log(status)
-    } catch (err) {
-      console.error('停止并保存 FP95 UDP 后台接收失败', err)
-      throw err
-    }
+    await setLegacyLinkEnabled(
+      fp95UdpLink.value,
+      false,
+      '停止并保存 FP95 UDP 后台接收失败',
+    )
+    clearFp95State()
   }
 
   // 监听串口热插拔事件并主动获取初始串口列表
   async function startPortsMonitoring() {
+    const fillEmptySerialPorts = () => {
+      const firstPort = availablePorts.value[0]
+      if (!firstPort) return
+      links.value
+        .filter((link) => link.kind === 'serial' && !link.portName)
+        .forEach((link) => {
+          link.portName = firstPort
+        })
+    }
+
     try {
       const ports = await invoke<string[]>('get_available_ports')
       if (ports && Array.isArray(ports)) {
         availablePorts.value = ports
-        if (!mainSerialPort.value && availablePorts.value.length > 0) {
-          mainSerialPort.value = availablePorts.value[0]
-        }
-        if (!subSerialPort.value && availablePorts.value.length > 0) {
-          subSerialPort.value = availablePorts.value[0]
-        }
+        fillEmptySerialPorts()
       }
     } catch (err) {
       console.error('主动拉取串口列表失败:', err)
@@ -391,68 +400,41 @@ export const useUavStore = defineStore('uav', () => {
     portsUnlisten = await listen<string[]>('ports-changed', (event) => {
       availablePorts.value = event.payload
       // 如果当前未选中串口，或者选中串口不再列表中且列表不为空，可选第一个默认填充
-      if (!mainSerialPort.value && availablePorts.value.length > 0) {
-        mainSerialPort.value = availablePorts.value[0]
-      }
-      if (!subSerialPort.value && availablePorts.value.length > 0) {
-        subSerialPort.value = availablePorts.value[0]
-      }
+      fillEmptySerialPorts()
     })
     console.log('前端已挂载串口热插拔监测服务并完成初始拉取')
   }
 
-  // 启动主链路接收服务
   async function startMainSerialService() {
-    try {
-      isMainSerialRunning.value = true
-      const status = await saveCommsConfig()
-      console.log(status)
-    } catch (err) {
-      isMainSerialRunning.value = false
-      deactivateUnusedProtocolListeners()
-      console.error('启动并保存主链路串口接收失败', err)
-      throw err
-    }
+    await setLegacyLinkEnabled(
+      mainSerialLink.value,
+      true,
+      '启动并保存主链路串口接收失败',
+    )
   }
 
-  // 停止主链路接收服务
   async function stopMainSerialService() {
-    try {
-      isMainSerialRunning.value = false
-      deactivateUnusedProtocolListeners()
-      const status = await saveCommsConfig()
-      console.log(status)
-    } catch (err) {
-      console.error('停止并保存主链路串口接收失败', err)
-      throw err
-    }
+    await setLegacyLinkEnabled(
+      mainSerialLink.value,
+      false,
+      '停止并保存主链路串口接收失败',
+    )
   }
 
-  // 启动副链路接收服务
   async function startSubSerialService() {
-    try {
-      isSubSerialRunning.value = true
-      const status = await saveCommsConfig()
-      console.log(status)
-    } catch (err) {
-      isSubSerialRunning.value = false
-      deactivateUnusedProtocolListeners()
-      console.error('启动并保存副链路串口接收失败', err)
-      throw err
-    }
+    await setLegacyLinkEnabled(
+      subSerialLink.value,
+      true,
+      '启动并保存副链路串口接收失败',
+    )
   }
 
-  // 停止副链路接收服务
   async function stopSubSerialService() {
-    try {
-      isSubSerialRunning.value = false
-      deactivateUnusedProtocolListeners()
-      const status = await saveCommsConfig()
-      console.log(status)
-    } catch (err) {
-      console.error('停止并保存副链路串口接收失败', err)
-      throw err
-    }
+    await setLegacyLinkEnabled(
+      subSerialLink.value,
+      false,
+      '停止并保存副链路串口接收失败',
+    )
   }
 
   async function fetchNetworkInterfaces() {
@@ -467,44 +449,43 @@ export const useUavStore = defineStore('uav', () => {
     }
   }
 
-  // 从文件读取通信配置
+  function addLink(kind: LinkKind = 'udp-multicast') {
+    const prefix = kind === 'serial' ? '串口链路' : 'UDP链路'
+    let index = links.value.length + 1
+    while (links.value.some((link) => link.name === `${prefix}${index}`)) {
+      index += 1
+    }
+    const link = createLinkDraft(kind, index)
+    links.value.push(link)
+    return link
+  }
+
+  function removeLink(id: string) {
+    const index = links.value.findIndex((link) => link.id === id)
+    if (index >= 0) links.value.splice(index, 1)
+  }
+
+  function updateLinkKind(link: LinkDraft, kind: LinkKind) {
+    link.kind = kind
+    if (kind === 'serial' && link.protocol === 'UAVInfo') {
+      link.protocol = 'FP981C'
+    }
+    if (kind === 'udp-multicast' && !link.ip) {
+      link.ip = '226.0.1.9'
+    }
+    if (kind === 'udp-unicast' && !link.ip) {
+      link.ip = '127.0.0.1'
+    }
+  }
+
   async function loadCommsConfig() {
     try {
-      const config = await invoke<any>('get_comms_config')
+      const config = await invoke<PersistedCommsConfig>('get_comms_config')
       console.log('读取到本地通信配置:', config)
-      if (config && Array.isArray(config.udp)) {
-        for (const item of config.udp) {
-          if (item.name === udpName.value || item.protocol === Protocol.UAVInfo) {
-            if (item.ip) udpIp.value = item.ip
-            if (item.port) udpPort.value = item.port
-            if (item.interface_ip) udpInterface.value = item.interface_ip
-            if (item.enabled !== undefined) isServiceRunning.value = item.enabled
-          } else if (item.name === fp95Name.value || item.protocol === Protocol.FP95) {
-            if (item.ip) fp95Ip.value = item.ip
-            if (item.port) fp95Port.value = item.port
-            if (item.interface_ip) fp95Interface.value = item.interface_ip
-            if (item.enabled !== undefined) isFp95Running.value = item.enabled
-          }
-        }
-      }
-      if (config && Array.isArray(config.serial)) {
-        for (const item of config.serial) {
-          if (item.name === mainSerialName.value || item.name === '主链路') {
-            if (item.port_name) mainSerialPort.value = item.port_name
-            if (item.baud_rate) mainSerialBaud.value = item.baud_rate
-            if (item.protocol === Protocol.FP95 || item.protocol === Protocol.FP981C) {
-              mainSerialProtocol.value = item.protocol
-            }
-            if (item.enabled !== undefined) isMainSerialRunning.value = item.enabled
-          } else if (item.name === subSerialName.value || item.name === '副链路') {
-            if (item.port_name) subSerialPort.value = item.port_name
-            if (item.baud_rate) subSerialBaud.value = item.baud_rate
-            if (item.protocol === Protocol.FP95 || item.protocol === Protocol.FP981C) {
-              subSerialProtocol.value = item.protocol
-            }
-            if (item.enabled !== undefined) isSubSerialRunning.value = item.enabled
-          }
-        }
+      if (config?.udp?.length || config?.serial?.length) {
+        links.value = fromCommsConfig(config)
+      } else {
+        links.value = createDefaultLinkDrafts()
       }
       await syncProtocolListeners()
       return config
@@ -514,55 +495,12 @@ export const useUavStore = defineStore('uav', () => {
     }
   }
 
-  // 保存通信配置到文件并应用热重载
   async function saveCommsConfig() {
     try {
-      const config = {
-        udp: [
-          {
-            name: udpName.value,
-            ip: udpIp.value,
-            port: udpPort.value,
-            interface_ip: udpInterface.value,
-            protocol: Protocol.UAVInfo,
-            enabled: isServiceRunning.value,
-            auto_connect: true
-          },
-          {
-            name: fp95Name.value,
-            ip: fp95Ip.value,
-            port: fp95Port.value,
-            interface_ip: fp95Interface.value,
-            protocol: Protocol.FP95,
-            enabled: isFp95Running.value,
-            auto_connect: true
-          }
-        ],
-        serial: [
-          {
-            name: mainSerialName.value,
-            port_name: mainSerialPort.value,
-            baud_rate: mainSerialBaud.value,
-            data_bits: 8,
-            stop_bits: 1,
-            parity: 'none',
-            protocol: mainSerialProtocol.value,
-            enabled: isMainSerialRunning.value,
-            auto_connect: true
-          },
-          {
-            name: subSerialName.value,
-            port_name: subSerialPort.value,
-            baud_rate: subSerialBaud.value,
-            data_bits: 8,
-            stop_bits: 1,
-            parity: 'none',
-            protocol: subSerialProtocol.value,
-            enabled: isSubSerialRunning.value,
-            auto_connect: true
-          }
-        ]
-      }
+      const validationError = validateLinkDrafts(links.value)
+      if (validationError) throw new Error(validationError)
+
+      const config = toCommsConfig(links.value)
       const res = await invoke<string>('save_comms_config', { config })
       await syncProtocolListeners()
       await emit('comms-config-changed')
@@ -902,7 +840,6 @@ export const useUavStore = defineStore('uav', () => {
     ]
 
     updateUavInfoList(mockUavList)
-    isServiceRunning.value = true
 
     mockUavTimer = setInterval(() => {
       mockUavList[0].longitude += 0.00008
@@ -926,7 +863,6 @@ export const useUavStore = defineStore('uav', () => {
       mockUavTimer = null
     }
     isMock.value = false
-    isServiceRunning.value = false
     if (uavWatchdog) {
       clearTimeout(uavWatchdog)
       uavWatchdog = null
@@ -937,27 +873,13 @@ export const useUavStore = defineStore('uav', () => {
 
   return {
     uavInfo,
+    links,
+    addLink,
+    removeLink,
+    updateLinkKind,
     udpName,
-    udpIp,
-    udpPort,
-    udpTargetPort,
-    udpInterface,
     isServiceRunning,
-    fp95Name,
-    fp95Ip,
-    fp95Port,
-    fp95Interface,
     isFp95Running,
-    mainSerialName,
-    mainSerialPort,
-    mainSerialBaud,
-    mainSerialProtocol,
-    isMainSerialRunning,
-    subSerialName,
-    subSerialPort,
-    subSerialBaud,
-    subSerialProtocol,
-    isSubSerialRunning,
     availablePorts,
     networkInterfaces,
     rxHealth,
