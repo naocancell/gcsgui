@@ -623,7 +623,8 @@ export function useRouteLineOfSight() {
               color: Color.YELLOW,
               outlineColor: Color.BLACK,
               outlineWidth: 2,
-              show: false,
+              show: true,
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
             },
           })
           viewPointEntities.push(viewPointEntity)

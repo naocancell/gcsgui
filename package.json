@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
+    "@turf/turf": "^7.4.0",
     "@vicons/carbon": "^0.13.0",
     "@vicons/fa": "^0.13.0",
     "@vicons/ionicons5": "^0.13.0",
@@ -37,11 +38,13 @@
     "crypto-js": "^4.2.0",
     "echarts": "^5.5.0",
     "fs": "0.0.1-security",
+    "geojson": "^0.5.0",
     "kml-geojson": "^2.0.1",
     "naive-ui": "^2.35.0",
     "pinia": "^2.1.7",
     "pinia-plugin-persist": "^1.0.0",
     "tokml": "^0.4.0",
+    "turf": "^3.0.14",
     "vue": "^3.4.21",
     "vue-router": "^4.5.0"
   },

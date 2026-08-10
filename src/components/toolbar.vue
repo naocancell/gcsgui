@@ -49,7 +49,7 @@ import LayerManager from '@/components/LayerManager.vue'
 import CollisionDetection from './CollisionDetection.vue'
 import AltitudeWarning from './AltitudeWarning.vue'
 import { useLayerStore } from '@/store/layerManagerStore.ts'
-import { Cartesian3, Cartographic,sampleTerrainMostDetailed } from 'cesium'
+import { Cartesian3, Cartographic, sampleTerrainMostDetailed } from 'cesium'
 import * as Cesium from 'cesium'
 import {
   ByDirectionAndLen,
@@ -62,6 +62,7 @@ import RouteOptions from '@/components/RouteOptions.vue'
 import { useRouteStore } from '@/store/RouteStore'
 import MarkerDialog from '@/components/MarkerDialog.vue'
 import NFZViewer from '@/assets/js/NFZViewer.js'
+import { formatNoFlyZoneConflictMessage } from '@/utils/map/noFlyZoneService'
 import { useRouter } from 'vue-router'
 import { getUnicode } from '@/types/entityoptions.ts'
 import { invoke } from '@tauri-apps/api/core'
@@ -148,18 +149,16 @@ const losAnalyzeOptions = computed(() => [
 ])
 const obstacleVisible = ref(true)
 const obstacleLoadingOptions = computed(() =>
-   store.menuOptions.obstacleOptions.map((option)=>{
+  store.menuOptions.obstacleOptions.map((option) => {
     if (option.key === 'showObstacle') {
       return {
         ...option,
         label: obstacleVisible.value ? '隐藏障碍物' : '显示障碍物',
       }
-   }
-   return option
-  })
+    }
+    return option
+  }),
 )
- 
-
 
 const selectedPlaneStore = useSelectedPlaneStore()
 const { selectedModel, selectedMeta } = storeToRefs(selectedPlaneStore)
@@ -208,7 +207,10 @@ let routeDrawViewer: RouteManageViewer | null = null
 // const isDrawingRoute = ref(false)
 
 let nfzViewer = null
+//禁飞区是否显示 第一次默认不显示
 let showNFZ = ref(false)
+//禁飞区正在加载标识 防止重复点击
+let nfzLoading = ref(false)
 let mainCloseUnlisten: (() => void) | null = null
 
 function getRouteManageViewer() {
@@ -220,16 +222,29 @@ function getRouteManageViewer() {
     window.routeManageViewer = new RouteManageViewer(window.viewer)
   }
 
+  window.routeManageViewer.onNoFlyZoneViolation = ({ conflict, action }) => {
+    message.warning(formatNoFlyZoneConflictMessage(conflict, action))
+  }
+
   return window.routeManageViewer
 }
 
-function toggleNFZ() {
-  if (!nfzViewer && window.viewer) {
-    nfzViewer = new NFZViewer(window.viewer)
-  }
-  showNFZ.value = !showNFZ.value
-  if (nfzViewer) {
-    nfzViewer.toggleNFZ(showNFZ.value)
+async function toggleNFZ() {
+  if (!window.viewer || nfzLoading.value) return
+  if (!nfzViewer) nfzViewer = new NFZViewer(window.viewer)
+  //下一次是显示还是隐藏禁飞区  第一次点击是显示禁飞区
+  const nextVisible = !showNFZ.value
+ //点击按钮后设置禁飞区正在加载
+  nfzLoading.value = true
+  try {
+    //异步加载禁飞区 参数（是否显示）
+    await nfzViewer.toggleNFZ(nextVisible)
+    //设置是否显示禁飞区
+    showNFZ.value = nextVisible
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '禁飞区加载失败')
+  } finally {
+    nfzLoading.value = false
   }
 }
 function stopCompanionMode() {
@@ -409,7 +424,7 @@ async function handleLosAnalyseSelect(key) {
       return
     }
     if (blockWhileLosPointPicking()) return
-    
+
     //弹窗进行参数设置  设置后点击确定或取消按钮再判断是否进行可视分析
     showLosAnalyseModal.value = true
   }
@@ -1223,7 +1238,7 @@ onMounted(async () => {
       warnClearance: terrainWarningClearance.value,
     }, //传递的参数
   )
-   const positions = [
+  const positions = [
     // Cesium.Cartographic.fromDegrees(109.1801986, 21.6083409),
     // Cesium.Cartographic.fromDegrees(109.0942906,21.0563956),
     // Cesium.Cartographic.fromDegrees(109.0970023,21.0600092),
@@ -1237,17 +1252,17 @@ onMounted(async () => {
     Cesium.Cartographic.fromDegrees(109.97489, 22.396414),
     Cesium.Cartographic.fromDegrees(109.682106, 22.14533),
     Cesium.Cartographic.fromDegrees(109.530916, 21.763838),
-    Cesium.Cartographic.fromDegrees(109.612228,21.539554),
-    Cesium.Cartographic.fromDegrees(109.495786,20.007391),
-    Cesium.Cartographic.fromDegrees(109.536614,19.739022),
-    Cesium.Cartographic.fromDegrees(109.632882,19.551391),
-    Cesium.Cartographic.fromDegrees(109.998914,19.153206),
-    Cesium.Cartographic.fromDegrees(110.281251,18.78065),
-    Cesium.Cartographic.fromDegrees(53.424175,16.748239),
-    Cesium.Cartographic.fromDegrees(53.424851,16.741347),
-    Cesium.Cartographic.fromDegrees(53.584866,16.73893),
-    Cesium.Cartographic.fromDegrees(53.67826,16.768164),
-    Cesium.Cartographic.fromDegrees(53.770862,16.799745),
+    Cesium.Cartographic.fromDegrees(109.612228, 21.539554),
+    Cesium.Cartographic.fromDegrees(109.495786, 20.007391),
+    Cesium.Cartographic.fromDegrees(109.536614, 19.739022),
+    Cesium.Cartographic.fromDegrees(109.632882, 19.551391),
+    Cesium.Cartographic.fromDegrees(109.998914, 19.153206),
+    Cesium.Cartographic.fromDegrees(110.281251, 18.78065),
+    Cesium.Cartographic.fromDegrees(53.424175, 16.748239),
+    Cesium.Cartographic.fromDegrees(53.424851, 16.741347),
+    Cesium.Cartographic.fromDegrees(53.584866, 16.73893),
+    Cesium.Cartographic.fromDegrees(53.67826, 16.768164),
+    Cesium.Cartographic.fromDegrees(53.770862, 16.799745),
   ]
 
   const result = await Cesium.sampleTerrain(
@@ -1255,7 +1270,10 @@ onMounted(async () => {
     13,
     positions,
   )
-   console.log('海拔高度：', result.map((pos) => pos.height))
+  console.log(
+    '海拔高度：',
+    result.map((pos) => pos.height),
+  )
 })
 
 onBeforeUnmount(() => {
@@ -1455,6 +1473,7 @@ async function showLinkHealthInfo() {
             tertiary
             circle
             :type="showNFZ ? 'error' : 'warning'"
+            :loading="nfzLoading"
             @click="toggleNFZ"
           >
             <template #icon>
@@ -1463,7 +1482,9 @@ async function showLinkHealthInfo() {
             </template>
           </n-button>
         </template>
-        <span>{{ showNFZ ? '关闭禁飞区' : '显示禁飞区' }}</span>
+        <span>
+          {{ showNFZ ? '隐藏禁飞区' : nfzViewer ? '显示禁飞区' : '加载禁飞区' }}
+        </span>
       </n-tooltip>
       <!-- UDP设置 -->
       <n-tooltip placement="bottom" trigger="hover">

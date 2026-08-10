@@ -1,99 +1,183 @@
 import * as Cesium from 'cesium'
-
+import { noFlyZoneService } from '@/utils/map/noFlyZoneService'
+//负责在 Cesium 地图上管理禁飞区
 export default class NFZViewer {
   constructor(viewer) {
     this.viewer = viewer
-    this.nfzEntities = []
-    this.isVisible = false
     this.nfzData = null
     this.dataSource = null
+    this.isVisible = false
+    this.entityIdsByAreaId = new Map()
+    this.terrainDepthTestBeforeShow = true
+    this.terrainOcclusionGuardActive = false
+    this.enforceNoTerrainOcclusion = this.enforceNoTerrainOcclusion.bind(this)
   }
-
+  //判断禁飞区数据是否已加载 返回boolean
+  isLoaded() {
+    return noFlyZoneService.isLoaded()
+  }
+  //根据json加载禁飞区的数据
   async loadNFZData() {
-    if (this.nfzData) return this.nfzData;
-    try {
-      const response = await fetch('/dji_flysafe_cn_only.json');
-      this.nfzData = await response.json();
-      return this.nfzData;
-    } catch (e) {
-      console.error('Failed to load NFZ data:', e);
-      return [];
+    if (this.nfzData) return this.nfzData
+    //
+    const response = await fetch('/dji_flysafe_cn_only.json')
+    if (!response.ok) {
+      throw new Error(`禁飞区数据加载失败（HTTP ${response.status}）`)
     }
+
+    const data = await response.json()
+    if (!Array.isArray(data)) throw new Error('禁飞区数据格式无效')
+
+    this.nfzData = data
+    //全量替换禁飞区数据 函数
+    
+    noFlyZoneService.replaceAreas(data)
+    return data
   }
 
+  async ensureDataSource() {
+    if (this.dataSource) return this.dataSource
+
+    this.dataSource = new Cesium.CustomDataSource('no-fly-zones')
+    this.dataSource.show = this.isVisible
+    await this.viewer.dataSources.add(this.dataSource)
+    return this.dataSource
+  }
+//加载禁飞区
   async toggleNFZ(show) {
-    this.isVisible = show;
     if (show) {
-      if (this.nfzEntities.length === 0 && !this.dataSource) {
-        await this.loadNFZData();
-        this.renderNFZ();
-      } else if (this.dataSource) {
-        this.dataSource.show = true;
-      }
-    } else {
-      if (this.dataSource) {
-        this.dataSource.show = false;
+      //未加载过禁飞区则加载
+      if (!this.isLoaded()) await this.loadNFZData()
+      const needsRender = !this.dataSource
+      await this.ensureDataSource()
+      if (needsRender || this.dataSource.entities.values.length === 0) {
+        this.renderNFZ()
       }
     }
-    this.viewer.scene.requestRender();
+
+    if (this.dataSource) this.dataSource.show = show
+    this.isVisible = show
+    if (show) {
+      this.disableTerrainOcclusion()
+    } else {
+      this.restoreTerrainOcclusion()
+    }
+    this.viewer.scene.requestRender()
+    return true
+  }
+
+  disableTerrainOcclusion() {
+    const { globe } = this.viewer.scene
+
+    if (!this.terrainOcclusionGuardActive) {
+      this.terrainDepthTestBeforeShow = globe.depthTestAgainstTerrain
+      this.viewer.scene.preRender.addEventListener(
+        this.enforceNoTerrainOcclusion,
+      )
+      this.terrainOcclusionGuardActive = true
+    }
+
+    globe.depthTestAgainstTerrain = false
+  }
+
+  enforceNoTerrainOcclusion() {
+    if (!this.isVisible) return
+    this.viewer.scene.globe.depthTestAgainstTerrain = false
+  }
+
+  restoreTerrainOcclusion() {
+    if (!this.terrainOcclusionGuardActive) return
+
+    this.viewer.scene.preRender.removeEventListener(
+      this.enforceNoTerrainOcclusion,
+    )
+    this.viewer.scene.globe.depthTestAgainstTerrain =
+      this.terrainDepthTestBeforeShow
+    this.terrainOcclusionGuardActive = false
   }
 
   renderNFZ() {
-    if (!this.nfzData) return;
-    
-    this.dataSource = new Cesium.CustomDataSource('NFZ');
-    this.viewer.dataSources.add(this.dataSource);
+    if (!this.dataSource) return
 
-    this.nfzData.forEach(area => {
-      let colorStr = area.color || '#DE4329';
-      let height = area.height || 100;
-      if (height === 0) height = 500; // 0 通常表示管控空域（直接禁飞），这里用较高的高度显示以示区别
+    this.dataSource.entities.removeAll()
+    this.entityIdsByAreaId.clear()
+    noFlyZoneService.getRecords().forEach((record) => {
+      this.addRecordEntity(record)
+    })
+  }
 
-      let material = Cesium.Color.fromCssColorString(colorStr).withAlpha(0.4);
-      let outlineColor = Cesium.Color.fromCssColorString(colorStr).withAlpha(0.8);
+  addRecordEntity(record) {
+    if (!this.dataSource) return undefined
 
-      const drawPolygonOrCylinder = (item, currentHeight, currentColor, currentOutlineColor) => {
-        if (item.polygon_points && item.polygon_points.length > 0) {
-          item.polygon_points.forEach(polygon => {
-            let degreesArray = [];
-            polygon.forEach(pt => {
-              degreesArray.push(pt[0], pt[1]);
-            });
-            let entity = this.dataSource.entities.add({
-              name: area.name,
-              polygon: {
-                hierarchy: Cesium.Cartesian3.fromDegreesArray(degreesArray),
-                heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-                material: currentColor,
-              }
-            });
-            this.nfzEntities.push(entity);
-          });
-        } else if (item.radius > 0) {
-          let entity = this.dataSource.entities.add({
-            name: area.name,
-            position: Cesium.Cartesian3.fromDegrees(item.lng || area.lng, item.lat || area.lat),
-            ellipse: {
-              semiMajorAxis: item.radius,
-              semiMinorAxis: item.radius,
-              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-              material: currentColor,
-            }
-          });
-          this.nfzEntities.push(entity);
-        }
-      };
+    const ring = record.feature.geometry.coordinates[0]
+    const degrees = ring.flatMap((coordinate) => [coordinate[0], coordinate[1]])
+    const fillColor = Cesium.Color.fromCssColorString(record.color).withAlpha(
+      0.36,
+    )
+    const outlineColor = Cesium.Color.fromCssColorString(
+      record.color,
+    ).withAlpha(0.95)
+    const entityId = `nfz-${record.zoneId}`
+    const entity = this.dataSource.entities.add({
+      id: entityId,
+      name: record.name,
+      properties: {
+        areaId: record.areaId,
+        level: record.level,
+      },
+      polygon: {
+        hierarchy: Cesium.Cartesian3.fromDegreesArray(degrees),
+        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+        perPositionHeight: false,
+        material: fillColor,
+        outline: true,
+        outlineColor,
+        classificationType: Cesium.ClassificationType.TERRAIN,
+        zIndex: 1000,
+      },
+    })
 
-      if (area.sub_areas && area.sub_areas.length > 0) {
-        area.sub_areas.forEach((sub) => {
-          let subHeight = sub.height > 0 ? sub.height : height;
-          let subColorStr = sub.color || colorStr;
-          let subMaterial = Cesium.Color.fromCssColorString(subColorStr).withAlpha(0.4);
-          drawPolygonOrCylinder(sub, subHeight, subMaterial, outlineColor);
-        });
-      } else {
-        drawPolygonOrCylinder(area, height, material, outlineColor);
-      }
-    });
+    const areaEntityIds = this.entityIdsByAreaId.get(record.areaId) ?? []
+    areaEntityIds.push(entityId)
+    this.entityIdsByAreaId.set(record.areaId, areaEntityIds)
+    return entity
+  }
+
+  async addNFZArea(area) {
+    await this.ensureDataSource()
+    const areaId = String(area.area_id ?? area.id ?? '')
+    const existingEntityIds = this.entityIdsByAreaId.get(areaId) ?? []
+    existingEntityIds.forEach((entityId) => {
+      this.dataSource.entities.removeById(entityId)
+    })
+    this.entityIdsByAreaId.delete(areaId)
+
+    const records = noFlyZoneService.addArea(area)
+    records.forEach((record) => this.addRecordEntity(record))
+    this.viewer.scene.requestRender()
+    return records.length
+  }
+
+  removeNFZArea(areaId) {
+    const normalizedAreaId = String(areaId)
+    const entityIds = this.entityIdsByAreaId.get(normalizedAreaId) ?? []
+    entityIds.forEach((entityId) => {
+      this.dataSource?.entities.removeById(entityId)
+    })
+    this.entityIdsByAreaId.delete(normalizedAreaId)
+    noFlyZoneService.removeArea(normalizedAreaId)
+    this.viewer.scene.requestRender()
+    return entityIds.length
+  }
+
+  destroy() {
+    this.isVisible = false
+    this.restoreTerrainOcclusion()
+
+    if (this.dataSource) {
+      this.viewer.dataSources.remove(this.dataSource, true)
+    }
+    this.dataSource = null
+    this.entityIdsByAreaId.clear()
   }
 }

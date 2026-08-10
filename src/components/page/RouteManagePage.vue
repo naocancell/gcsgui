@@ -34,6 +34,10 @@ import { useStaticStore } from '@/store/staticOptions'
 import { invoke } from '@tauri-apps/api/core'
 import { useUavStore } from '@/store/uavStore.ts'
 import { ArrowRight } from '@vicons/carbon'
+import {
+  formatNoFlyZoneConflictMessage,
+  noFlyZoneService,
+} from '@/utils/map/noFlyZoneService'
 
 declare global {
   interface Window {
@@ -76,6 +80,7 @@ let showPtList = ref(true)
 let selectedRoute = ref<Airline>(newAirline())
 
 let routeManage: any = null
+let lastValidRouteSnapshot: { points: any[]; isClose: boolean } | null = null
 let routePtNumber = ref(1)
 let uiMsg = useMessage()
 const dialog = useDialog()
@@ -219,6 +224,10 @@ onMounted(() => {
 
   routeManage = window.routeManageViewer
 
+  routeManage.onNoFlyZoneViolation = ({ conflict, action }) => {
+    uiMsg.warning(formatNoFlyZoneConflictMessage(conflict, action))
+  }
+
   routeStore.flyRoute.forEach((route) => {
     route.isVisible = route.isVisible !== false
     routeManage.setRouteVisibility?.(route.unicode, route.isVisible)
@@ -228,6 +237,7 @@ onMounted(() => {
   routeManage.onRouteSelected = (routeId: string, line: Airline) => {
     selectedRouteCode.value = routeId
     selectedRoute.value = line
+    rememberValidRoute(line)
     routeDirty.value = false
     refreshSelectedRouteView({
       refreshWeather: true,
@@ -240,6 +250,7 @@ onMounted(() => {
     routeDirty.value = true
 
     normalizeRouteForBiz(selectedRoute.value)
+    rememberValidRoute(selectedRoute.value)
     scheduleProfileRefresh() //剖面刷新
 
     refreshPtList() //刷新航点详情列表
@@ -328,6 +339,7 @@ onBeforeUnmount(() => {
     routeManage.onRouteChanged = undefined
     routeManage.onEditStateChanged = undefined
     routeManage.onVertexSelected = undefined
+    routeManage.onNoFlyZoneViolation = undefined
   }
 
   myChart?.dispose()
@@ -406,6 +418,36 @@ function normalizeRouteForBiz(route: Airline) {
 
 function getMinimumRoutePointCount(route: Pick<Airline, 'isClose'>) {
   return route.isClose ? 3 : 2
+}
+
+function cloneRouteSnapshot(route: Airline) {
+  return {
+    points: (route.points || []).map((point) => ({ ...point })),
+    isClose: Boolean(route.isClose),
+  }
+}
+
+function rememberValidRoute(route = selectedRoute.value) {
+  if (route?.points) lastValidRouteSnapshot = cloneRouteSnapshot(route)
+}
+
+function restoreLastValidRoute() {
+  if (!lastValidRouteSnapshot || !selectedRoute.value) return
+  selectedRoute.value.points = lastValidRouteSnapshot.points.map((point) => ({
+    ...point,
+  }))
+  selectedRoute.value.isClose = lastValidRouteSnapshot.isClose
+  normalizeRouteForBiz(selectedRoute.value)
+}
+
+function checkNoFlyZone(route: Airline, action: string) {
+  const conflict = noFlyZoneService.findRouteConflict(
+    route.points || [],
+    route.isClose,
+  )
+  if (!conflict) return true
+  uiMsg.warning(formatNoFlyZoneConflictMessage(conflict, action))
+  return false
 }
 
 function getRoutePointCountWarning(route: Pick<Airline, 'isClose'>) {
@@ -903,6 +945,7 @@ function selectAndShowRoute(
 
   selectedRoute.value = route
   selectedRouteCode.value = route.unicode
+  rememberValidRoute(route)
 
   routeManage.routeParams.isClose = route.isClose
 
@@ -1068,6 +1111,12 @@ async function saveRouteEdit(): Promise<boolean> {
   try {
     normalizeRouteForBiz(selectedRoute.value)
 
+    if (!checkNoFlyZone(selectedRoute.value, '保存航线')) {
+      restoreLastValidRoute()
+      updateMapRoute({ rebuildVertex: true })
+      return false
+    }
+
     routeStore.addRoute(selectedRoute.value)
 
     updateMapRoute({
@@ -1090,6 +1139,7 @@ async function saveRouteEdit(): Promise<boolean> {
     flyToRoute(selectedRoute.value, 1.5)
 
     uiMsg.success('保存编辑成功')
+    rememberValidRoute(selectedRoute.value)
 
     return true
   } catch (error) {
@@ -1148,6 +1198,14 @@ function savePt() {
  */
 function onRoutePointInputChanged() {
   if (!selectedRoute.value?.unicode) return
+
+  normalizeRouteForBiz(selectedRoute.value)
+  if (!checkNoFlyZone(selectedRoute.value, '修改航线')) {
+    restoreLastValidRoute()
+    updateMapRoute({ rebuildVertex: true })
+    refreshSelectedRouteView({ forceRefreshPtList: true })
+    return
+  }
 
   routeDirty.value = true
 
@@ -1289,6 +1347,11 @@ function handlePtSelect(key: any, index: number) {
 
   if (!selectedRoute.value?.points) return
 
+  const candidateRoute = {
+    ...selectedRoute.value,
+    points: selectedRoute.value.points.map((point) => ({ ...point })),
+  }
+
   if (key === 'deletePt') {
     if (
       selectedRoute.value.points.length <=
@@ -1298,7 +1361,7 @@ function handlePtSelect(key: any, index: number) {
       return
     }
 
-    selectedRoute.value.points.splice(index, 1)
+    candidateRoute.points.splice(index, 1)
   }
 
   if (key === 'insertBefore') {
@@ -1309,7 +1372,7 @@ function handlePtSelect(key: any, index: number) {
       return
     }
 
-    selectedRoute.value.points.splice(index, 0, newPt)
+    candidateRoute.points.splice(index, 0, newPt)
   }
 
   if (key === 'insertAfter') {
@@ -1320,8 +1383,20 @@ function handlePtSelect(key: any, index: number) {
       return
     }
 
-    selectedRoute.value.points.splice(index + 1, 0, newPt)
+    candidateRoute.points.splice(index + 1, 0, newPt)
   }
+
+  normalizeRouteForBiz(candidateRoute)
+  if (
+    !checkNoFlyZone(
+      candidateRoute,
+      key === 'deletePt' ? '删除航点' : '添加航点',
+    )
+  ) {
+    return
+  }
+
+  selectedRoute.value.points = candidateRoute.points
 
   normalizeRouteForBiz(selectedRoute.value)
   routeDirty.value = true
@@ -1334,6 +1409,7 @@ function handlePtSelect(key: any, index: number) {
     refreshWeather: true,
     forceRefreshPtList: true,
   })
+  rememberValidRoute(selectedRoute.value)
 }
 
 function prevPtWeather() {
@@ -1431,8 +1507,16 @@ function handleRouteCloseChanged(value: boolean) {
     return
   }
 
+  const previousClose = Boolean(selectedRoute.value.isClose)
   selectedRoute.value.isClose = value
   normalizeRouteForBiz(selectedRoute.value)
+
+  if (!checkNoFlyZone(selectedRoute.value, value ? '闭合航线' : '修改航线')) {
+    selectedRoute.value.isClose = previousClose
+    restoreLastValidRoute()
+    updateMapRoute({ rebuildVertex: true })
+    return
+  }
 
   routeDirty.value = true
 
@@ -1444,6 +1528,7 @@ function handleRouteCloseChanged(value: boolean) {
     refreshWeather: false,
     forceRefreshPtList: true,
   })
+  rememberValidRoute(selectedRoute.value)
 }
 
 async function sendRouteToQT(routeUnicode: string | number) {
@@ -1667,12 +1752,18 @@ function parseRouteFile(fileName: string, content: string) {
     return
   }
 
+  if (!checkNoFlyZone(newRoute, '导入航线')) {
+    return
+  }
+
   routeStore.addRoute(newRoute)
 
   selectAndShowRoute(newRoute, {
     flyTo: true,
     refreshWeather: true,
   })
+
+  rememberValidRoute(newRoute)
 
   uiMsg.success(`成功导入航线: ${newRoute.name}`)
 }

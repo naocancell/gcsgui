@@ -144,6 +144,9 @@ onMounted(async () => {
   // viewer.imageryLayers.addImageryProvider(
   //   getTDTProvider(TDTLayerType.Img, TDTProjectionType.WebMercator),
   // )
+  //加载建筑白膜
+// const buildingTileset = await Cesium.createOsmBuildingsAsync()
+// viewer.scene.primitives.add(buildingTileset)
   const imageryProvider = await Cesium.createWorldImageryAsync()
   viewer.imageryLayers.addImageryProvider(imageryProvider)
   //添加天地图影像注记
