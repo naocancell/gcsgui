@@ -201,8 +201,8 @@ fn process_fp981c_frame(
             stream: StreamKey {
                 protocol: ProtocolType::FP981C,
                 uav_id,
-                frame_id,
             },
+            frame_id,
             raw_sequence: seq_num,
             frame: frame_bytes,
             received_at,
@@ -335,8 +335,8 @@ fn process_fp95_frame(
             stream: StreamKey {
                 protocol: ProtocolType::FP95,
                 uav_id,
-                frame_id,
             },
+            frame_id,
             raw_sequence: seq_num,
             frame: frame_bytes,
             received_at,

@@ -10,16 +10,17 @@ pub use health::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// One protocol-specific aircraft sequence stream shared by all subframes.
 pub struct StreamKey {
     pub protocol: ProtocolType,
     pub uav_id: u8,
-    pub frame_id: u8,
 }
 
 #[derive(Debug, Clone)]
 pub struct FrameObservation {
     pub source_link: String,
     pub stream: StreamKey,
+    pub frame_id: u8,
     pub raw_sequence: u8,
     pub frame: [u8; 32],
     pub received_at: Instant,
