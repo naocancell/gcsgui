@@ -151,6 +151,7 @@ export default defineComponent({
 #map {
   position: relative;
   width: 100vw;
+  height: 100%;
 }
 
 #scene-viewer {

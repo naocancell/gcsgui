@@ -2,12 +2,19 @@
 
 /*比例尺背景*/
 .distance-legend {
+    display: none !important;
     position: absolute;
     padding-left: 0;
     padding-right: 0;
-    right: .1rem;
+    right: 1rem;
     height: 2rem;
-    bottom: .2rem;
+    bottom: 1rem;
+    padding: .15rem .35rem .1rem;
+    background: rgba(17, 24, 31, 0.72);
+    border: 1px solid rgba(188, 211, 226, 0.22);
+    border-radius: .25rem;
+    box-shadow: 0 5px 18px rgba(0, 0, 0, 0.2);
+    backdrop-filter: blur(8px);
     font-weight: bolder;
     box-sizing: content-box;
     z-index: 2;
@@ -16,20 +23,23 @@
 .distance-legend-label {
     display: inline-block;
     font-family: 'Roboto', sans-serif;
-    padding-left: .5rem;
+    padding-left: .2rem;
+    padding-right: .2rem;
     font-size: .8rem;
-    color: #FFFFFF;
+    color: rgba(244, 247, 250, 0.94);
     width: 7.5rem;
     text-align: center;
 }
 /*比例尺线段*/
 .distance-legend-scale-bar {
-    border-left: .1rem solid #FFFFFF;
-    border-right: .1rem solid #FFFFFF;
-    border-bottom: .1rem solid #FFFFFF;
+    border-left: .1rem solid rgba(244, 247, 250, 0.94);
+    border-right: .1rem solid rgba(244, 247, 250, 0.94);
+    border-bottom: .1rem solid rgba(244, 247, 250, 0.94);
     position: absolute;
     height: .7rem;
     top: 1rem;
+    width: 100px !important;
+    left: 17.5px !important;
 }
 
 @media print {

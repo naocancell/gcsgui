@@ -1,4 +1,5 @@
 import * as Cesium from 'cesium'
+import { invoke } from '@tauri-apps/api/core'
 
 const obstacleIcons = {
     lowPowerPole:'/model/低压电杆.glb',
@@ -112,7 +113,8 @@ export function useMarkObstacle() {
     const obstacleEntities: Cesium.Entity[] = []
 
     // 当前障碍物图层是否显示
-    let obstacleVisible = true
+    let obstacleVisible = false
+    let obstaclesLoaded = false
 
     let hoverObstacleEntity: Cesium.Entity | undefined = undefined //记录的悬浮的障碍物
     let hoverHandler: Cesium.ScreenSpaceEventHandler | undefined = undefined //处理事件
@@ -321,7 +323,7 @@ export function useMarkObstacle() {
         return obstacleEntity
     }
     // 添加全部障碍物
-    function addAllObstacles(): void {
+    function addAllObstaclesFromFile(): void {
         // 每次进入加载流程都恢复为显示状态，随后新增的实体也会继承该状态。
         setObstaclesVisible(true)
 
@@ -508,6 +510,76 @@ export function useMarkObstacle() {
         fileInput.click()//点击打开文件选择窗口
     }
 
+    function clearObstacles(): void {
+        obstacleEntities.forEach((entity) => window.viewer.entities.remove(entity))
+        obstacleEntities.length = 0
+        hoverObstacleEntity = undefined
+    }
+
+    function renderObstacles(parsedData: unknown): number {
+        if (!Array.isArray(parsedData) || parsedData.length === 0) {
+            throw new Error('障碍物数据为空或顶层数据不是数组')
+        }
+
+        clearObstacles()
+        const metadata = parsedData[0] as any
+        const type = metadata?.type
+        let loadedCount = 0
+
+        parsedData.slice(1).forEach((item: any, index: number) => {
+            try {
+                if (typeof item !== 'object' || item === null) {
+                    throw new Error('障碍物数据必须是对象')
+                }
+
+                let longitude: number
+                let latitude: number
+                if (type === 'relative_bearing') {
+                    const baseLon = Number(metadata.baseLon)
+                    const baseLat = Number(metadata.baseLat)
+                    const magVar = Number(metadata.magVar ?? 0)
+                    const magneticAzimuth = Number(item.magneticAzimuth)
+                    const distance = Number(item.distance)
+                    if (![baseLon, baseLat, magVar, magneticAzimuth, distance].every(Number.isFinite)) {
+                        throw new Error('相对方位障碍物坐标参数无效')
+                    }
+                    if (distance < 0) throw new Error('distance 不能为负数')
+                    const position = getLonLatByMagneticBearingDistance(
+                        baseLon, baseLat, magneticAzimuth, distance, magVar,
+                    )
+                    longitude = position.longitude
+                    latitude = position.latitude
+                } else if (type === 'absolute_coord') {
+                    longitude = Number(item.longitude)
+                    latitude = Number(item.latitude)
+                    if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) {
+                        throw new Error('经纬度不是有效数字')
+                    }
+                } else {
+                    throw new Error(`不支持的障碍物数据类型: ${String(type)}`)
+                }
+
+                addObstacle(item, longitude, latitude)
+                loadedCount += 1
+            } catch (error) {
+                console.error(`第${index + 2}条障碍物数据加载失败：`, error, item)
+            }
+        })
+
+        if (loadedCount === 0) throw new Error('没有可显示的有效障碍物')
+        obstaclesLoaded = true
+        setObstaclesVisible(true)
+        return loadedCount
+    }
+
+    async function loadObstacles(source: 'sync' | 'local' = 'local'): Promise<number> {
+        const command = source === 'sync'
+            ? 'fetch_and_cache_obstacles'
+            : 'load_cached_obstacles'
+        const data = await invoke<unknown>(command)
+        return renderObstacles(data)
+    }
+
      // 设置所有障碍物是否显示
     function setObstaclesVisible(visible: boolean): void {
         obstacleVisible = visible
@@ -527,7 +599,7 @@ export function useMarkObstacle() {
 
     // 切换显示 / 隐藏
     function toggleObstaclesVisible(): boolean | null {
-        if (obstacleEntities.length === 0) return null
+        if (!obstaclesLoaded || obstacleEntities.length === 0) return null
 
         const visible = !obstacleVisible
         setObstaclesVisible(visible)
@@ -536,7 +608,9 @@ export function useMarkObstacle() {
 
     return {
         addObstacle,
-        addAllObstacles,
+        loadObstacles,
+        // 保留文件加载能力，供需要直接导入 JSON 的场景使用。
+        addAllObstacles: addAllObstaclesFromFile,
         toggleObstaclesVisible,
     }
 }

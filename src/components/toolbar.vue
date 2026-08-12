@@ -158,7 +158,8 @@ const losAnalyzeOptions = computed(() => [
     key: 'toggleFinalLosResult',
   },
 ])
-const obstacleVisible = ref(true)
+const obstacleVisible = ref(false)
+const obstacleLoading = ref(false)
 const obstacleLoadingOptions = computed(() =>
   store.menuOptions.obstacleOptions.map((option) => {
     if (option.key === 'showObstacle') {
@@ -475,11 +476,7 @@ function activeCompanionMode() {
 }
 
 function handleObstacleSelect(key) {
-  if (key === 'loadObstacle') {
-    addAllObstacles()
-    obstacleVisible.value = true
-    return
-  }
+  if (obstacleLoading.value) return
   if (key === 'showObstacle') {
     const visible = toggleObstaclesVisible()
     if (visible === null) {
@@ -487,7 +484,27 @@ function handleObstacleSelect(key) {
       return
     }
     obstacleVisible.value = visible
+    return
   }
+
+  const source = key === 'syncObstacle' ? 'sync' : 'local'
+  obstacleLoading.value = true
+  loadObstacles(source)
+    .then((count) => {
+      obstacleVisible.value = true
+      message.success(`${source === 'sync' ? '同步' : '加载本地'}障碍物成功，共 ${count} 个`)
+    })
+    .catch((error) => {
+      if (source === 'local') {
+        message.warning('请先同步障碍物数据')
+      } else {
+        const detail = error instanceof Error ? error.message : String(error)
+        message.error(detail || '同步障碍物失败')
+      }
+    })
+    .finally(() => {
+      obstacleLoading.value = false
+    })
 }
 //用于控制显示关闭工具条按钮或打开工具条按钮
 let barIsOpen = ref(true)
@@ -1438,7 +1455,7 @@ function toggleSelectedPlaneTerrainWarning() {
   terrainWarningApi.value?.start()
 }
 
-const { addAllObstacles, toggleObstaclesVisible } = useMarkObstacle()
+const { loadObstacles, toggleObstaclesVisible } = useMarkObstacle()
 
 async function showTelemetryInfo() {
   try {
