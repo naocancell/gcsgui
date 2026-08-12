@@ -5,6 +5,10 @@ use tauri::Manager;
 use tokio::sync::mpsc;
 
 use crate::comms::RawData;
+use nfz_cache::{
+    fetch_and_cache_nfz,
+    load_cached_nfz,
+};
 
 pub mod command;
 pub mod comms;
@@ -13,6 +17,7 @@ pub mod protocol;
 pub mod router;
 pub mod state;
 pub mod uplink;
+mod nfz_cache;
 
 pub static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
 
@@ -146,7 +151,9 @@ pub fn run() {
             bind_weight_params,
             query_weight_params,
             clear_uplink_command,
-            get_uplink_status
+            get_uplink_status,
+            fetch_and_cache_nfz,
+            load_cached_nfz,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

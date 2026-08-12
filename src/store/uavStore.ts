@@ -14,7 +14,7 @@ import type {
   TransponderParamConfig,
   TransponderParamReadback,
   WeightBindingConfig,
-  WeightReadback
+  WeightReadback,
 } from '@/types/entityoptions'
 import {
   getFp95FlightSwitchCommand,
@@ -46,15 +46,18 @@ export const useUavStore = defineStore('uav', () => {
   const fp95UdpLink = computed(() =>
     findLink((link) => link.kind !== 'serial' && link.protocol === 'FP95'),
   )
-  const mainSerialLink = computed(() =>
-    findLink((link) => link.kind === 'serial' && link.name === '主链路')
-      ?? findLink((link) => link.kind === 'serial'),
+  const mainSerialLink = computed(
+    () =>
+      findLink((link) => link.kind === 'serial' && link.name === '主链路') ??
+      findLink((link) => link.kind === 'serial'),
   )
   const subSerialLink = computed(() => {
     const serialLinks = links.value.filter((link) => link.kind === 'serial')
-    return serialLinks.find((link) => link.name === '副链路')
-      ?? serialLinks[1]
-      ?? serialLinks[0]
+    return (
+      serialLinks.find((link) => link.name === '副链路') ??
+      serialLinks[1] ??
+      serialLinks[0]
+    )
   })
 
   // 保留路由下发使用的兼容名称，真正的配置来源是 links。
@@ -86,11 +89,15 @@ export const useUavStore = defineStore('uav', () => {
   }
 
   function needsFp981cListening() {
-    return links.value.some((link) => link.enabled && link.protocol === 'FP981C')
+    return links.value.some(
+      (link) => link.enabled && link.protocol === 'FP981C',
+    )
   }
 
   function needsUavInfoListening() {
-    return links.value.some((link) => link.enabled && link.protocol === 'UAVInfo')
+    return links.value.some(
+      (link) => link.enabled && link.protocol === 'UAVInfo',
+    )
   }
 
   function needsHealthListening() {
@@ -102,7 +109,7 @@ export const useUavStore = defineStore('uav', () => {
     if (!needsUavInfoListening()) return
     if (unlisten) return
     unlisten = await listen<UAVInfo[]>('uav-info-event', (event) => {
-     updateUavInfoList(event.payload)
+      updateUavInfoList(event.payload)
     })
     console.log('前端已挂载 UAVInfo 数据监听服务')
   }
@@ -119,18 +126,21 @@ export const useUavStore = defineStore('uav', () => {
     }
 
     const pending = (async () => {
-      const candidateUnlisten = await listen<FP95EventPayload>("fp95-event", (event) => {
-        //将接收到的数据给飞机的store   更新数据
-        if (
-          lifecycleGeneration === fp95ListenerGeneration
-          && needsFp95Listening()
-        ) {
-          updateFp95Aggregate(event.payload)
-        }
-      })
+      const candidateUnlisten = await listen<FP95EventPayload>(
+        'fp95-event',
+        (event) => {
+          //将接收到的数据给飞机的store   更新数据
+          if (
+            lifecycleGeneration === fp95ListenerGeneration &&
+            needsFp95Listening()
+          ) {
+            updateFp95Aggregate(event.payload)
+          }
+        },
+      )
       if (
-        lifecycleGeneration === fp95ListenerGeneration
-        && needsFp95Listening()
+        lifecycleGeneration === fp95ListenerGeneration &&
+        needsFp95Listening()
       ) {
         fp95Unlisten = candidateUnlisten
         console.log('前端已挂载 FP95 数据监听服务')
@@ -157,17 +167,20 @@ export const useUavStore = defineStore('uav', () => {
     }
 
     const pending = (async () => {
-      const candidateUnlisten = await listen<FP981CEventPayload>("fp981c-event", (event) => {
-        if (
-          lifecycleGeneration === fp981cLifecycleGeneration
-          && needsFp981cListening()
-        ) {
-          updateFp981cList(event.payload)
-        }
-      })
+      const candidateUnlisten = await listen<FP981CEventPayload>(
+        'fp981c-event',
+        (event) => {
+          if (
+            lifecycleGeneration === fp981cLifecycleGeneration &&
+            needsFp981cListening()
+          ) {
+            updateFp981cList(event.payload)
+          }
+        },
+      )
       if (
-        lifecycleGeneration === fp981cLifecycleGeneration
-        && needsFp981cListening()
+        lifecycleGeneration === fp981cLifecycleGeneration &&
+        needsFp981cListening()
       ) {
         fp981cUnlisten = candidateUnlisten
         console.log('前端已挂载 FP981C 数据监听服务')
@@ -198,16 +211,16 @@ export const useUavStore = defineStore('uav', () => {
         'link-health-event',
         (event) => {
           if (
-            lifecycleGeneration === healthListenerGeneration
-            && needsHealthListening()
+            lifecycleGeneration === healthListenerGeneration &&
+            needsHealthListening()
           ) {
             rxHealth.value = event.payload
           }
         },
       )
       if (
-        lifecycleGeneration === healthListenerGeneration
-        && needsHealthListening()
+        lifecycleGeneration === healthListenerGeneration &&
+        needsHealthListening()
       ) {
         healthUnlisten = candidateUnlisten
         console.log('前端已挂载链路健康监听服务')
@@ -352,10 +365,8 @@ export const useUavStore = defineStore('uav', () => {
         true,
         '启动并保存 FP95 UDP 后台接收失败',
       )
-      if (
-        lifecycleGeneration !== fp95ServiceGeneration
-        || !isFp95Running.value
-      ) return
+      if (lifecycleGeneration !== fp95ServiceGeneration || !isFp95Running.value)
+        return
     } catch (err) {
       if (lifecycleGeneration === fp95ServiceGeneration) {
         deactivateUnusedProtocolListeners()
@@ -561,11 +572,14 @@ export const useUavStore = defineStore('uav', () => {
     }
     if (!Number.isFinite(nextExpiry)) return
 
-    transponderEvictionTimer = setTimeout(() => {
-      transponderEvictionTimer = null
-      evictExpiredTransponderTargets(Date.now())
-      scheduleTransponderEviction()
-    }, Math.max(0, nextExpiry - Date.now()))
+    transponderEvictionTimer = setTimeout(
+      () => {
+        transponderEvictionTimer = null
+        evictExpiredTransponderTargets(Date.now())
+        scheduleTransponderEviction()
+      },
+      Math.max(0, nextExpiry - Date.now()),
+    )
   }
 
   let uavWatchdog: ReturnType<typeof setTimeout> | null = null
@@ -601,17 +615,17 @@ export const useUavStore = defineStore('uav', () => {
     const sub1 = value.frame94?.Sub1
     if (sub1) {
       const frame94Sequence = value.frame94Sequence
-      const hasSequence = typeof frame94Sequence === 'number'
-        && Number.isFinite(frame94Sequence)
+      const hasSequence =
+        typeof frame94Sequence === 'number' && Number.isFinite(frame94Sequence)
       const fingerprint = JSON.stringify(sub1) ?? ''
       const hasNewFrame94 = hasSequence
         ? transponderFrame94Sequence.get(value.uavId) !== frame94Sequence
         : transponderFrame94Fingerprint.get(value.uavId) !== fingerprint
 
       if (
-        hasNewFrame94
-        && typeof frame94Sequence === 'number'
-        && Number.isFinite(frame94Sequence)
+        hasNewFrame94 &&
+        typeof frame94Sequence === 'number' &&
+        Number.isFinite(frame94Sequence)
       ) {
         transponderFrame94Sequence.set(value.uavId, frame94Sequence)
       }
@@ -708,7 +722,9 @@ export const useUavStore = defineStore('uav', () => {
     return aircraftId
   }
 
-  async function runTransponderOperation<T>(operation: () => Promise<T>): Promise<T> {
+  async function runTransponderOperation<T>(
+    operation: () => Promise<T>,
+  ): Promise<T> {
     if (transponderOperationPending.value) {
       throw new Error('已有应答机或航管参数指令正在等待回报')
     }
@@ -731,7 +747,10 @@ export const useUavStore = defineStore('uav', () => {
   async function queryTransponderSwitches() {
     const aircraftId = currentFp95AircraftId()
     return runTransponderOperation(async () => {
-      const res = await invoke<TransponderSwitchReadback>('query_transponder_switches', { aircraftId })
+      const res = await invoke<TransponderSwitchReadback>(
+        'query_transponder_switches',
+        { aircraftId },
+      )
       transponderSwitchReadback.value = res
       return res
     })
@@ -745,14 +764,17 @@ export const useUavStore = defineStore('uav', () => {
     transponderParamConfig.value = {
       ...config,
       aCode: [...config.aCode],
-      sModeAddr: [...config.sModeAddr]
+      sModeAddr: [...config.sModeAddr],
     }
   }
 
   async function queryTransponderParams() {
     const aircraftId = currentFp95AircraftId()
     return runTransponderOperation(async () => {
-      const res = await invoke<TransponderParamReadback>('query_air_traffic_params', { aircraftId })
+      const res = await invoke<TransponderParamReadback>(
+        'query_air_traffic_params',
+        { aircraftId },
+      )
       transponderParamReadback.value = res
       return res
     })
@@ -769,7 +791,9 @@ export const useUavStore = defineStore('uav', () => {
   async function queryWeightParams() {
     const aircraftId = currentFp95AircraftId()
     return runTransponderOperation(async () => {
-      const res = await invoke<WeightReadback>('query_weight_params', { aircraftId })
+      const res = await invoke<WeightReadback>('query_weight_params', {
+        aircraftId,
+      })
       weightReadback.value = res
       weightBindingConfig.value = { ...res }
       return res
@@ -809,7 +833,7 @@ export const useUavStore = defineStore('uav', () => {
         verticalSpeed: 0.5,
         airspeed: 28,
         trueAirspeed: 30,
-        pitchAngle: 20,
+        pitchAngle: 0,
         rollAngle: 0,
         headingAngle: 75,
         currentRouteId: 1,
@@ -820,8 +844,8 @@ export const useUavStore = defineStore('uav', () => {
       {
         uavSeries: '981C',
         uavId: 2,
-        longitude: 109.5100,
-        latitude: 18.2500,
+        longitude: 109.51,
+        latitude: 18.25,
         altitude: 500,
         relativeAltitude: 500,
         groundSpeed: 30,
@@ -845,12 +869,18 @@ export const useUavStore = defineStore('uav', () => {
       mockUavList[0].longitude += 0.00008
       mockUavList[0].latitude += 0.00002
       mockUavList[0].groundSpeedDirection = 90
-      mockUavList[0].distanceNext = Math.max(0, mockUavList[0].distanceNext - 25)
+      mockUavList[0].distanceNext = Math.max(
+        0,
+        mockUavList[0].distanceNext - 25,
+      )
 
       mockUavList[1].longitude += 0.000015
       mockUavList[1].latitude += 0.000015
       mockUavList[1].groundSpeedDirection = 45
-      mockUavList[1].distanceNext = Math.max(0, mockUavList[1].distanceNext - 30)
+      mockUavList[1].distanceNext = Math.max(
+        0,
+        mockUavList[1].distanceNext - 30,
+      )
 
       updateUavInfoList(mockUavList.map((item) => ({ ...item })))
     }, 20)
@@ -916,11 +946,12 @@ export const useUavStore = defineStore('uav', () => {
     weightReadback,
     bindWeightParams,
     queryWeightParams,
+    isMock,
     toggleMockUavInfoService,
     syncProtocolListeners,
     startListening,
     stopListening,
     startFp95Listening,
-    startFp981cListening
+    startFp981cListening,
   }
 })

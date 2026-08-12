@@ -9,6 +9,7 @@ import LayerItem from '@/components/LayerItem.vue'
 import { darkTheme } from 'naive-ui'
 import { ref } from 'vue'
 import { useLayerStore } from '@/store/layerManagerStore.ts'
+import { removeLayerResources } from '@/utils/map/layerResources'
 //定义允许父组件使用的函数或变量
 defineExpose({
   //父组件点击添加图层显示图层管理面板
@@ -40,20 +41,15 @@ function addWMSLayer() {
   window.measureViewer.AddWMSLayer(wmsConfig.url)
 }
 //清空图层函数
-function clearLayers() {
-  useLayerStore().Layers.forEach((layer) => {
-    //通过遍历数组移除图层
-    window.viewer.imageryLayers.remove(layer?.imageLayer, true)
-    window.viewer.dataSources.remove(layer?.dataSource, true)
-    //清除所有实体
-    if (layer.entity.length > 0) {
-      layer.entity.forEach((entity) => {
-        window.viewer.entities.remove(entity)
-      })
-    }
-  })
+async function clearLayers() {
+  const layerStore = useLayerStore()
+  const layers = [...layerStore.Layers]
+
+  await Promise.allSettled(
+    layers.map((layer) => removeLayerResources(window.viewer, layer)),
+  )
   window.viewer.scene.requestRender()
-  useLayerStore().clearLayersList()
+  layerStore.clearLayersList()
 }
 </script>
 

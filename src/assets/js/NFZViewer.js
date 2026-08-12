@@ -1,5 +1,7 @@
 import * as Cesium from 'cesium'
 import { noFlyZoneService } from '@/utils/map/noFlyZoneService'
+import { invoke } from '@tauri-apps/api/core'
+
 //负责在 Cesium 地图上管理禁飞区
 export default class NFZViewer {
   constructor(viewer) {
@@ -17,21 +19,20 @@ export default class NFZViewer {
     return noFlyZoneService.isLoaded()
   }
   //根据json加载禁飞区的数据
-  async loadNFZData() {
-    if (this.nfzData) return this.nfzData
-    //
-    const response = await fetch('/dji_flysafe_cn_only.json')
-    if (!response.ok) {
-      throw new Error(`禁飞区数据加载失败（HTTP ${response.status}）`)
+  async loadNFZData(source = 'sync') {
+    const command =
+      source === 'local' ? 'load_cached_nfz' : 'fetch_and_cache_nfz'
+    const data = await invoke(command)
+    if (!Array.isArray(data) || data.length === 0) {
+      throw new Error('获取禁飞区失败：没有有效数据')
     }
 
-    const data = await response.json()
-    if (!Array.isArray(data)) throw new Error('禁飞区数据格式无效')
-
+    const records = noFlyZoneService.replaceAreas(data)
+    if (records.length === 0) {
+      throw new Error('获取禁飞区失败：没有有效区域')
+    }
     this.nfzData = data
-    //全量替换禁飞区数据 函数
-    
-    noFlyZoneService.replaceAreas(data)
+    if (this.dataSource) this.renderNFZ()
     return data
   }
 
@@ -43,11 +44,13 @@ export default class NFZViewer {
     await this.viewer.dataSources.add(this.dataSource)
     return this.dataSource
   }
-//加载禁飞区
-  async toggleNFZ(show) {
+  //加载禁飞区
+  async toggleNFZ(show, source) {
     if (show) {
       //未加载过禁飞区则加载
-      if (!this.isLoaded()) await this.loadNFZData()
+      if (source || !this.isLoaded()) {
+        await this.loadNFZData(source)
+      }
       const needsRender = !this.dataSource
       await this.ensureDataSource()
       if (needsRender || this.dataSource.entities.values.length === 0) {

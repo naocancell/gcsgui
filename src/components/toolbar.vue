@@ -69,6 +69,16 @@ import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { storeToRefs } from 'pinia'
+import type { PlaneState } from '@/types/entityoptions'
+import { normalizeUAVInfo, normalizeFP981C } from '@/utils/plane/planeAdapter'
+import {
+  createSimulatedElectronicFence,
+  getSimulatedElectronicFenceAlerts,
+  removeSimulatedElectronicFence,
+  SIMULATED_ELECTRONIC_FENCE_INITIAL_POSITION,
+  type ElectronicFenceResult,
+  type SimulatedElectronicFence,
+} from '@/utils/map/simulatedElectronicFence'
 //选中飞机以及高度预警
 import {
   useSelectedPlaneStore,
@@ -212,7 +222,97 @@ let nfzViewer = null
 let showNFZ = ref(false)
 //禁飞区正在加载标识 防止重复点击
 let nfzLoading = ref(false)
+const nfzOptions = [
+  { label: '同步最新禁飞区', key: 'sync' },
+  { label: '加载本地禁飞区', key: 'local' },
+]
 let mainCloseUnlisten: (() => void) | null = null
+
+const simulatedFenceVisible = ref(false)
+const simulatedFenceResults = ref<ElectronicFenceResult[]>([])
+let simulatedFence: SimulatedElectronicFence | null = null
+
+function getMonitoredPlanes(): PlaneState[] {
+  const planes: PlaneState[] = []
+  uavStore.uavInfoMap?.forEach((uav) => {
+    if (Number.isFinite(uav.longitude) && Number.isFinite(uav.latitude)) {
+      planes.push(normalizeUAVInfo(uav))
+    }
+  })
+  uavStore.fp981cMap?.forEach((item) => {
+    if (item.c2) planes.push(normalizeFP981C(item))
+  })
+  return planes
+}
+
+function refreshSimulatedFenceResults() {
+  if (!simulatedFenceVisible.value || !simulatedFence) return
+  simulatedFenceResults.value = getSimulatedElectronicFenceAlerts(
+    simulatedFence,
+    getMonitoredPlanes(),
+  )
+}
+
+function formatFenceDistance(distanceMeters: number) {
+  return distanceMeters > 10_000
+    ? `${(distanceMeters / 1000).toFixed(1)} km`
+    : `${Math.round(distanceMeters)} m`
+}
+
+function toggleSimulatedFence() {
+  if (!window.viewer) {
+    message.warning('地图尚未准备完成')
+    return
+  }
+  if (simulatedFenceVisible.value) {
+    simulatedFenceVisible.value = false
+    removeSimulatedElectronicFence(window.viewer, simulatedFence)
+    simulatedFence = null
+    simulatedFenceResults.value = []
+    return
+  }
+
+  simulatedFence = createSimulatedElectronicFence(
+    window.viewer,
+    SIMULATED_ELECTRONIC_FENCE_INITIAL_POSITION,
+  )
+  simulatedFenceVisible.value = true
+  refreshSimulatedFenceResults()
+  focusSimulatedArea()
+  window.viewer.scene.requestRender()
+}
+
+watch(
+  () => [uavStore.uavInfoMap, uavStore.fp981cMap],
+  refreshSimulatedFenceResults,
+)
+
+function focusSimulatedArea() {
+  const viewer = window.viewer as Cesium.Viewer | undefined
+  if (!viewer) return
+
+  // Keep this view scoped to the simulation controls and high enough to show
+  // the whole of Hainan around the fixed simulated aircraft position.
+  viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(
+      SIMULATED_ELECTRONIC_FENCE_INITIAL_POSITION.lon,
+      SIMULATED_ELECTRONIC_FENCE_INITIAL_POSITION.lat,
+      450_000,
+    ),
+    orientation: {
+      heading: 0,
+      pitch: -Cesium.Math.PI_OVER_TWO,
+      roll: 0,
+    },
+    duration: 1.5,
+  })
+}
+
+function toggleMockFlight() {
+  const wasMockRunning = uavStore.isMock
+  uavStore.toggleMockUavInfoService()
+  if (!wasMockRunning) focusSimulatedArea()
+}
 
 function getRouteManageViewer() {
   if (!window.viewer) {
@@ -230,20 +330,42 @@ function getRouteManageViewer() {
   return window.routeManageViewer
 }
 
-async function toggleNFZ() {
+function getNFZErrorMessage(error: unknown) {
+  if (typeof error === 'string') return error
+  if (error instanceof Error) return error.message
+  return String(error)
+}
+
+async function handleNFZSelect(key: string | number) {
   if (!window.viewer || nfzLoading.value) return
   if (!nfzViewer) nfzViewer = new NFZViewer(window.viewer)
-  //下一次是显示还是隐藏禁飞区  第一次点击是显示禁飞区
-  const nextVisible = !showNFZ.value
- //点击按钮后设置禁飞区正在加载
+
+  const source = key === 'local' ? 'local' : 'sync'
   nfzLoading.value = true
   try {
-    //异步加载禁飞区 参数（是否显示）
-    await nfzViewer.toggleNFZ(nextVisible)
-    //设置是否显示禁飞区
-    showNFZ.value = nextVisible
+    await nfzViewer.toggleNFZ(true, source)
+    showNFZ.value = true
   } catch (error) {
-    message.error(error instanceof Error ? error.message : '禁飞区加载失败')
+    if (source === 'local') {
+      message.warning('请先获取禁飞区数据')
+    } else {
+      const detail = getNFZErrorMessage(error)
+      message.error(detail || '同步禁飞区失败')
+    }
+  } finally {
+    nfzLoading.value = false
+  }
+}
+
+async function hideNFZ() {
+  if (!nfzViewer || !showNFZ.value || nfzLoading.value) return
+
+  nfzLoading.value = true
+  try {
+    await nfzViewer.toggleNFZ(false)
+    showNFZ.value = false
+  } catch (error) {
+    message.error(getNFZErrorMessage(error) || '隐藏禁飞区失败')
   } finally {
     nfzLoading.value = false
   }
@@ -292,6 +414,23 @@ function startCompanionMode() {
   )
   const cameraOffset = new Cesium.Cartesian3()
   let hasAppliedInitialView = false
+  const minimumCompanionHeight = 30
+  const minimumCompanionRange = 80
+
+  function constrainCompanionOffset(offset: Cesium.Cartesian3) {
+    // camera.position is expressed in the local ENU frame established by
+    // lookAt. Preserve the user's horizontal view, but never let it pass
+    // below or inside the aircraft.
+    offset.z = Math.max(offset.z, minimumCompanionHeight)
+    const range = Cesium.Cartesian3.magnitude(offset)
+    if (range < minimumCompanionRange) {
+      Cesium.Cartesian3.multiplyByScalar(
+        offset,
+        minimumCompanionRange / Math.max(range, 1),
+        offset,
+      )
+    }
+  }
 
   const updateCompanionCamera = () => {
     if (
@@ -306,6 +445,7 @@ function startCompanionMode() {
     // camera.position 是以上一帧飞机为原点的局部偏移，包含用户的旋转和缩放。
     if (hasAppliedInitialView) {
       Cesium.Cartesian3.clone(viewer.camera.position, cameraOffset)
+      constrainCompanionOffset(cameraOffset)
     }
 
     Cesium.Matrix4.getTranslation(companionModel.modelMatrix, targetPosition)
@@ -1231,6 +1371,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   stopCompanionMode()
+  removeSimulatedElectronicFence(window.viewer, simulatedFence)
+  simulatedFence = null
   terrainWarningApi.value?.stop()
   if (mainCloseUnlisten) mainCloseUnlisten()
 })
@@ -1420,23 +1562,47 @@ async function showLinkHealthInfo() {
         </n-button>
       </n-dropdown>
       <!-- 禁飞区 -->
+      <n-dropdown
+        :options="nfzOptions"
+        trigger="hover"
+        @select="handleNFZSelect"
+      >
+        <n-tooltip placement="bottom" trigger="hover">
+          <template #trigger>
+            <n-button
+              tertiary
+              circle
+              :type="showNFZ ? 'error' : 'warning'"
+              :loading="nfzLoading"
+              @click="hideNFZ"
+            >
+              <template #icon>
+                <n-icon v-if="showNFZ"><ShieldCheckmark /></n-icon>
+                <n-icon v-else><ShieldOutline /></n-icon>
+              </template>
+            </n-button>
+          </template>
+          <!-- <span>
+            {{ showNFZ ? '隐藏禁飞区' : '显示禁飞区（悬浮选择加载方式）' }}
+          </span> -->
+        </n-tooltip>
+      </n-dropdown>
+      <!-- 模拟电子围栏 -->
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
           <n-button
             tertiary
             circle
-            :type="showNFZ ? 'error' : 'warning'"
-            :loading="nfzLoading"
-            @click="toggleNFZ"
+            :type="simulatedFenceVisible ? 'error' : 'warning'"
+            @click="toggleSimulatedFence"
           >
             <template #icon>
-              <n-icon v-if="showNFZ"><ShieldCheckmark /></n-icon>
-              <n-icon v-else><ShieldOutline /></n-icon>
+              <n-icon><ShieldOutline /></n-icon>
             </template>
           </n-button>
         </template>
         <span>
-          {{ showNFZ ? '隐藏禁飞区' : nfzViewer ? '显示禁飞区' : '加载禁飞区' }}
+          {{ simulatedFenceVisible ? '隐藏模拟电子围栏' : '模拟电子围栏' }}
         </span>
       </n-tooltip>
       <!-- UDP设置 -->
@@ -1454,11 +1620,7 @@ async function showLinkHealthInfo() {
       <!-- 模拟uavinfo -->
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
-          <n-button
-            tertiary
-            type="warning"
-            @click="uavStore.toggleMockUavInfoService"
-          >
+          <n-button tertiary type="warning" @click="toggleMockFlight">
             <template #icon>
               <n-icon><CaretForwardCircleOutline /></n-icon>
             </template>
@@ -1741,14 +1903,21 @@ async function showLinkHealthInfo() {
           <n-form-item label="协议类型">
             <n-select
               v-model:value="link.protocol"
-              :options="link.kind === 'serial' ? serialProtocolOptions : udpProtocolOptions"
+              :options="
+                link.kind === 'serial'
+                  ? serialProtocolOptions
+                  : udpProtocolOptions
+              "
               placeholder="请选择协议"
             />
           </n-form-item>
 
           <template v-if="link.kind !== 'serial'">
             <n-form-item label="目标地址">
-              <n-input v-model:value="link.ip" placeholder="组播地址或远端 IPv4" />
+              <n-input
+                v-model:value="link.ip"
+                placeholder="组播地址或远端 IPv4"
+              />
             </n-form-item>
             <n-form-item label="本地监听端口">
               <n-input-number
@@ -1946,6 +2115,38 @@ async function showLinkHealthInfo() {
       </span>
     </div>
   </div>
+  <div
+    v-if="simulatedFenceVisible && simulatedFenceResults.length > 0"
+    class="simulated-fence-panel"
+  >
+    <div class="simulated-fence-panel__header">
+      <span>模拟电子围栏检测</span>
+      <span class="simulated-fence-panel__radius">
+        围栏 {{ simulatedFence?.radiusKm.toFixed(1) ?? '--' }} km / 内
+        {{ simulatedFence?.innerBufferKm.toFixed(1) ?? '--' }} km / 外
+        {{ simulatedFence?.outerBufferKm.toFixed(1) ?? '--' }} km
+      </span>
+    </div>
+    <div
+      v-for="result in simulatedFenceResults"
+      :key="result.id"
+      class="simulated-fence-row"
+      :class="`simulated-fence-row--${result.status}`"
+    >
+      <div class="simulated-fence-row__title">
+        <strong>{{ result.label }}</strong>
+        <span>{{ result.type }}</span>
+      </div>
+      <div class="simulated-fence-row__metrics">
+        <span :class="`simulated-fence-status--${result.status}`">
+          {{ result.statusLabel }}
+        </span>
+        <span>
+          距离围栏边界 {{ formatFenceDistance(result.distanceMeters) }}
+        </span>
+      </div>
+    </div>
+  </div>
   <SpatialAnalysis ref="spatialAnalyse"></SpatialAnalysis>
   <LayerManager ref="layerManager"></LayerManager>
   <RouteOptions
@@ -2027,6 +2228,104 @@ async function showLinkHealthInfo() {
   background: rgb(21 21 21 / 94%);
   color: #fff;
   box-shadow: 0 4px 16px rgb(0 0 0 / 35%);
+}
+
+.simulated-fence-panel {
+  position: absolute;
+  left: 12px;
+  bottom: 16px;
+  z-index: 9999;
+  width: min(360px, calc(100vw - 24px));
+  padding: 12px;
+  border: 1px solid rgb(255 255 255 / 16%);
+  border-radius: 8px;
+  background: rgb(21 21 21 / 94%);
+  color: #fff;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 35%);
+  pointer-events: auto;
+}
+
+.simulated-fence-panel__header,
+.simulated-fence-row__title,
+.simulated-fence-row__metrics {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.simulated-fence-panel__header {
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.simulated-fence-panel__radius,
+.simulated-fence-row__title span,
+.simulated-fence-row__metrics span:last-child,
+.simulated-fence-panel__empty {
+  color: rgb(255 255 255 / 68%);
+  font-size: 12px;
+}
+
+.simulated-fence-row {
+  padding: 8px 9px;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-left: 3px solid #42d392;
+  border-radius: 5px;
+  background: rgb(255 255 255 / 6%);
+}
+
+.simulated-fence-row + .simulated-fence-row {
+  margin-top: 6px;
+}
+
+.simulated-fence-row--green {
+  border-left-color: #67c23a;
+  background: rgb(103 194 58 / 12%);
+}
+
+.simulated-fence-row--yellow {
+  border-left-color: #f0c419;
+  background: rgb(240 196 25 / 12%);
+}
+
+.simulated-fence-row--orange {
+  border-left-color: #f39c12;
+  background: rgb(243 156 18 / 12%);
+}
+
+.simulated-fence-row--red {
+  border-left-color: #f56c6c;
+  background: rgb(245 108 108 / 12%);
+}
+
+.simulated-fence-row__title {
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+.simulated-fence-row__metrics {
+  font-size: 12px;
+}
+
+.simulated-fence-status--green {
+  color: #67c23a;
+}
+
+.simulated-fence-status--yellow {
+  color: #f0c419;
+  font-weight: 600;
+}
+
+.simulated-fence-status--orange {
+  color: #f39c12;
+  font-weight: 600;
+}
+
+.simulated-fence-status--red {
+  color: #f56c6c;
+  font-weight: 600;
 }
 
 .terrain-warning-panel__header {
