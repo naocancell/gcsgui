@@ -5,10 +5,6 @@ use tauri::Manager;
 use tokio::sync::mpsc;
 
 use crate::comms::RawData;
-use nfz_cache::{
-    fetch_and_cache_nfz,
-    load_cached_nfz,
-};
 
 pub mod command;
 pub mod comms;
@@ -17,7 +13,7 @@ pub mod protocol;
 pub mod router;
 pub mod state;
 pub mod uplink;
-mod nfz_cache;
+pub mod encrypted_cache;
 
 pub static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
 

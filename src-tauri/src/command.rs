@@ -6,6 +6,7 @@ pub mod system;
 pub mod transponder;
 pub mod udp;
 pub mod uplink;
+pub mod encrypted_cache;
 
 pub use config::*;
 pub use network::*;
@@ -15,3 +16,4 @@ pub use system::*;
 pub use transponder::*;
 pub use udp::*;
 pub use uplink::*;
+pub use encrypted_cache::*; 
