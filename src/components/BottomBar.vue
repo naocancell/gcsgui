@@ -16,6 +16,7 @@ const seaLevel = ref('noData')
 const viewHeight = ref('noData')
 const scaleLabel = ref('noData')
 const isDecimal = ref(true)
+const scaleBarRef = ref<HTMLElement>()
 
 let lastLongitude = ''
 let lastLatitude = ''
@@ -33,7 +34,7 @@ let positionRequestId = 0
 const terrainHeightCache = new Map<string, number>()
 const terrainHeightRequests = new Map<string, Promise<number | undefined>>()
 
-const SCALE_BAR_PIXELS = 96
+const DEFAULT_SCALE_BAR_PIXELS = 72
 
 function formatCoordinate(value: string) {
   const numericValue = Number(value)
@@ -144,6 +145,8 @@ function updateScale() {
   }
 
   const centerX = Math.floor(width / 2)
+  const scaleBarPixels =
+    scaleBarRef.value?.getBoundingClientRect().width || DEFAULT_SCALE_BAR_PIXELS
   const sampleYs = [
     Math.floor(height * 0.68),
     Math.floor(height * 0.78),
@@ -153,8 +156,8 @@ function updateScale() {
   let metersPerPixel: number | undefined
 
   for (const sampleY of sampleYs) {
-    const left = pickGroundPoint(centerX - SCALE_BAR_PIXELS / 2, sampleY)
-    const right = pickGroundPoint(centerX + SCALE_BAR_PIXELS / 2, sampleY)
+    const left = pickGroundPoint(centerX - scaleBarPixels / 2, sampleY)
+    const right = pickGroundPoint(centerX + scaleBarPixels / 2, sampleY)
     if (!left || !right) continue
 
     const ellipsoid = viewer.scene.globe.ellipsoid
@@ -164,7 +167,7 @@ function updateScale() {
     )
     const distance = geodesic.surfaceDistance
     if (Number.isFinite(distance) && distance > 0) {
-      metersPerPixel = distance / SCALE_BAR_PIXELS
+      metersPerPixel = distance / scaleBarPixels
       break
     }
   }
@@ -176,7 +179,7 @@ function updateScale() {
     return
   }
 
-  const measuredDistance = metersPerPixel * SCALE_BAR_PIXELS
+  const measuredDistance = metersPerPixel * scaleBarPixels
   smoothedScaleDistance =
     smoothedScaleDistance === undefined
       ? measuredDistance
@@ -308,7 +311,7 @@ onUnmounted(() => {
       <span class="status-divider" aria-hidden="true"></span>
       <span class="status-item scale-item">
         <span class="status-label">比例尺：</span>
-        <span class="scale-line" aria-hidden="true"></span>
+        <span ref="scaleBarRef" class="scale-line" aria-hidden="true"></span>
         <span class="status-value">{{ scaleLabel }}</span>
       </span>
       <button
@@ -335,11 +338,11 @@ onUnmounted(() => {
   padding: 0 16px;
   color: rgba(240, 246, 250, 0.94);
   font:
-    11px 'Segoe UI',
+    12px 'Segoe UI',
     'Microsoft YaHei',
     sans-serif;
-  background: rgba(15, 24, 32, 0.78);
-  border-top: 1px solid rgba(108, 173, 194, 0.28);
+  background: rgba(12, 21, 29, 0.84);
+  border-top: 1px solid rgba(137, 205, 225, 0.4);
   box-shadow: 0 -4px 20px rgba(3, 10, 16, 0.18);
   backdrop-filter: blur(10px);
   box-sizing: border-box;
@@ -350,7 +353,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 7px;
   min-height: 38px;
   width: min(100%, 1240px);
   margin: 0 auto;
@@ -366,32 +369,36 @@ onUnmounted(() => {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   white-space: nowrap;
 }
 
 .coordinate-item {
-  gap: 4px;
+  gap: 1px;
 }
 
 .status-label {
-  color: rgba(169, 190, 202, 0.82);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
+  color: rgba(224, 237, 244, 0.96);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
 }
 
 .status-value {
   min-width: 0;
-  color: #f3f7f9;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 650;
   font-family: 'Cascadia Mono', 'Consolas', monospace;
   font-variant-numeric: tabular-nums;
   text-align: left;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
 }
 
 .coordinate-item .status-value {
-  width: 126px;
-  min-width: 126px;
+  width: 116px;
+  min-width: 116px;
   text-align: left;
 }
 
@@ -403,23 +410,24 @@ onUnmounted(() => {
 .status-divider {
   flex: 0 0 auto;
   width: 1px;
-  height: 16px;
+  height: 19px;
   margin: 0;
-  background: rgba(157, 190, 202, 0.34);
+  background: rgba(190, 218, 230, 0.54);
 }
 
 .scale-item {
-  gap: 8px;
+  gap: 5px;
 }
 
 .scale-line {
   display: inline-block;
-  flex: 0 0 96px;
-  width: 96px;
-  height: 6px;
-  border-right: 1px solid rgba(117, 205, 220, 0.95);
-  border-bottom: 1px solid rgba(117, 205, 220, 0.95);
-  border-left: 1px solid rgba(117, 205, 220, 0.95);
+  flex: 0 0 72px;
+  width: 72px;
+  height: 8px;
+  border-right: 2px solid #b9f3ff;
+  border-bottom: 2px solid #b9f3ff;
+  border-left: 2px solid #b9f3ff;
+  filter: drop-shadow(0 0 3px rgba(91, 218, 242, 0.72));
 }
 
 .format-button {
@@ -451,11 +459,11 @@ onUnmounted(() => {
     padding: 0 9px;
   }
   .status-content {
-    gap: 8px;
+    gap: 5px;
   }
   .coordinate-item .status-value {
-    width: 120px;
-    min-width: 120px;
+    width: 112px;
+    min-width: 112px;
   }
   .scale-line {
     flex-basis: 72px;

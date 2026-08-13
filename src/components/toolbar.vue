@@ -2250,7 +2250,7 @@ async function showLinkHealthInfo() {
 .simulated-fence-panel {
   position: absolute;
   left: 12px;
-  bottom: 16px;
+  bottom: 46px;
   z-index: 9999;
   width: min(360px, calc(100vw - 24px));
   padding: 12px;

@@ -1,20 +1,22 @@
 <script setup lang="ts">
-import { Menu } from '@vicons/ionicons5'
+import { EllipsisHorizontal, LayersOutline } from '@vicons/ionicons5'
 import * as Cesium from 'cesium'
-import { computed } from 'vue'
+import { useMessage } from 'naive-ui'
+import { computed, toRaw } from 'vue'
 import { useLayerStore } from '@/store/layerManagerStore.ts'
 import { removeLayerResources } from '@/utils/map/layerResources'
 
 const props = defineProps<{ lname: string; lid?: string }>()
 const layerStore = useLayerStore()
+const message = useMessage()
 
 const itemOptions = [
-  { label: '移除图层', key: 'remove' },
-  { label: '缩放至图层', key: 'lookAt' },
-  { label: '移至顶层', key: 'moveTop' },
+  { label: '定位图层', key: 'lookAt' },
   { label: '上移一层', key: 'moveUp' },
   { label: '下移一层', key: 'moveDown' },
+  { label: '移至顶层', key: 'moveTop' },
   { label: '移至底层', key: 'moveBottom' },
+  { label: '移除图层', key: 'remove' },
 ]
 
 const currentLayer = computed(() =>
@@ -77,17 +79,24 @@ async function handleLayerItem(key: string) {
     case 'remove':
       try {
         await removeLayerResources(window.viewer, layer)
-      } catch (error) {
-        console.error('移除图层资源失败:', error)
-      } finally {
         layerStore.removeLayer(layer.lId)
         window.viewer.scene.requestRender()
+        message.success(`图层已移除：${layer.lName}`)
+      } catch (error) {
+        message.error(`图层移除失败：${layer.lName}`)
+        console.error('移除图层资源失败:', error)
       }
       break
     case 'lookAt': {
       const dataSource = await getDataSource(layer)
       if (dataSource && window.viewer.dataSources.contains(dataSource)) {
         await window.viewer.flyTo(dataSource)
+      } else if (layer.imageLayer) {
+        const imageLayer = toRaw(layer.imageLayer)
+        const rectangle = imageLayer.imageryProvider?.rectangle
+        if (rectangle) {
+          window.viewer.camera.flyTo({ destination: rectangle, duration: 1.5 })
+        }
       } else {
         flyToEntities(getEntities(layer))
       }
@@ -95,7 +104,7 @@ async function handleLayerItem(key: string) {
     }
     case 'moveTop': {
       if (layer.imageLayer)
-        window.viewer.imageryLayers.raiseToTop(layer.imageLayer)
+        window.viewer.imageryLayers.raiseToTop(toRaw(layer.imageLayer))
       const dataSource = await getDataSource(layer)
       if (dataSource && window.viewer.dataSources.contains(dataSource)) {
         window.viewer.dataSources.raiseToTop(dataSource)
@@ -106,7 +115,7 @@ async function handleLayerItem(key: string) {
     }
     case 'moveBottom': {
       if (layer.imageLayer)
-        window.viewer.imageryLayers.lowerToBottom(layer.imageLayer)
+        window.viewer.imageryLayers.lowerToBottom(toRaw(layer.imageLayer))
       const dataSource = await getDataSource(layer)
       if (dataSource && window.viewer.dataSources.contains(dataSource)) {
         window.viewer.dataSources.lowerToBottom(dataSource)
@@ -116,7 +125,8 @@ async function handleLayerItem(key: string) {
       break
     }
     case 'moveUp': {
-      if (layer.imageLayer) window.viewer.imageryLayers.raise(layer.imageLayer)
+      if (layer.imageLayer)
+        window.viewer.imageryLayers.raise(toRaw(layer.imageLayer))
       const dataSource = await getDataSource(layer)
       if (dataSource && window.viewer.dataSources.contains(dataSource)) {
         window.viewer.dataSources.raise(dataSource)
@@ -126,7 +136,8 @@ async function handleLayerItem(key: string) {
       break
     }
     case 'moveDown': {
-      if (layer.imageLayer) window.viewer.imageryLayers.lower(layer.imageLayer)
+      if (layer.imageLayer)
+        window.viewer.imageryLayers.lower(toRaw(layer.imageLayer))
       const dataSource = await getDataSource(layer)
       if (dataSource && window.viewer.dataSources.contains(dataSource)) {
         window.viewer.dataSources.lower(dataSource)
@@ -152,7 +163,7 @@ async function onCheck(checked: boolean) {
     }
   }
 
-  if (layer.imageLayer) layer.imageLayer.show = checked
+  if (layer.imageLayer) toRaw(layer.imageLayer).show = checked
 
   // 不从 viewer.entities 删除实体，只切换 show，避免重新勾选时丢失引用。
   for (const entity of getEntities(layer)) {
@@ -167,9 +178,12 @@ async function onCheck(checked: boolean) {
 </script>
 
 <template>
-  <n-row class="layer-item-row">
+  <div class="layer-item-row">
+    <div class="layer-item-icon" aria-hidden="true">
+      <n-icon size="16"><LayersOutline /></n-icon>
+    </div>
     <n-checkbox
-      size="medium"
+      size="small"
       :label="props.lname"
       class="layer-item-checkbox"
       :checked="layerShow"
@@ -180,34 +194,73 @@ async function onCheck(checked: boolean) {
       :options="itemOptions"
       @select="handleLayerItem"
     >
-      <n-button tertiary type="success" size="medium">
+      <n-button quaternary circle size="small" aria-label="图层操作">
         <template #icon>
-          <n-icon><Menu /></n-icon>
+          <n-icon><EllipsisHorizontal /></n-icon>
         </template>
       </n-button>
     </n-dropdown>
-  </n-row>
+  </div>
 </template>
 
 <style scoped>
 .layer-item-row {
   display: flex;
-  flex-wrap: nowrap;
   align-items: center;
+  gap: 0.55rem;
   width: 100%;
+  min-height: 3rem;
   min-width: 0;
-  border-bottom: 1px solid #e7e6e6;
+  padding: 0.35rem 0.4rem 0.35rem 0.55rem;
+  margin-bottom: 0.45rem;
+  background: rgb(30 44 60 / 42%);
+  border: 1px solid rgb(148 163 184 / 13%);
+  border-radius: 9px;
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease,
+    transform 0.18s ease;
+}
+
+.layer-item-row:hover {
+  background: rgb(45 62 80 / 68%);
+  border-color: rgb(125 211 252 / 25%);
+  transform: translateY(-1px);
+}
+
+.layer-item-icon {
+  display: grid;
+  flex: 0 0 1.8rem;
+  place-items: center;
+  width: 1.8rem;
+  height: 1.8rem;
+  color: #7dd3fc;
+  background: rgb(56 189 248 / 12%);
+  border: 1px solid rgb(56 189 248 / 16%);
+  border-radius: 7px;
 }
 
 .layer-item-checkbox {
   flex: 1 1 auto;
   min-width: 0;
-  margin-left: 1rem;
   overflow: hidden;
+}
+
+.layer-item-checkbox :deep(.n-checkbox__box) {
+  border-color: rgb(148 163 184 / 42%);
+  background: rgb(15 23 42 / 35%);
+}
+
+.layer-item-checkbox :deep(.n-checkbox--checked .n-checkbox__box) {
+  border-color: #38bdf8;
+  background: #0ea5e9;
 }
 
 .layer-item-checkbox :deep(.n-checkbox__label) {
   min-width: 0;
+  color: #dbe5ef;
+  font-size: 0.78rem;
+  font-weight: 520;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -216,12 +269,17 @@ async function onCheck(checked: boolean) {
 .layer-item-actions {
   flex: 0 0 auto;
   flex-shrink: 0;
-  margin-left: 0.5rem;
   white-space: nowrap;
 }
 
 .layer-item-actions :deep(.n-button) {
   flex: 0 0 auto;
+  color: #8ca2b9;
   white-space: nowrap;
+}
+
+.layer-item-actions :deep(.n-button:hover) {
+  color: #f8fafc;
+  background: rgb(148 163 184 / 16%);
 }
 </style>

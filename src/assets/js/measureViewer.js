@@ -1,5 +1,6 @@
 import * as Cesium from 'cesium'
 import { Cartesian3 } from 'cesium'
+import { markRaw } from 'vue'
 import { useStaticStore } from '@/store/staticOptions.js'
 import { useLayerStore } from '@/store/layerManagerStore.ts'
 import { ByDirectionAndLen } from '@/utils/map/geocomputation.ts'
@@ -212,17 +213,27 @@ export default class MeasureViewer {
     })
   }
 //添加WMS图层函数
-  AddWMSLayer(url) {
+  async AddWMSLayer(url, layers, bounds) {
     //
+    const rectangle = bounds
+      ? Cesium.Rectangle.fromDegrees(
+          bounds.west,
+          bounds.south,
+          bounds.east,
+          bounds.north,
+        )
+      : undefined
     let wmsProvider = new Cesium.WebMapServiceImageryProvider({
       url: url, //baseurl + workspace + '/wms',
+      layers: layers,
+      rectangle: rectangle,
       enablePickFeatures: true,//开启拾取功能
       defaultAlpha: 0,          //设置透明度
       parameters: {
         service: 'WMS',          //服务类型
         version: '1.1.1',        //版本
         request: 'GetMap',       //请求类型  
-        format: 'image/png8',    //图片格式
+        format: 'image/png',     //图片格式
         styles: '',               //样式
         transparent: true,        //透明
       },
@@ -230,8 +241,23 @@ export default class MeasureViewer {
     let imageLayer = new Cesium.ImageryLayer(wmsProvider, {
       alpha: 0.6,
     })
+    const previewRequest = wmsProvider.requestImage(0, 0, 0)
+    if (!previewRequest) {
+      throw new Error('WMS 图层请求暂时无法调度')
+    }
+    await previewRequest
     this.viewer.imageryLayers.add(imageLayer)//添加图层到v
-    useLayerStore().addLayer(url, undefined, imageLayer, undefined, true)
+    useLayerStore().addLayer(
+      layers,
+      undefined,
+      markRaw(imageLayer),
+      undefined,
+      true,
+    )
+    if (rectangle) {
+      this.viewer.camera.flyTo({ destination: rectangle, duration: 1.5 })
+    }
+    return imageLayer
   }
 
   /**

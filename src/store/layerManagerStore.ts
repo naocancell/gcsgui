@@ -47,7 +47,8 @@ export const useLayerStore = defineStore('LayerStore', {
         show: show,
       }
       //记录图层
-      this.Layers.push(layer)
+      // Cesium 将新加载的图层追加到渲染栈顶，管理列表也保持顶层优先。
+      this.Layers.unshift(layer)
     },
     removeLayer(lId: string) {
       let i = this.Layers.findIndex((layer: layer) => layer.lId === lId)
