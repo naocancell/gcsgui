@@ -29,7 +29,8 @@ type LosLineSamples = {
 }
 
 type PendingLosLine = {
-  index: number
+  routeSampleIndex: number
+  viewPointIndex: number
   lineSamples: LosLineSamples
 }
 
@@ -62,6 +63,9 @@ const TERRAIN_SAMPLE_LEVEL = 13
 const TERRAIN_TILE_CONCURRENCY = 10
 const TERRAIN_TILE_LRU_CAPACITY = 512
 const TERRAIN_REQUEST_RETRY_DELAY_MS = 20
+// 同时限制 LOS 条数和采样点数量，避免少量超长视线撑大单个批次。
+const LOS_ROUTE_BATCH_SIZE = 2
+const LOS_TERRAIN_POSITION_BATCH_SIZE = 1000
 //绘制时候的批次大小
 const DRAW_BATCH_SIZE = 100
 //各结果2使用不同高度偏移，避免同时显示时产生深度冲突。
@@ -639,17 +643,12 @@ export function useRouteLineOfSight() {
         signal,
       )
 
-      const resultsByViewPoint: boolean[][] = []
-      for (const startCartographic of startCartographics) {
-        resultsByViewPoint.push(
-          await analyseWithTerrainBatches(
-            airLineSamples,
-            startCartographic,
-            losInterval,
-            signal,
-          ),
-        )
-      }
+      const resultsByViewPoint = await analyseWithTerrainBatches(
+        airLineSamples,
+        startCartographics,
+        losInterval,
+        signal,
+      )
       const mergedResults = mergeLosVisibilityResults(resultsByViewPoint)
       const viewPointResult2Positions = resultsByViewPoint.map(
         (_, viewPointIndex) =>
@@ -772,7 +771,7 @@ export function useRouteLineOfSight() {
   //多条视线共享瓦片数据，避免跨批次重复下载和创建地形网格。
   async function analyseWithTerrainBatches(
     samples: RouteSample[],
-    start: Cartographic,
+    starts: Cartographic[],
     interval = 200,
     signal?: AbortSignal,
   ) {
@@ -790,11 +789,14 @@ export function useRouteLineOfSight() {
     //根据某瓦片分组加载对应的 Cesium 地形瓦片，并使用缓存避免同一个瓦片被重复请求。
     async function loadTerrainTile(group: TerrainTileGroup) {
       const cacheKey = `${terrainProviderId}/${group.key}`
-      const cachedTile = getCachedTerrainTile(cacheKey)
-      if (cachedTile) return cachedTile
-
       const pendingRequest = terrainTileRequests.get(cacheKey)
       if (pendingRequest) return pendingRequest
+
+      const cachedTile = getCachedTerrainTile(cacheKey)
+      if (cachedTile) {
+        terrainTileRequests.set(cacheKey, Promise.resolve(cachedTile))
+        return cachedTile
+      }
       //立即执行异步函数 请求对应的地形瓦片并缓存
       const tilePromise = (async (): Promise<CachedTerrainTile | null> => {
         let requestPromise
@@ -837,13 +839,23 @@ export function useRouteLineOfSight() {
       return tilePromise
     }
     //从地形瓦片中获取高度  返回结果是否需要创建mesh
-    function interpolateTerrainHeights(
+    async function interpolateTerrainHeights(
       tile: CachedTerrainTile,
       positions: Cartographic[],
     ) {
       let meshRequired = false
+      let sliceStartedAt = performance.now()
 
-      for (const position of positions) {
+      for (let index = 0; index < positions.length; index++) {
+        if (
+          index > 0 &&
+          index % TIME_BUDGET_CHECK_INTERVAL === 0 &&
+          hasExceededTimeBudget(sliceStartedAt)
+        ) {
+          sliceStartedAt = await yieldAndCheckCancellation(signal)
+        }
+
+        const position = positions[index]
         const height = tile.terrainData.interpolateHeight(
           tile.rectangle,
           position.longitude,
@@ -870,7 +882,7 @@ export function useRouteLineOfSight() {
         return
       }
 
-      if (!interpolateTerrainHeights(tile, group.positions)) return
+      if (!(await interpolateTerrainHeights(tile, group.positions))) return
 
       if (!tile.meshPromise) {
         tile.meshPromise = tile.terrainData
@@ -887,7 +899,7 @@ export function useRouteLineOfSight() {
       try {
         await tile.meshPromise
         throwIfCancelled(signal)
-        interpolateTerrainHeights(tile, group.positions)
+        await interpolateTerrainHeights(tile, group.positions)
       } catch (error) {
         if (error instanceof LosAnalysisCancelledError) throw error
         group.positions.forEach((position) => {
@@ -896,11 +908,22 @@ export function useRouteLineOfSight() {
       }
     }
 
-    function addPositionsToTerrainGroups(
+    async function addPositionsToTerrainGroups(
       positions: Cartographic[],
       tileGroups: Map<string, TerrainTileGroup>,
     ) {
-      for (const position of positions) {
+      let sliceStartedAt = performance.now()
+
+      for (let index = 0; index < positions.length; index++) {
+        if (
+          index > 0 &&
+          index % TIME_BUDGET_CHECK_INTERVAL === 0 &&
+          hasExceededTimeBudget(sliceStartedAt)
+        ) {
+          sliceStartedAt = await yieldAndCheckCancellation(signal)
+        }
+
+        const position = positions[index]
         const tileXY = tilingScheme.positionToTileXY(
           position,
           TERRAIN_SAMPLE_LEVEL,
@@ -943,46 +966,83 @@ export function useRouteLineOfSight() {
       await Promise.all(Array.from({ length: workerCount }, worker))
     }
 
-    const results = new Array<boolean>(samples.length)
-    const startCartesian = Cartesian3.fromRadians(
-      start.longitude,
-      start.latitude,
-      start.height,
+    const resultsByViewPoint = starts.map(
+      () => new Array<boolean>(samples.length),
+    )
+    const startCartesians = starts.map((start) =>
+      Cartesian3.fromRadians(start.longitude, start.latitude, start.height),
     )
     const pendingLines: PendingLosLine[] = []
     const tileGroups = new Map<string, TerrainTileGroup>()
+    let pendingRouteSampleCount = 0
+    let pendingTerrainPositionCount = 0
     let sliceStartedAt = performance.now()
 
-    for (let index = 0; index < samples.length; index++) {
+    async function flushPendingLines() {
+      if (pendingLines.length === 0) return
+
+      await sampleTerrainGroups(tileGroups)
       throwIfCancelled(signal)
-      const lineSamples = await createLineSamples(
-        startCartesian,
-        samples[index].cartesian,
-        interval,
-        signal,
-      )
 
-      pendingLines.push({ index, lineSamples })
-      addPositionsToTerrainGroups(lineSamples.cartographics, tileGroups)
+      let evaluationSliceStartedAt = performance.now()
+      for (const pendingLine of pendingLines) {
+        const { routeSampleIndex, viewPointIndex, lineSamples } = pendingLine
+        resultsByViewPoint[viewPointIndex][routeSampleIndex] =
+          await evaluateLineVisibility(lineSamples, signal)
+
+        if (hasExceededTimeBudget(evaluationSliceStartedAt)) {
+          evaluationSliceStartedAt = await yieldAndCheckCancellation(signal)
+        }
+      }
+
+      pendingLines.length = 0
+      tileGroups.clear()
+      pendingRouteSampleCount = 0
+      pendingTerrainPositionCount = 0
+      sliceStartedAt = await yieldAndCheckCancellation(signal)
+    }
+
+    for (
+      let routeSampleIndex = 0;
+      routeSampleIndex < samples.length;
+      routeSampleIndex++
+    ) {
+      throwIfCancelled(signal)
+
+      for (
+        let viewPointIndex = 0;
+        viewPointIndex < startCartesians.length;
+        viewPointIndex++
+      ) {
+        const lineSamples = await createLineSamples(
+          startCartesians[viewPointIndex],
+          samples[routeSampleIndex].cartesian,
+          interval,
+          signal,
+        )
+
+        pendingLines.push({ routeSampleIndex, viewPointIndex, lineSamples })
+        pendingTerrainPositionCount += lineSamples.cartographics.length
+        await addPositionsToTerrainGroups(lineSamples.cartographics, tileGroups)
+      }
+
+      pendingRouteSampleCount++
+
+      if (
+        pendingRouteSampleCount >= LOS_ROUTE_BATCH_SIZE ||
+        pendingTerrainPositionCount >= LOS_TERRAIN_POSITION_BATCH_SIZE
+      ) {
+        await flushPendingLines()
+        continue
+      }
 
       if (hasExceededTimeBudget(sliceStartedAt)) {
         sliceStartedAt = await yieldAndCheckCancellation(signal)
       }
     }
 
-    await sampleTerrainGroups(tileGroups)
-    throwIfCancelled(signal)
-
-    sliceStartedAt = performance.now()
-    for (const { index, lineSamples } of pendingLines) {
-      results[index] = await evaluateLineVisibility(lineSamples, signal)
-
-      if (hasExceededTimeBudget(sliceStartedAt)) {
-        sliceStartedAt = await yieldAndCheckCancellation(signal)
-      }
-    }
-
-    return results
+    await flushPendingLines()
+    return resultsByViewPoint
   }
 
   //对两个点之间进行通视分析

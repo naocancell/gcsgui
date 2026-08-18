@@ -29,6 +29,13 @@ type LosAnalyseForm = Omit<
   'isDualViewPointMode' | 'viewPoints'
 >
 
+const COORDINATE_PRECISION = 8
+const COORDINATE_STEP = 10 ** -COORDINATE_PRECISION
+
+function roundCoordinate(value: number) {
+  return Number(value.toFixed(COORDINATE_PRECISION))
+}
+
 const props = defineProps<{
   show?: boolean
 }>()
@@ -185,8 +192,8 @@ function startMapPointPick(viewPointIndex: ViewPointIndex) {
         }
 
         const viewPoint = viewPoints.value[viewPointIndex]
-        viewPoint.longitude = Number(longitude.toFixed(6))
-        viewPoint.latitude = Number(latitude.toFixed(6))
+        viewPoint.longitude = roundCoordinate(longitude)
+        viewPoint.latitude = roundCoordinate(latitude)
         if (!viewPoint.useRelativeHeight) {
           viewPoint.altitude = Math.max(-2000, Number(height.toFixed(2)))
         }
@@ -340,8 +347,8 @@ const done = async () => {
             ? await getLevel13TerrainHeight(index)
             : 0
           return {
-            longitude: Number(viewPoint.longitude),
-            latitude: Number(viewPoint.latitude),
+            longitude: roundCoordinate(Number(viewPoint.longitude)),
+            latitude: roundCoordinate(Number(viewPoint.latitude)),
             altitude: Number((viewPoint.altitude + terrainHeight).toFixed(2)),
           }
         },
@@ -387,8 +394,8 @@ async function applyWaypointToViewPoint(
 
   const useRelativeHeight = viewPoints.value[viewPointIndex].useRelativeHeight
   viewPoints.value[viewPointIndex] = {
-    longitude: Number(longitude.toFixed(6)),
-    latitude: Number(latitude.toFixed(6)),
+    longitude: roundCoordinate(longitude),
+    latitude: roundCoordinate(latitude),
     altitude,
     useRelativeHeight: false,
     appliedWaypointIndex: waypointIndex,
@@ -600,8 +607,8 @@ onBeforeUnmount(() => {
             placeholder="110"
             :min="-180"
             :max="180"
-            :step="0.000001"
-            :precision="6"
+            :step="COORDINATE_STEP"
+            :precision="COORDINATE_PRECISION"
             @update:value="clearAppliedWaypoint(activeViewPointIndex)"
           />
         </n-form-item>
@@ -612,8 +619,8 @@ onBeforeUnmount(() => {
             placeholder="23"
             :min="-90"
             :max="90"
-            :step="0.000001"
-            :precision="6"
+            :step="COORDINATE_STEP"
+            :precision="COORDINATE_PRECISION"
             @update:value="clearAppliedWaypoint(activeViewPointIndex)"
           />
         </n-form-item>

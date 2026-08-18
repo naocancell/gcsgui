@@ -1,16 +1,8 @@
 import * as Cesium from 'cesium'
 import { invoke } from '@tauri-apps/api/core'
+import { resolveObstacleModelUri } from '@/utils/model/modelCache'
 
-const obstacleIcons = {
-    lowPowerPole:'/model/低压电杆.glb',
-    highPowerPole:'/model/高压电杆.glb',
-    highPowerTower:'/model/高压电塔.glb',
-    signalTower:'/model/信号塔.glb',
-    radarStation:'/model/雷达站.glb',
-    waterTower:'/model/水塔.glb',
-    house:'/model/房子.glb'
-}
-const obstacleSize = {
+const obstacleSize: Record<string, number> = {
     lowPowerPole:0.8,
     highPowerPole:1.5,
     highPowerTower:0.03,
@@ -178,7 +170,7 @@ export function useMarkObstacle() {
     }
 
     // 添加单个障碍物
-    function addObstacle(obstacle,longitude,latitude){
+    function addObstacle(obstacle, longitude, latitude, modelUri: string | null = null) {
         //真北极
         const obstacleEntity = window.viewer.entities.add({
             position:
@@ -188,28 +180,30 @@ export function useMarkObstacle() {
                 ),
             // 新添加的障碍物要跟随当前显示状态
             show: obstacleVisible,
-            model: {
-                uri:obstacleIcons[obstacle.type],
-                 // 模型锚点贴到地形表面
-                heightReference:
-                    Cesium.HeightReference.CLAMP_TO_GROUND,
-                scale: obstacleSize[obstacle.type],
-
-                distanceDisplayCondition:
-                    new Cesium.DistanceDisplayCondition(
-                        0,
-                        30000
-                    ),
-                 // 轮廓颜色
-                silhouetteColor:
-                    Cesium.Color.CYAN.withAlpha(1.0),
-
-                // 轮廓宽度，单位是屏幕像素
-                silhouetteSize: 3
-            },
+            ...(modelUri
+                ? {
+                    model: {
+                        uri: modelUri,
+                        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                        scale: obstacleSize[obstacle.type] ?? 1,
+                        distanceDisplayCondition:
+                            new Cesium.DistanceDisplayCondition(0, 30000),
+                        silhouetteColor: Cesium.Color.CYAN.withAlpha(1.0),
+                        silhouetteSize: 3
+                    }
+                }
+                : {
+                    point: {
+                        pixelSize: 10,
+                        color: Cesium.Color.ORANGE,
+                        outlineColor: Cesium.Color.WHITE,
+                        outlineWidth: 2,
+                        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND
+                    }
+                }),
             // billboard:{
             //     image:
-            //         obstacleIcons[obstacle.type],
+            //         modelUri,
             //     width:
             //         50,
             //     height:
@@ -322,6 +316,34 @@ export function useMarkObstacle() {
 
         return obstacleEntity
     }
+
+    async function resolveModelUris(items: any[]): Promise<Map<string, string | null>> {
+        //用于记录障碍物类型有哪些（不重复）
+        const obstacleTypes = new Set<string>()
+         // 提取所有不同的障碍物类型（去重）
+        items.forEach((item) => {
+            if (typeof item?.type === 'string') obstacleTypes.add(item.type)
+        })
+        // 创建最终返回的 Map
+        const modelUris = new Map<string, string | null>()
+        //传递一个异步的Promise数组 对每个类型并发发起请求
+        await Promise.all(
+            //对每个类型都进行异步处理
+            Array.from(obstacleTypes).map(async (obstacleType) => {
+                try {
+                    modelUris.set(
+                        obstacleType,
+                        await resolveObstacleModelUri(obstacleType)
+                    )
+                } catch (error) {
+                    console.error(`模型加载失败: ${obstacleType}`, error)
+                    modelUris.set(obstacleType, null)
+                }
+            })
+        )
+        return modelUris
+    }
+
     // 添加全部障碍物
     function addAllObstaclesFromFile(): void {
         // 每次进入加载流程都恢复为显示状态，随后新增的实体也会继承该状态。
@@ -358,6 +380,8 @@ export function useMarkObstacle() {
                             'JSON 文件的顶层数据必须是数组'
                         )
                     }
+
+                    const modelUris = await resolveModelUris(parsedData.slice(1))
 
                     parsedData.forEach(
                         (item: any, index: number) => {
@@ -422,7 +446,8 @@ export function useMarkObstacle() {
                                     addObstacle(
                                         obstacle,
                                         position.longitude,
-                                        position.latitude
+                                        position.latitude,
+                                        modelUris.get(obstacle.type) ?? null
                                     )
                                } catch (error) {
                                 console.error(
@@ -474,7 +499,8 @@ export function useMarkObstacle() {
                                 addObstacle(
                                     obstacle,
                                     longitude,
-                                    latitude
+                                    latitude,
+                                    modelUris.get(obstacle.type) ?? null
                                 )
                                } catch (error) {
                                 console.error(
@@ -516,7 +542,7 @@ export function useMarkObstacle() {
         hoverObstacleEntity = undefined
     }
 
-    function renderObstacles(parsedData: unknown): number {
+    async function renderObstacles(parsedData: unknown): Promise<number> {
         if (!Array.isArray(parsedData) || parsedData.length === 0) {
             throw new Error('障碍物数据为空或顶层数据不是数组')
         }
@@ -524,6 +550,8 @@ export function useMarkObstacle() {
         clearObstacles()
         const metadata = parsedData[0] as any
         const type = metadata?.type
+        const modelUris = await resolveModelUris(parsedData.slice(1))
+
         let loadedCount = 0
 
         parsedData.slice(1).forEach((item: any, index: number) => {
@@ -559,7 +587,12 @@ export function useMarkObstacle() {
                     throw new Error(`不支持的障碍物数据类型: ${String(type)}`)
                 }
 
-                addObstacle(item, longitude, latitude)
+                addObstacle(
+                    item,
+                    longitude,
+                    latitude,
+                    modelUris.get(item.type) ?? null
+                )
                 loadedCount += 1
             } catch (error) {
                 console.error(`第${index + 2}条障碍物数据加载失败：`, error, item)

@@ -44,6 +44,7 @@ import { flyToDefault } from '@/utils/map/camera.ts'
 import MeasureViewer from '@/assets/js/measureViewer.js'
 import { useLoadPlane } from "@/hooks/useLoadPlane";
 import { useMarkObstacle } from "@/hooks/useMarkObstacle";
+import { cacheCommonModelsToDisk } from '@/utils/model/modelCache'
 
 const viewerDivRef = ref<HTMLDivElement>()
 let viewer: Viewer
@@ -68,7 +69,8 @@ const flyToInitialLocation = () => {
     duration: 1.5,
   })
 }
-
+//延时
+let modelWarmupTimer: ReturnType<typeof setTimeout> | undefined
 // 组件加载就监听显示飞机实施的位置
   const {init,clearAll} = useLoadPlane();
 onMounted(async () => {
@@ -139,6 +141,14 @@ onMounted(async () => {
   // 挂载在window，供全局组件共享
   window.viewer = viewer
   window.measureViewer = new MeasureViewer(viewer)
+  // 等地图完成首帧显示后，再后台检查模型缓存
+    modelWarmupTimer = setTimeout(() => {
+      if (!navigator.onLine) return
+
+      void cacheCommonModelsToDisk().catch(error => {
+        console.warn('常用模型磁盘缓存失败:', error)
+      })
+    }, 200)
 
   //添加天地图影像
   // viewer.imageryLayers.addImageryProvider(
@@ -172,6 +182,9 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+   if (modelWarmupTimer) {
+    clearTimeout(modelWarmupTimer)
+  }
   clearAll(viewer);//清除监听
   if (viewer) {
     viewer.destroy()

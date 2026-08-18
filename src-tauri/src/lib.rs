@@ -152,6 +152,7 @@ pub fn run() {
             load_cached_nfz,
             fetch_and_cache_obstacles,
             load_cached_obstacles,
+            ensure_model_cached,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

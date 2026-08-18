@@ -41,6 +41,7 @@ function initViewer(container: string | Element): Viewer {
     sceneMode: SceneMode.SCENE3D, //设置场景模式，3D球体
     // terrain: Cesium.Terrain.fromWorldTerrain(),
     baseLayerPicker: false, //是否显示图层选择控件
+    targetFrameRate: 60, //活动场景固定以最高 60 FPS 调度
     requestRenderMode: true, //启用请求渲染模式
     scene3DOnly: false, //每个几何实例将只能以3D渲染以节省GPU内存
     fullscreenButton: false, //右下角 全屏控件
