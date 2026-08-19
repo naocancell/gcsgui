@@ -12,6 +12,9 @@ const obstacleSize: Record<string, number> = {
     house:0.003,
 }
 
+// Labels are rendered by one shared hover entity instead of one label per obstacle.
+const ENABLE_PER_ENTITY_LABEL = false
+
 /**
  * 根据基准点、磁方位、距离、磁偏角，计算目标点经纬度
  *
@@ -110,6 +113,47 @@ export function useMarkObstacle() {
 
     let hoverObstacleEntity: Cesium.Entity | undefined = undefined //记录的悬浮的障碍物
     let hoverHandler: Cesium.ScreenSpaceEventHandler | undefined = undefined //处理事件
+    let hoverLabelEntity: Cesium.Entity | undefined = undefined
+
+    function ensureHoverLabel(): Cesium.Entity {
+        if (hoverLabelEntity && !window.viewer.entities.contains(hoverLabelEntity)) {
+            hoverLabelEntity = undefined
+        }
+        if (hoverLabelEntity) return hoverLabelEntity
+
+        hoverLabelEntity = window.viewer.entities.add({
+            show: false,
+            position: Cesium.Cartesian3.ZERO,
+            label: {
+                show: false,
+                text: '',
+                font: 'bold 13px sans-serif',
+                style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                fillColor: Cesium.Color.WHITE,
+                outlineColor: Cesium.Color.BLACK,
+                outlineWidth: 1,
+                showBackground: true,
+                backgroundColor: Cesium.Color.BLACK.withAlpha(0.6),
+                backgroundPadding: new Cesium.Cartesian2(8, 4),
+                horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+                verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                pixelOffset: new Cesium.Cartesian2(0, -45),
+                heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                scaleByDistance: new Cesium.NearFarScalar(1000, 1.0, 20000, 0.8),
+                distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 20000),
+            },
+        })
+        return hoverLabelEntity
+    }
+
+    function hideHoverLabel(): void {
+        if (!hoverLabelEntity) return
+        hoverLabelEntity.show = false
+        if (hoverLabelEntity.label) {
+            ;(hoverLabelEntity.label as any).show = false
+        }
+    }
 
     function enableObstacleHover(): void {
         if (hoverHandler && !hoverHandler.isDestroyed()) {
@@ -136,29 +180,20 @@ export function useMarkObstacle() {
                     obstacleVisible
                 ) { //hoverObstacleEntity是上一个悬浮的障碍物
                     if (hoverObstacleEntity !== entity) {
-                        if (
-                            hoverObstacleEntity &&
-                            hoverObstacleEntity.label
-                        ) {
-                            ;(hoverObstacleEntity.label as any).show = false
-                        }
-
                         hoverObstacleEntity = entity
-
-                        if (hoverObstacleEntity.label) {
-                            ;(hoverObstacleEntity.label as any).show = true
+                        const obstacle = (entity as any)._obstacleData
+                        const labelEntity = ensureHoverLabel()
+                        labelEntity.position = entity.position
+                        labelEntity.show = true
+                        if (labelEntity.label) {
+                            ;(labelEntity.label as any).text = `${obstacle?.airportName ? `${obstacle.airportName} · ` : ''}${obstacle?.name ?? '障碍物'}\n海拔高度:${obstacle?.height || '-'}m`
+                            ;(labelEntity.label as any).show = true
                         }
                     }
 
                     ;(window.viewer as any)._element.style.cursor = 'pointer'
                 } else { //不是障碍物
-                    if (
-                        hoverObstacleEntity &&
-                        hoverObstacleEntity.label
-                    ) {
-                        ;(hoverObstacleEntity.label as any).show = false
-                    }
-
+                    hideHoverLabel()
                     hoverObstacleEntity = undefined
                     ;(window.viewer as any)._element.style.cursor = 'default'
                 }
@@ -171,7 +206,7 @@ export function useMarkObstacle() {
 
     // 添加单个障碍物
     function addObstacle(obstacle, longitude, latitude, modelUri: string | null = null) {
-        //真北极
+        
         const obstacleEntity = window.viewer.entities.add({
             position:
                 Cesium.Cartesian3.fromDegrees(
@@ -180,6 +215,7 @@ export function useMarkObstacle() {
                 ),
             // 新添加的障碍物要跟随当前显示状态
             show: obstacleVisible,
+            //modelUri是否存在
             ...(modelUri
                 ? {
                     model: {
@@ -193,12 +229,17 @@ export function useMarkObstacle() {
                     }
                 }
                 : {
-                    point: {
-                        pixelSize: 10,
-                        color: Cesium.Color.ORANGE,
+                    box: {
+                        dimensions: Cesium.Cartesian3.fromArray(
+                             [10, 10, 40],
+                        ),
+                        material: Cesium.Color.RED.withAlpha(0.85),
+                        outline: true,
                         outlineColor: Cesium.Color.WHITE,
-                        outlineWidth: 2,
-                        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND
+                        outlineWidth: 1,
+                        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                        distanceDisplayCondition:
+                            new Cesium.DistanceDisplayCondition(0, 30000),
                     }
                 }),
             // billboard:{
@@ -234,10 +275,10 @@ export function useMarkObstacle() {
 
             // },
 
-            label:{
+            ...(ENABLE_PER_ENTITY_LABEL ? { label: {
                 show: false,
                 text:
-                    `${obstacle.name}\n海拔高度:${obstacle.height || '-'}m`,
+                    `${obstacle.airportName ? `${obstacle.airportName} · ` : ''}${obstacle.name}\n海拔高度:${obstacle.height || '-'}m`,
                 font:
                     "bold 13px sans-serif",
                 style:
@@ -303,7 +344,7 @@ export function useMarkObstacle() {
                         0,
                         20000
                     )
-            }
+            } } : {})
         })
         //自己设置一个type属性，方便后面判断
         ;(obstacleEntity as any)._entityType = 'obstacle'
@@ -537,80 +578,173 @@ export function useMarkObstacle() {
     }
 
     function clearObstacles(): void {
-        obstacleEntities.forEach((entity) => window.viewer.entities.remove(entity))
+        window.viewer.entities.suspendEvents()
+        try {
+            obstacleEntities.forEach((entity) => window.viewer.entities.remove(entity))
+        } finally {
+            window.viewer.entities.resumeEvents()
+        }
         obstacleEntities.length = 0
         hoverObstacleEntity = undefined
+        hideHoverLabel()
     }
 
-    async function renderObstacles(parsedData: unknown): Promise<number> {
-        if (!Array.isArray(parsedData) || parsedData.length === 0) {
+    type ObstacleDataset = { data: unknown; airport?: { name?: string } }
+    // 根据一次加载的多个机场障碍物数据，批量渲染到 Cesium 场景中
+    // datasets 的结构：
+    // [
+    //   { data: [metadata, obstacle1, obstacle2, ...], airport: { name: 'A机场' } },
+    //   { data: [metadata, obstacle1, obstacle2, ...], airport: { name: 'B机场' } },
+    // ]
+    // 一个机场对应一份数据数组，多机场时由外层数组统一管理
+    async function renderDatasets(datasets: ObstacleDataset[]): Promise<number> {
+        // 基础校验：至少传入一个机场数据，且每个机场数据都必须是数组且非空
+        if (datasets.length === 0) throw new Error('没有可加载的机场障碍物数据')
+        const parsed = datasets.map((dataset) => dataset.data)
+        if (parsed.some((data) => !Array.isArray(data) || data.length === 0)) {
             throw new Error('障碍物数据为空或顶层数据不是数组')
         }
 
+        // 清掉当前地图上已经存在的旧障碍物，避免多机场切换时堆叠重复实体
         clearObstacles()
-        const metadata = parsedData[0] as any
-        const type = metadata?.type
-        const modelUris = await resolveModelUris(parsedData.slice(1))
 
+        // 预先解析所有障碍物类型对应的 3D 模型 URI，避免每条数据都重复请求模型
+        // 这里通过 flatMap 把所有机场的 items 展平成一个数组，再去重 求模型
+        const modelUris = await resolveModelUris(parsed.flatMap((data) => (data as any[]).slice(1)))
+
+        // 记录本次成功添加了多少个障碍物实体
         let loadedCount = 0
 
-        parsedData.slice(1).forEach((item: any, index: number) => {
-            try {
-                if (typeof item !== 'object' || item === null) {
-                    throw new Error('障碍物数据必须是对象')
+        // 记录已处理条数，用于按批次 suspend/resume Cesium 事件，减少渲染压力。
+        let processedCount = 0
+        const batchSize = 200
+        // 定义一个函数
+        // 作用：让浏览器在一帧中插入一次渲染，避免一次性加入大量实体导致卡顿。
+        // 停止阻塞主线程 让出16ms
+        const yieldToFrame = () =>
+            // 创建一个promise
+            new Promise<void>((resolve) => {
+                //在浏览器下一次刷新屏幕之前（防止在一半过程中），请执行这个函数
+                window.requestAnimationFrame(() => resolve())
+            })
+
+        // 外层循环：按机场逐个处理
+        for (let datasetIndex = 0; datasetIndex < parsed.length; datasetIndex += 1) {
+            const parsedData = parsed[datasetIndex] as any[]
+
+            // metadata 位于数组第 0 项，{ type: 'relative_bearing', baseLon, baseLat, magVar }
+            const metadata = parsedData[0] as any
+            const type = metadata?.type
+
+            // 该机场名称，用于在 hover label 中展示“机场名 · 障碍物名”
+            const airportName = datasets[datasetIndex].airport?.name
+
+            // 真实障碍物数据从第 1 项开始；metadata 之后所有 item 都是障碍物对象。
+            const items = parsedData.slice(1)
+
+            // 内层循环：按机场中的每一条障碍物逐条转换坐标并加入 Cesium
+            for (let index = 0; index < items.length; index += 1) {
+                // 每批次开始前 suspendEvents，避免 Cesium 在海量实体加入时频繁触发事件。
+                // 每调用一次 suspendEvents()，内部计数器就 +1
+                // 每调用一次 resumeEvents()，计数器就 -1
+                // 当计数器归零时，Cesium 会把之前积压的所有变更，打包成一个唯一的事件一次性发出去
+                if (processedCount % batchSize === 0) {
+                    window.viewer.entities.suspendEvents()
                 }
 
-                let longitude: number
-                let latitude: number
-                if (type === 'relative_bearing') {
-                    const baseLon = Number(metadata.baseLon)
-                    const baseLat = Number(metadata.baseLat)
-                    const magVar = Number(metadata.magVar ?? 0)
-                    const magneticAzimuth = Number(item.magneticAzimuth)
-                    const distance = Number(item.distance)
-                    if (![baseLon, baseLat, magVar, magneticAzimuth, distance].every(Number.isFinite)) {
-                        throw new Error('相对方位障碍物坐标参数无效')
+                const rawItem = items[index]
+                try {
+                    if (typeof rawItem !== 'object' || rawItem === null) {
+                        throw new Error('障碍物数据必须是对象')
                     }
-                    if (distance < 0) throw new Error('distance 不能为负数')
-                    const position = getLonLatByMagneticBearingDistance(
-                        baseLon, baseLat, magneticAzimuth, distance, magVar,
+
+                    let longitude: number
+                    let latitude: number
+
+                    //    相对方位模式：
+                    //    原始 obstacle 只有 magneticAzimuth + distance，
+                    //    需要用基准点经纬度 + 磁偏角转成真实经纬度。
+                    if (type === 'relative_bearing') {
+                        const baseLon = Number(metadata.baseLon)
+                        const baseLat = Number(metadata.baseLat)
+                        const magVar = Number(metadata.magVar ?? 0)
+                        const magneticAzimuth = Number(rawItem.magneticAzimuth)
+                        const distance = Number(rawItem.distance)
+
+                        if (![baseLon, baseLat, magVar, magneticAzimuth, distance].every(Number.isFinite)) {
+                            throw new Error('相对方位障碍物坐标参数无效')
+                        }
+                        if (distance < 0) throw new Error('distance 不能为负数')
+
+                        const position = getLonLatByMagneticBearingDistance(
+                            baseLon, baseLat, magneticAzimuth, distance, magVar,
+                        )
+                        longitude = position.longitude
+                        latitude = position.latitude
+                    }
+                    //  绝对坐标模式：
+                    //  obstacle 已经包含 longitude / latitude，直接使用即可。
+                    else if (type === 'absolute_coord') {
+                        longitude = Number(rawItem.longitude)
+                        latitude = Number(rawItem.latitude)
+                        if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) {
+                            throw new Error('经纬度不是有效数字')
+                        }
+                    }
+                    //  其他类型直接抛错，避免错误数据污染地图。
+                    else {
+                        throw new Error(`不支持的障碍物数据类型: ${String(type)}`)
+                    }
+
+                    // 给每个障碍物补上机场名称，便于 hover 像素标签显示“机场名 · 障碍物名”。
+                    const item = airportName ? { ...rawItem, airportName } : rawItem
+
+                    // 真正创建 Cesium Entity，并注册到 obstacleEntities。
+                    addObstacle(
+                        item,
+                        longitude,
+                        latitude,
+                        modelUris.get(item.type) ?? null,
                     )
-                    longitude = position.longitude
-                    latitude = position.latitude
-                } else if (type === 'absolute_coord') {
-                    longitude = Number(item.longitude)
-                    latitude = Number(item.latitude)
-                    if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) {
-                        throw new Error('经纬度不是有效数字')
-                    }
-                } else {
-                    throw new Error(`不支持的障碍物数据类型: ${String(type)}`)
+                    loadedCount += 1
+                } catch (error) {
+                    // 14. 单条数据失败不影响其他数据继续加载，只记录日志。
+                    console.error(`第${index + 2}条障碍物数据加载失败：`, error, rawItem)
                 }
 
-                addObstacle(
-                    item,
-                    longitude,
-                    latitude,
-                    modelUris.get(item.type) ?? null
-                )
-                loadedCount += 1
-            } catch (error) {
-                console.error(`第${index + 2}条障碍物数据加载失败：`, error, item)
+                // 每处理一条记录，更新计数，并在达到批次大小或最后一条时恢复事件并 yield 一帧
+                processedCount += 1
+                const isBatchEnd = processedCount % batchSize === 0
+                const isLastItem = datasetIndex === parsed.length - 1 && index === items.length - 1
+                if (isBatchEnd || isLastItem) {
+                    window.viewer.entities.resumeEvents()
+                    if (!isLastItem) await yieldToFrame()
+                }
             }
-        })
+        }
 
+        // 所有数据都处理完毕后，如果没有成功加载任何有效障碍物，则抛错，避免误判为成功。
         if (loadedCount === 0) throw new Error('没有可显示的有效障碍物')
+
+        // 只要至少有一条实体成功创建，就标记已加载，并展示障碍物层。
         obstaclesLoaded = true
         setObstaclesVisible(true)
         return loadedCount
     }
 
-    async function loadObstacles(source: 'sync' | 'local' = 'local'): Promise<number> {
-        const command = source === 'sync'
-            ? 'fetch_and_cache_obstacles'
-            : 'load_cached_obstacles'
-        const data = await invoke<unknown>(command)
-        return renderObstacles(data)
+    async function renderObstacles(parsedData: unknown): Promise<number> {
+        return renderDatasets([{ data: parsedData }])
+    }
+
+    //把多个机场列表发给 Tauri 后端
+    async function loadAirports(airports: any[]): Promise<{ count: number; results: any[] }> {
+        const results = await invoke<any[]>('load_selected_obstacles', { airports })
+        // 渲染障碍物数据
+        const count = await renderDatasets(
+            // 对后端返回的机场数据进行标准化处理
+            results.map((result) => ({ data: result.data, airport: result.airport })),
+        )
+        return { count, results }
     }
 
      // 设置所有障碍物是否显示
@@ -641,7 +775,7 @@ export function useMarkObstacle() {
 
     return {
         addObstacle,
-        loadObstacles,
+        loadAirports,
         // 保留文件加载能力，供需要直接导入 JSON 的场景使用。
         addAllObstacles: addAllObstaclesFromFile,
         toggleObstaclesVisible,

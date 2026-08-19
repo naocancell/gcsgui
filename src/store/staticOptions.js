@@ -18,8 +18,7 @@ export const useStaticStore = defineStore('staticOptions', {
 
       menuOptions: {
         obstacleOptions: [
-          { label: '同步最新障碍物', key: 'syncObstacle' },
-          { label: '加载本地障碍物', key: 'localObstacle' },
+          { label: '选择机场加载', key: 'selectAirports' },
           { label: '显示障碍物', key: 'showObstacle' },
         ],
         EditOptions: [

@@ -80,8 +80,23 @@ function ensureModelPath(model: ModelMeta): Promise<string> {
   modelPathPromises.set(cacheKey, pending)
   return pending
 }
+
+async function resolveCachedModelPath(type: string): Promise<string | null> {
+  try {
+    return await invoke<string | null>('resolve_cached_model', {
+      obstacleType: type,
+    })
+  } catch (error) {
+    // 兼容旧版本后端没有该命令的情况，继续尝试服务目录解析。
+    console.warn(`本地模型缓存查询失败: ${type}`, error)
+    return null
+  }
+}
 //传入一个模型type  返回模型的路径（已经被convertFileSrc转换为前端可以请求的路径）
 export async function resolveObstacleModelUri(type: string): Promise<string | null> {
+  const cachedPath = await resolveCachedModelPath(type)
+  if (cachedPath) return convertFileSrc(cachedPath)
+
   const catalog = await loadModelCatalogOnce()
   const model = catalog.find(item => item.obstacle_type === type)
   if (!model) return null

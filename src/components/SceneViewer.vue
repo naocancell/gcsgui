@@ -24,8 +24,7 @@
 <script setup lang="ts">
 import PlaneInfo from './PlaneInfo.vue'
 import { onMounted, onUnmounted, ref } from 'vue'
-import { Viewer, Ion, CustomDataSource,createWorldTerrainAsync } from 'cesium'
-import * as Cesium from 'cesium'
+import { Viewer, Ion, CustomDataSource,createWorldTerrainAsync,Cartesian3,createWorldImageryAsync } from 'cesium'
 import { NIcon, NTooltip } from 'naive-ui'
 import { LocateOutline } from '@vicons/ionicons5'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
@@ -33,22 +32,20 @@ import {
   TDTLayerType,
   TDTProjectionType,
   getTDTProvider,
-  getTDTTerrainProvider,
+  getTDTTerrainProvider
 } from '@/utils/map/TDTProvider.ts'
 import {
   initViewer,
   perfViewer,
   showNavigator,
 } from '@/utils/map/sceneViewer.ts'
-import { flyToDefault } from '@/utils/map/camera.ts'
 import MeasureViewer from '@/assets/js/measureViewer.js'
 import { useLoadPlane } from "@/hooks/useLoadPlane";
-import { useMarkObstacle } from "@/hooks/useMarkObstacle";
 import { cacheCommonModelsToDisk } from '@/utils/model/modelCache'
 
 const viewerDivRef = ref<HTMLDivElement>()
 let viewer: Viewer
-window.CESIUM_BASE_URL = import.meta.env.DEV ? 'public/Cesium/' : './Cesium/'
+window.CESIUM_BASE_URL = import.meta.env.DEV ? '/Cesium/' : './Cesium/'
 Ion.defaultAccessToken =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI3YjU4MjJlMS0wMWE4LTRhOWQtYjQ1OC04MTgzMzFhMzQ5ZjAiLCJpZCI6MTE1ODUxLCJpYXQiOjE2NjkyMDM1MzN9.8ajEuv3VKYg8wvFiQlUWWY6Ng6JfY4PuVgRyStL1B-E'
 const viewerReady = ref(false)
@@ -65,7 +62,7 @@ const flyToInitialLocation = () => {
   if (!viewer || !initialLocation.value) return
   const { longitude, latitude, height } = initialLocation.value
   viewer.camera.flyTo({
-    destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, height),
+    destination: Cartesian3.fromDegrees(longitude, latitude, height),
     duration: 1.5,
   })
 }
@@ -73,6 +70,59 @@ const flyToInitialLocation = () => {
 let modelWarmupTimer: ReturnType<typeof setTimeout> | undefined
 // 组件加载就监听显示飞机实施的位置
   const {init,clearAll} = useLoadPlane();
+
+function waitForLocalFirstFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve())
+  })
+}
+
+async function loadOnlineImagery() {
+  if (!viewer || viewer.isDestroyed() || !navigator.onLine) return
+
+  let onlineImageryLoaded = false
+  try {
+    const imageryProvider = await createWorldImageryAsync()
+    if (!viewer.isDestroyed()) {
+      viewer.imageryLayers.addImageryProvider(imageryProvider)
+      onlineImageryLoaded = true
+      viewer.scene.requestRender()
+    }
+  } catch (error) {
+    console.warn('在线影像加载失败，本地底图继续使用:', error)
+  }
+
+  // 注记必须在在线影像添加后再加入，确保它位于最上层。
+  try {
+    if (!viewer.isDestroyed()) {
+      viewer.imageryLayers.addImageryProvider(
+        getTDTProvider(TDTLayerType.Cia, TDTProjectionType.WebMercator),
+      )
+      viewer.scene.requestRender()
+    }
+  } catch (error) {
+    console.warn(
+      onlineImageryLoaded
+        ? '在线地图注记加载失败，在线影像继续使用:'
+        : '在线地图加载失败，本地底图继续使用:',
+      error,
+    )
+  }
+}
+
+async function loadOnlineTerrain() {
+  if (!viewer || viewer.isDestroyed() || !navigator.onLine) return
+
+  try {
+    const terrainProvider = await createWorldTerrainAsync()
+    if (viewer.isDestroyed()) return
+    viewer.terrainProvider = terrainProvider
+    viewer.scene.requestRender()
+  } catch (error) {
+    console.warn('在线地形加载失败，继续使用当前地形:', error)
+  }
+}
+
 onMounted(async () => {
   //初始化
   viewer = initViewer(viewerDivRef.value as HTMLElement)
@@ -91,14 +141,44 @@ onMounted(async () => {
 
   // 1. 初始化时，瞬间将视角切换到中国全貌，彻底避免一开始在地球全景停顿卡顿。
   viewer.camera.setView({
-    destination: Cesium.Cartesian3.fromDegrees(
+    destination: Cartesian3.fromDegrees(
       104.195397, // 中国中心经度
       35.86166,   // 中国中心纬度
       8000000     // 高度 800 万米，看清中国全景
     )
   });
 
-  // 2. 使用原生系统地理定位（不受代理影响，能拿到真实位置）
+  // 显示罗盘和比例尺
+  showNavigator(viewer)
+
+  // 挂载在window，供全局组件共享
+  window.viewer = viewer
+  window.measureViewer = new MeasureViewer(viewer)
+
+  // 先完成本地底图首帧，再启动在线资源请求。在线服务异常时不会阻塞地图。
+  await waitForLocalFirstFrame()
+
+  // 标记点图层不依赖在线地图，立即完成初始化。
+  const markerLayer = new CustomDataSource('Marker')
+  viewer.dataSources.add(markerLayer)
+
+  void loadOnlineImagery()
+  void loadOnlineTerrain()
+
+  // 等地图完成首帧显示后，再后台检查模型缓存
+    modelWarmupTimer = setTimeout(() => {
+      if (!navigator.onLine) return
+
+      void cacheCommonModelsToDisk().catch(error => {
+        console.warn('常用模型磁盘缓存失败:', error)
+      })
+    }, 2000)
+
+  //加载建筑物图标
+  // const markObstacle = useMarkObstacle(viewer)
+  // markObstacle.addAllObstacles()
+
+   // 2. 使用原生系统地理定位（不受代理影响，能拿到真实位置）
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
       (position) => {
@@ -109,7 +189,7 @@ onMounted(async () => {
 
         // 获取成功后，从刚才的初始高空平滑飞往你的真实位置，高度降低以获得更大视角
         viewer.camera.flyTo({
-          destination: Cesium.Cartesian3.fromDegrees(lon, lat, alt),
+          destination: Cartesian3.fromDegrees(lon, lat, alt),
           duration: 2,
         });
       },
@@ -118,7 +198,7 @@ onMounted(async () => {
         // 如果最终获取失败（比如没给权限），则平滑回退到默认大视角
         initialLocation.value = { longitude: 107.4191777, latitude: 37.855152, height: 5000 }
         viewer.camera.flyTo({
-          destination: Cesium.Cartesian3.fromDegrees(107.4191777, 37.855152, 5000),
+          destination: Cartesian3.fromDegrees(107.4191777, 37.855152, 5000),
           duration: 2,
         });
       },
@@ -131,54 +211,10 @@ onMounted(async () => {
   } else {
     initialLocation.value = { longitude: 107.4191777, latitude: 37.855152, height: 5000 }
     viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(107.4191777, 37.855152, 5000),
+      destination: Cartesian3.fromDegrees(107.4191777, 37.855152, 5000),
       duration: 2,
     });
   }
-  // 显示罗盘和比例尺
-  showNavigator(viewer)
-
-  // 挂载在window，供全局组件共享
-  window.viewer = viewer
-  window.measureViewer = new MeasureViewer(viewer)
-  // 等地图完成首帧显示后，再后台检查模型缓存
-    modelWarmupTimer = setTimeout(() => {
-      if (!navigator.onLine) return
-
-      void cacheCommonModelsToDisk().catch(error => {
-        console.warn('常用模型磁盘缓存失败:', error)
-      })
-    }, 200)
-
-  //添加天地图影像
-  // viewer.imageryLayers.addImageryProvider(
-  //   getTDTProvider(TDTLayerType.Img, TDTProjectionType.WebMercator),
-  // )
-  //加载建筑白膜
-// const buildingTileset = await Cesium.createOsmBuildingsAsync()
-// viewer.scene.primitives.add(buildingTileset)
-  const imageryProvider = await Cesium.createWorldImageryAsync()
-  viewer.imageryLayers.addImageryProvider(imageryProvider)
-  //添加天地图影像注记
-  viewer.imageryLayers.addImageryProvider(
-    getTDTProvider(TDTLayerType.Cia, TDTProjectionType.WebMercator),
-  )
-
-  // 检查设备联网状态，添加三维地形服务
-  if (window.navigator.onLine) {
-    // 如果断网环境执行该语句，航线绘制、三维伴飞等功能出现异常
-    // viewer.terrainProvider = getTDTTerrainProvider()
-    viewer.terrainProvider = await createWorldTerrainAsync()
-  }
-
-  // 标记点图层，存储所有地标点
-  const markerLayer = new CustomDataSource('Marker')
-  viewer.dataSources.add(markerLayer)
-
-  //加载建筑物图标
-  // const markObstacle = useMarkObstacle(viewer)
-  // markObstacle.addAllObstacles()
-
 })
 
 onUnmounted(() => {

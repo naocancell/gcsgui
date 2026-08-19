@@ -160,6 +160,13 @@ const losAnalyzeOptions = computed(() => [
 ])
 const obstacleVisible = ref(false)
 const obstacleLoading = ref(false)
+const showAirportModal = ref(false)
+const airportListLoading = ref(false)
+const selectedAirportIds = ref<number[]>([])
+const airportList = ref<any[]>([])
+const allAirportsSelected = computed(
+  () => airportList.value.length > 0 && selectedAirportIds.value.length === airportList.value.length,
+)
 const obstacleLoadingOptions = computed(() =>
   store.menuOptions.obstacleOptions.map((option) => {
     if (option.key === 'showObstacle') {
@@ -171,6 +178,32 @@ const obstacleLoadingOptions = computed(() =>
     return option
   }),
 )
+
+async function queryAirports() {
+  airportListLoading.value = true
+  try {
+    airportList.value = await invoke<any[]>('list_obstacle_airports')
+    selectedAirportIds.value = selectedAirportIds.value.filter((id) =>
+      airportList.value.some((airport) => Number(airport.id) === id),
+    )
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    message.error(detail || '查询机场列表失败')
+  } finally {
+    airportListLoading.value = false
+  }
+}
+
+function openAirportModal() {
+  showAirportModal.value = true
+  void queryAirports()
+}
+
+function toggleAllAirports(checked: boolean) {
+  selectedAirportIds.value = checked
+    ? airportList.value.map((airport) => Number(airport.id))
+    : []
+}
 
 const selectedPlaneStore = useSelectedPlaneStore()
 const { selectedModel, selectedMeta } = storeToRefs(selectedPlaneStore)
@@ -487,24 +520,40 @@ function handleObstacleSelect(key) {
     return
   }
 
-  const source = key === 'syncObstacle' ? 'sync' : 'local'
+  if (key === 'selectAirports') {
+    openAirportModal()
+  }
+}
+
+async function loadSelectedAirports() {
+  const selected = airportList.value.filter((airport) =>
+    selectedAirportIds.value.includes(Number(airport.id)),
+  )
+  if (selected.length === 0) {
+    message.warning('请至少选择一个机场')
+    return
+  }
   obstacleLoading.value = true
-  loadObstacles(source)
-    .then((count) => {
-      obstacleVisible.value = true
-      message.success(`${source === 'sync' ? '同步' : '加载本地'}障碍物成功，共 ${count} 个`)
-    })
-    .catch((error) => {
-      if (source === 'local') {
-        message.warning('请先同步障碍物数据')
-      } else {
-        const detail = error instanceof Error ? error.message : String(error)
-        message.error(detail || '同步障碍物失败')
-      }
-    })
-    .finally(() => {
-      obstacleLoading.value = false
-    })
+  try {
+    const result = await loadAirports(selected)
+    obstacleVisible.value = true
+    showAirportModal.value = false
+    const updated = result.results.filter((item) => item.source === 'updated').length
+    const remote = result.results.filter((item) => item.source === 'remote').length
+    const stale = result.results.filter((item) => item.stale).length
+    const details = [
+      `${selected.length} 个机场，共 ${result.count} 个障碍物`,
+      updated ? `更新 ${updated}` : '',
+      remote ? `远端加载 ${remote}` : '',
+      stale ? `离线使用旧缓存 ${stale}` : '',
+    ].filter(Boolean)
+    message.success(details.join('，'))
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    message.error(detail || '加载机场障碍物失败')
+  } finally {
+    obstacleLoading.value = false
+  }
 }
 //用于控制显示关闭工具条按钮或打开工具条按钮
 let barIsOpen = ref(true)
@@ -1343,7 +1392,7 @@ onMounted(async () => {
     {
       distance: terrainWarningDistance.value,
       steps: 50, //每1000米采样10个点
-      intervalMs: 10,
+      intervalMs: 100,
       terrainLevel: 13,
       warnClearance: terrainWarningClearance.value,
     }, //传递的参数
@@ -1455,7 +1504,7 @@ function toggleSelectedPlaneTerrainWarning() {
   terrainWarningApi.value?.start()
 }
 
-const { loadObstacles, toggleObstaclesVisible } = useMarkObstacle()
+const { loadAirports, toggleObstaclesVisible } = useMarkObstacle()
 
 async function showTelemetryInfo() {
   try {
@@ -2164,6 +2213,63 @@ async function showLinkHealthInfo() {
       </div>
     </div>
   </div>
+  //选择加载障碍物的模态框
+  <n-modal
+    v-model:show="showAirportModal"
+    preset="card"
+    title="机场障碍物"
+    class="airport-obstacle-modal"
+    :mask-closable="!obstacleLoading"
+  >
+    <div class="airport-obstacle-toolbar">
+      <n-checkbox
+        :checked="allAirportsSelected"
+        :indeterminate="selectedAirportIds.length > 0 && !allAirportsSelected"
+        @update:checked="toggleAllAirports"
+      >
+        全选
+      </n-checkbox>
+      <span>已选 {{ selectedAirportIds.length }} / {{ airportList.length }}</span>
+    </div>
+    <n-spin :show="airportListLoading">
+      <n-checkbox-group v-model:value="selectedAirportIds">
+        <n-scrollbar class="airport-obstacle-list">
+          <div
+            v-for="airport in airportList"
+            :key="airport.id"
+            class="airport-obstacle-row"
+          >
+            <n-checkbox :value="Number(airport.id)">
+              <span class="airport-obstacle-name">{{ airport.name }}</span>
+              <span class="airport-obstacle-code">{{ airport.code }}</span>
+            </n-checkbox>
+            <div class="airport-obstacle-meta">
+              <span>{{ airport.obstacle_count ?? airport.obstacleCount ?? 0 }} 个障碍物</span>
+            </div>
+          </div>
+          <n-empty
+            v-if="!airportListLoading && airportList.length === 0"
+            description="没有可用机场"
+          />
+        </n-scrollbar>
+      </n-checkbox-group>
+    </n-spin>
+    <template #footer>
+      <n-space justify="end">
+        <n-button :disabled="obstacleLoading" @click="showAirportModal = false">
+          取消
+        </n-button>
+        <n-button
+          type="primary"
+          :loading="obstacleLoading"
+          :disabled="selectedAirportIds.length === 0"
+          @click="loadSelectedAirports"
+        >
+          加载所选机场
+        </n-button>
+      </n-space>
+    </template>
+  </n-modal>
   <SpatialAnalysis ref="spatialAnalyse"></SpatialAnalysis>
   <LayerManager ref="layerManager"></LayerManager>
   <RouteOptions
@@ -2214,6 +2320,55 @@ async function showLinkHealthInfo() {
   background: rgb(21 21 21 / 94%);
   border-radius: 7px;
   transition: left 0.3s;
+}
+
+.airport-obstacle-modal {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.airport-obstacle-toolbar,
+.airport-obstacle-row,
+.airport-obstacle-meta {
+  display: flex;
+  align-items: center;
+}
+
+.airport-obstacle-toolbar {
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  color: var(--n-text-color-2, #666);
+  font-size: 12px;
+}
+
+.airport-obstacle-list {
+  max-height: min(52vh, 420px);
+  padding-right: 4px;
+}
+
+.airport-obstacle-row {
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 7px 4px;
+  border-bottom: 1px solid var(--n-divider-color, #e5e7eb);
+}
+
+.airport-obstacle-name {
+  margin-right: 8px;
+  color: var(--n-text-color-1, #1f2937);
+}
+
+.airport-obstacle-code {
+  color: var(--n-text-color-3, #8b95a7);
+  font-size: 11px;
+}
+
+.airport-obstacle-meta {
+  flex-shrink: 0;
+  gap: 8px;
+  color: var(--n-text-color-2, #666);
+  font-size: 11px;
 }
 /* 向左移动20个单位 */
 .panel-toolbar989834y34.open {

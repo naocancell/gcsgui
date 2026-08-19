@@ -150,9 +150,10 @@ pub fn run() {
             get_uplink_status,
             fetch_and_cache_nfz,
             load_cached_nfz,
-            fetch_and_cache_obstacles,
-            load_cached_obstacles,
+            list_obstacle_airports,
+            load_selected_obstacles,
             ensure_model_cached,
+            resolve_cached_model,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
