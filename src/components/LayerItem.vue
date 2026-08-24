@@ -10,7 +10,7 @@ const props = defineProps<{ lname: string; lid?: string }>()
 const layerStore = useLayerStore()
 const message = useMessage()
 
-const itemOptions = [
+const baseItemOptions = [
   { label: '定位图层', key: 'lookAt' },
   { label: '上移一层', key: 'moveUp' },
   { label: '下移一层', key: 'moveDown' },
@@ -25,6 +25,14 @@ const currentLayer = computed(() =>
   ),
 )
 const layerShow = computed(() => currentLayer.value?.show ?? true)
+const isKmlLayer = computed(() =>
+  /\.(kml|kmz)$/i.test(currentLayer.value?.lName ?? ''),
+)
+const itemOptions = computed(() =>
+  isKmlLayer.value
+    ? [{ label: '导出坐标', key: 'exportCoordinates' }, ...baseItemOptions]
+    : baseItemOptions,
+)
 
 function getEntities(layer: any): Cesium.Entity[] {
   return (layer?.entity ?? []) as Cesium.Entity[]
@@ -33,6 +41,79 @@ function getEntities(layer: any): Cesium.Entity[] {
 async function getDataSource(layer: any): Promise<any | undefined> {
   if (!layer?.dataSource) return undefined
   return Promise.resolve(layer.dataSource)
+}
+
+function sanitizeFileName(name: string) {
+  return name.replace(/[\\/:*?"<>|]/g, '_')
+}
+
+function formatCoordinateExport(layerName: string, records: any[]) {
+  const lines = [
+    `图层：${layerName}`,
+    `导出时间：${new Date().toLocaleString()}`,
+    '',
+  ]
+  records.forEach((record, index) => {
+    lines.push(`实体 ${index + 1}：${record.entityName || '(未命名)'}`)
+    lines.push(`类型：${record.type}`)
+    const points =
+      record.type === 'point' ? [record.point] : record.points || []
+    points.forEach((point: any, pointIndex: number) => {
+      lines.push(
+        `  点 ${pointIndex + 1}：经度=${Number(point.longitude).toFixed(8)}，纬度=${Number(point.latitude).toFixed(8)}，高度=${Number(point.height ?? 0).toFixed(3)} 米`,
+      )
+    })
+    lines.push('')
+  })
+  return lines.join('\r\n')
+}
+
+async function exportCoordinates(layer: any) {
+  const dataSource = await getDataSource(layer)
+  const records = dataSource?.__kmlCoordinateExport
+  if (!Array.isArray(records) || records.length === 0) {
+    message.warning('该图层没有可导出的坐标')
+    return
+  }
+
+  const fileName = `${sanitizeFileName(layer.lName.replace(/\.(kml|kmz)$/i, ''))}_坐标导出.txt`
+  const content = formatCoordinateExport(layer.lName, records)
+
+  // 使用浏览器/ WebView 原生保存对话框，由用户选择保存位置。
+  const showSaveFilePicker = (window as any).showSaveFilePicker
+  if (typeof showSaveFilePicker === 'function') {
+    try {
+      const fileHandle = await showSaveFilePicker({
+        suggestedName: fileName,
+        types: [
+          {
+            description: '文本文件',
+            accept: { 'text/plain': ['.txt'] },
+          },
+        ],
+      })
+      const writable = await fileHandle.createWritable()
+      await writable.write(content)
+      await writable.close()
+      message.success('坐标已导出')
+    } catch (error) {
+      // 用户在保存对话框中点击取消，不提示错误。
+      if ((error as DOMException)?.name === 'AbortError') return
+      console.error('坐标导出失败:', error)
+      message.error('坐标导出失败')
+    }
+    return
+  }
+
+  // 不支持 File System Access API 时，回退为浏览器下载。
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = fileName
+  anchor.click()
+  URL.revokeObjectURL(url)
+  message.success('坐标已导出')
 }
 
 function flyToEntities(entities: Cesium.Entity[]) {
@@ -76,6 +157,9 @@ async function handleLayerItem(key: string) {
   if (!layer) return
 
   switch (key) {
+    case 'exportCoordinates':
+      await exportCoordinates(layer)
+      break
     case 'remove':
       try {
         await removeLayerResources(window.viewer, layer)
@@ -97,6 +181,8 @@ async function handleLayerItem(key: string) {
         if (rectangle) {
           window.viewer.camera.flyTo({ destination: rectangle, duration: 1.5 })
         }
+      } else if (layer.tileset) {
+        await window.viewer.flyTo(toRaw(layer.tileset))
       } else {
         flyToEntities(getEntities(layer))
       }
@@ -105,6 +191,7 @@ async function handleLayerItem(key: string) {
     case 'moveTop': {
       if (layer.imageLayer)
         window.viewer.imageryLayers.raiseToTop(toRaw(layer.imageLayer))
+      // Cesium primitive 没有图层顺序 API，仍然同步管理列表顺序。
       const dataSource = await getDataSource(layer)
       if (dataSource && window.viewer.dataSources.contains(dataSource)) {
         window.viewer.dataSources.raiseToTop(dataSource)
@@ -164,6 +251,11 @@ async function onCheck(checked: boolean) {
   }
 
   if (layer.imageLayer) toRaw(layer.imageLayer).show = checked
+  if (layer.tileset) {
+    const tileset = toRaw(layer.tileset)
+    tileset.show = checked
+    if (checked) await window.viewer.flyTo(tileset)
+  }
 
   // 不从 viewer.entities 删除实体，只切换 show，避免重新勾选时丢失引用。
   for (const entity of getEntities(layer)) {

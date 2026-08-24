@@ -697,32 +697,230 @@ function handleMeasureSelect(key) {
   }
 }
 
-async function handleFile() {
-  const [fileHandle] = await window?.showOpenFilePicker({
-    types: [
-      {
-        description: 'kml/json',
-        accept: { 'text/kml': ['.kml', '.kmz', '.json', '.geojson'] },
-      },
-    ],
-  })
+const dataOptions = [
+  { label: '加载 KML / KMZ', key: 'kml' },
+  { label: '加载 GeoJSON', key: 'geojson' },
+  { label: '加载 3D Tiles（选择 tileset.json）', key: '3dtiles' },
+]
 
-  // 获取文件File对象
-  const file = await fileHandle?.getFile()
-  console.group('获取到的文件')
-  console.log(fileHandle)
-  console.log(file.name)
-  if (
-    file.name.toLowerCase().endsWith('kml') ||
-    file.name.toLowerCase().endsWith('kmz')
-  ) {
-    window.measureViewer.addKml(file)
-  } else if (
-    file.name.toLowerCase().endsWith('geojson') ||
-    file.name.toLowerCase().endsWith('json') ||
-    file.name.toLowerCase().endsWith('topojson')
-  ) {
-    window.measureViewer.addJson(file)
+type LocalAsset = { path: string; file: File }
+type LocalDirectoryAssets = { assets: LocalAsset[]; name: string }
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === 'AbortError'
+}
+
+async function pickSingleFile(accept: Record<string, string[]>) {
+  const picker = (window as any).showOpenFilePicker
+  if (typeof picker === 'function') {
+    const [fileHandle] = await picker({ multiple: false, types: [{ accept }] })
+    return fileHandle ? fileHandle.getFile() : undefined
+  }
+
+  return new Promise<File | undefined>((resolve) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = Object.values(accept).flat().join(',')
+    input.onchange = () => {
+      resolve(input.files?.[0])
+      input.remove()
+    }
+    input.oncancel = () => {
+      resolve(undefined)
+      input.remove()
+    }
+    input.click()
+  })
+}
+
+async function collectDirectoryAssets(directory: any): Promise<LocalAsset[]> {
+  const assets: LocalAsset[] = []
+  async function visit(handle: any, prefix = '') {
+    for await (const [name, child] of handle.entries()) {
+      const path = prefix ? `${prefix}/${name}` : name
+      if (child.kind === 'file') assets.push({ path, file: await child.getFile() })
+      else await visit(child, path)
+    }
+  }
+  await visit(directory)
+  return assets
+}
+
+async function pickDirectoryAssets(): Promise<LocalDirectoryAssets> {
+  // Deliberately avoid showDirectoryPicker(): Chromium would show a
+  // File System Access authorization prompt for every directory import.
+  if (false) {
+    // 每次由用户重新选择目录，不保存或复用本地目录句柄。
+    const directory = await picker({ mode: 'read' })
+    return Promise.resolve({ assets: [], name: '3D Tiles' })
+  }
+
+  return new Promise<LocalDirectoryAssets>((resolve) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.multiple = true
+    ;(input as any).webkitdirectory = true
+    input.onchange = () => {
+      const files = Array.from(input.files ?? []).map((file) => ({
+        path: (file as any).webkitRelativePath || file.name,
+        file,
+      }))
+      const firstPath = files[0]?.path || ''
+      resolve({
+        assets: files,
+        name: firstPath.split('/')[0] || '3D Tiles',
+      })
+      input.remove()
+    }
+    input.oncancel = () => {
+      resolve({ assets: [], name: '3D Tiles' })
+      input.remove()
+    }
+    input.click()
+  })
+}
+
+function normalizeAssetPath(path: string) {
+  const parts = path.replaceAll('\\', '/').split('/')
+  const normalized: string[] = []
+  for (const part of parts) {
+    if (!part || part === '.') continue
+    if (part === '..') normalized.pop()
+    else normalized.push(part)
+  }
+  return normalized.join('/')
+}
+
+/** 将目录中的相对资源转换成 Blob URL，使 tileset.json 可在本地 WebView 中加载。 */
+async function createLocalTilesetUrl(assets: LocalAsset[]) {
+  const files = new Map(assets.map((asset) => [normalizeAssetPath(asset.path), asset.file]))
+  const rootPath = [...files.keys()].find((path) => /(^|\/)tileset\.json$/i.test(path))
+  if (!rootPath) throw new Error('所选目录中未找到 tileset.json')
+
+  const objectUrls: string[] = []
+  const urlByPath = new Map<string, string>()
+  const pending = new Map<string, Promise<string>>()
+
+  const resolveReference = (basePath: string, value: string) => {
+    if (/^(?:[a-z]+:|\/\/)/i.test(value)) return undefined
+    const [pathPart] = value.split(/[?#]/, 1)
+    const baseParts = basePath.split('/')
+    baseParts.pop()
+    const candidate = normalizeAssetPath(
+      [...baseParts, decodeURIComponent(pathPart)].join('/'),
+    )
+    return files.has(candidate) ? candidate : undefined
+  }
+
+  const createUrl = async (path: string): Promise<string> => {
+    const existing = urlByPath.get(path)
+    if (existing) return existing
+    const ongoing = pending.get(path)
+    if (ongoing) return ongoing
+    const file = files.get(path)
+    if (!file) throw new Error(`本地 Tiles 资源不存在：${path}`)
+
+    const task = (async () => {
+      const isJson = /\.(json|gltf)$/i.test(path)
+      let blob: Blob
+      if (isJson) {
+        let value: any
+        try {
+          value = JSON.parse(await file.text())
+        } catch {
+          throw new Error(`无法解析本地 JSON 资源：${path}`)
+        }
+        const rewrite = async (node: any): Promise<any> => {
+          if (Array.isArray(node)) return Promise.all(node.map(rewrite))
+          if (!node || typeof node !== 'object') return node
+          const result: any = {}
+          for (const [key, child] of Object.entries(node)) {
+            if (typeof child === 'string') {
+              const target = resolveReference(path, child)
+              result[key] = target ? await createUrl(target) : child
+            } else {
+              result[key] = await rewrite(child)
+            }
+          }
+          return result
+        }
+        const rewritten = await rewrite(value)
+        blob = new Blob([JSON.stringify(rewritten)], { type: file.type || 'application/json' })
+      } else {
+        blob = file
+      }
+      const objectUrl = URL.createObjectURL(blob)
+      urlByPath.set(path, objectUrl)
+      objectUrls.push(objectUrl)
+      return objectUrl
+    })()
+    pending.set(path, task)
+    return task
+  }
+
+  try {
+    return {
+      url: await createUrl(rootPath),
+      objectUrls,
+      name: rootPath.split('/').pop()!,
+    }
+  } catch (error) {
+    objectUrls.forEach((url) => URL.revokeObjectURL(url))
+    throw error
+  }
+}
+
+async function loadDataFile(kind: 'kml' | 'geojson') {
+  const accept =
+    kind === 'kml'
+      ? { 'application/vnd.google-earth.kml+xml': ['.kml'], 'application/vnd.google-earth.kmz': ['.kmz'] }
+      : { 'application/geo+json': ['.geojson'], 'application/json': ['.json', '.topojson'] }
+  const file = await pickSingleFile(accept)
+  if (!file) return
+  if (!window.measureViewer || !window.viewer) {
+    message.error('地图尚未初始化完成')
+    return
+  }
+  const loading = message.loading(`${kind === 'kml' ? 'KML' : 'GeoJSON'} 加载中`, { duration: 0 })
+  try {
+    await (kind === 'kml' ? window.measureViewer.addKml(file) : window.measureViewer.addJson(file))
+    message.success(`${kind === 'kml' ? 'KML' : 'GeoJSON'} 加载成功`)
+  } catch (error) {
+    message.error(`${kind === 'kml' ? 'KML' : 'GeoJSON'} 加载失败：${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    loading.destroy()
+  }
+}
+
+async function load3DTiles() {
+  if (!window.measureViewer || !window.viewer) {
+    message.error('地图尚未初始化完成')
+    return
+  }
+  const loading = message.loading('3D Tiles 加载中', { duration: 0 })
+  try {
+    const selection = await invoke<{ url: string; name: string } | null>(
+      'pick_3d_tiles_file',
+    )
+    if (!selection) return
+    await window.measureViewer.add3DTiles(
+      selection.url,
+      selection.name,
+    )
+    message.success('3D Tiles 加载成功')
+  } catch (error) {
+    message.error(`3D Tiles 加载失败：${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    loading.destroy()
+  }
+}
+
+async function handleDataSelect(key: string) {
+  try {
+    if (key === 'kml' || key === 'geojson') await loadDataFile(key)
+    else if (key === '3dtiles') await load3DTiles()
+  } catch (error) {
+    if (!isAbortError(error)) message.error(`选择数据失败：${error instanceof Error ? error.message : String(error)}`)
   }
 }
 
@@ -1397,42 +1595,42 @@ onMounted(async () => {
       warnClearance: terrainWarningClearance.value,
     }, //传递的参数
   )
-  const positions = [
-    // Cesium.Cartographic.fromDegrees(109.1801986, 21.6083409),
-    // Cesium.Cartographic.fromDegrees(109.0942906,21.0563956),
-    // Cesium.Cartographic.fromDegrees(109.0970023,21.0600092),
-    // Cesium.Cartographic.fromDegrees(109.1684108, 21.6147329),
-    // Cesium.Cartographic.fromDegrees(109.1202941, 21.5712331),
-    // Cesium.Cartographic.fromDegrees(109.0210713, 21.4682243),
-    // Cesium.Cartographic.fromDegrees(109.0521853, 21.273367),
-    // Cesium.Cartographic.fromDegrees(109.0843282, 21.0720289),
-    Cesium.Cartographic.fromDegrees(107.4219485, 37.8557285),
-    Cesium.Cartographic.fromDegrees(110.093484, 22.395758),
-    Cesium.Cartographic.fromDegrees(109.97489, 22.396414),
-    Cesium.Cartographic.fromDegrees(109.682106, 22.14533),
-    Cesium.Cartographic.fromDegrees(109.530916, 21.763838),
-    Cesium.Cartographic.fromDegrees(109.612228, 21.539554),
-    Cesium.Cartographic.fromDegrees(109.495786, 20.007391),
-    Cesium.Cartographic.fromDegrees(109.536614, 19.739022),
-    Cesium.Cartographic.fromDegrees(109.632882, 19.551391),
-    Cesium.Cartographic.fromDegrees(109.998914, 19.153206),
-    Cesium.Cartographic.fromDegrees(110.281251, 18.78065),
-    Cesium.Cartographic.fromDegrees(53.424175, 16.748239),
-    Cesium.Cartographic.fromDegrees(53.424851, 16.741347),
-    Cesium.Cartographic.fromDegrees(53.584866, 16.73893),
-    Cesium.Cartographic.fromDegrees(53.67826, 16.768164),
-    Cesium.Cartographic.fromDegrees(53.770862, 16.799745),
-  ]
+  // const positions = [
+  //   // Cesium.Cartographic.fromDegrees(109.1801986, 21.6083409),
+  //   // Cesium.Cartographic.fromDegrees(109.0942906,21.0563956),
+  //   // Cesium.Cartographic.fromDegrees(109.0970023,21.0600092),
+  //   // Cesium.Cartographic.fromDegrees(109.1684108, 21.6147329),
+  //   // Cesium.Cartographic.fromDegrees(109.1202941, 21.5712331),
+  //   // Cesium.Cartographic.fromDegrees(109.0210713, 21.4682243),
+  //   // Cesium.Cartographic.fromDegrees(109.0521853, 21.273367),
+  //   // Cesium.Cartographic.fromDegrees(109.0843282, 21.0720289),
+  //   Cesium.Cartographic.fromDegrees(107.4219485, 37.8557285),
+  //   Cesium.Cartographic.fromDegrees(110.093484, 22.395758),
+  //   Cesium.Cartographic.fromDegrees(109.97489, 22.396414),
+  //   Cesium.Cartographic.fromDegrees(109.682106, 22.14533),
+  //   Cesium.Cartographic.fromDegrees(109.530916, 21.763838),
+  //   Cesium.Cartographic.fromDegrees(109.612228, 21.539554),
+  //   Cesium.Cartographic.fromDegrees(109.495786, 20.007391),
+  //   Cesium.Cartographic.fromDegrees(109.536614, 19.739022),
+  //   Cesium.Cartographic.fromDegrees(109.632882, 19.551391),
+  //   Cesium.Cartographic.fromDegrees(109.998914, 19.153206),
+  //   Cesium.Cartographic.fromDegrees(110.281251, 18.78065),
+  //   Cesium.Cartographic.fromDegrees(53.424175, 16.748239),
+  //   Cesium.Cartographic.fromDegrees(53.424851, 16.741347),
+  //   Cesium.Cartographic.fromDegrees(53.584866, 16.73893),
+  //   Cesium.Cartographic.fromDegrees(53.67826, 16.768164),
+  //   Cesium.Cartographic.fromDegrees(53.770862, 16.799745),
+  // ]
 
-  const result = await Cesium.sampleTerrain(
-    window.viewer.terrainProvider,
-    13,
-    positions,
-  )
-  console.log(
-    '海拔高度：',
-    result.map((pos) => pos.height),
-  )
+  // const result = await Cesium.sampleTerrain(
+  //   window.viewer.terrainProvider,
+  //   13,
+  //   positions,
+  // )
+  // console.log(
+  //   '海拔高度：',
+  //   result.map((pos) => pos.height),
+  // )
 })
 
 onBeforeUnmount(() => {
@@ -1573,16 +1771,13 @@ async function showLinkHealthInfo() {
         <span>图层管理</span>
       </n-tooltip>
       <!-- 添加数据 -->
-      <n-tooltip placement="bottom" trigger="hover">
-        <template #trigger>
-          <n-button tertiary circle type="warning" @click="handleFile">
-            <template #icon>
-              <n-icon><DuplicateSharp /></n-icon>
-            </template>
-          </n-button>
-        </template>
-        <span>添加数据</span>
-      </n-tooltip>
+      <n-dropdown :options="dataOptions" @select="handleDataSelect">
+        <n-button tertiary circle type="warning">
+          <template #icon>
+            <n-icon><DuplicateSharp /></n-icon>
+          </template>
+        </n-button>
+      </n-dropdown>
       <!-- 地形分析  这些Options在staticOptions.js中定义 -->
       <!-- <n-dropdown
         :options="store.menuOptions.AnalyzeOptions"

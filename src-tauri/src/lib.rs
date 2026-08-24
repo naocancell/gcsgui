@@ -154,6 +154,7 @@ pub fn run() {
             load_selected_obstacles,
             ensure_model_cached,
             resolve_cached_model,
+            pick_3d_tiles_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

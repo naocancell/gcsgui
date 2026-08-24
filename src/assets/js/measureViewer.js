@@ -39,6 +39,85 @@ export default class MeasureViewer {
     }
 
     this.barirsCollection = [] //机场障碍物
+    // Data labels for points stay visible. Line/polygon labels are shown only
+    // while the pointer is over their source entity.
+    this.dataHoverLabelEntity = this.viewer.entities.add({
+      id: '__data-hover-label',
+      label: {
+        show: false,
+        font: 'bold 16px "Microsoft YaHei", "PingFang SC", sans-serif',
+        fillColor: Cesium.Color.WHITE,
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 3,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        showBackground: true,
+        backgroundColor: Cesium.Color.BLACK.withAlpha(0.65),
+        backgroundPadding: new Cesium.Cartesian2(8, 5),
+        horizontalOrigin: Cesium.HorizontalOrigin.LEFT,
+        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+        // Keep the label away from the pointer used for drawing/measurement.
+        pixelOffset: new Cesium.Cartesian2(18, -24),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+    })
+    this.dataHoverHandler = new Cesium.ScreenSpaceEventHandler(
+      this.viewer.scene.canvas,
+    )
+    this.dataHoverHandler.setInputAction(
+      (movement) => this._updateDataHoverLabel(movement.endPosition),
+      Cesium.ScreenSpaceEventType.MOUSE_MOVE,
+    )
+  }
+
+  _hideDataHoverLabel() {
+    if (this.dataHoverLabelEntity?.label) {
+      this.dataHoverLabelEntity.label.show = false
+    }
+  }
+
+  _updateDataHoverLabel(screenPosition) {
+    if (!screenPosition || !this.viewer.scene) {
+      this._hideDataHoverLabel()
+      return
+    }
+
+    const picked = this.viewer.scene.pick(screenPosition)
+    let entity = picked?.id || picked?.primitive?.id
+    if (entity === this.dataHoverLabelEntity) {
+      const underlying = (this.viewer.scene.drillPick?.(screenPosition) || [])
+        .map((item) => item?.id || item?.primitive?.id)
+        .find((candidate) => candidate?.__dataHoverName)
+      entity = underlying
+    }
+    const name = entity?.__dataHoverName
+    if (!name || entity.__dataHoverGeometry === 'point') {
+      this._hideDataHoverLabel()
+      return
+    }
+
+    let position
+    try {
+      if (this.viewer.scene.pickPositionSupported) {
+        position = this.viewer.scene.pickPosition(screenPosition)
+      }
+    } catch (error) {
+      position = undefined
+    }
+    if (!position) {
+      position = this.viewer.scene.camera.pickEllipsoid(
+        screenPosition,
+        this.viewer.scene.globe.ellipsoid,
+      )
+    }
+    if (!position) {
+      this._hideDataHoverLabel()
+      return
+    }
+
+    this.dataHoverLabelEntity.position = position
+    this.dataHoverLabelEntity.label.text = name
+    this.dataHoverLabelEntity.label.show = true
+    this.viewer.scene.requestRender()
   }
 
   profileAnalyse() {
@@ -148,6 +227,7 @@ export default class MeasureViewer {
     })
     this.vertexEntities.push(pEntity)
   }
+  //加载kml
   addKml(kml_file) {
     let kmlDataPromise = Cesium.KmlDataSource.load(kml_file, {
       camera: this.viewer.scene.camera,
@@ -155,62 +235,757 @@ export default class MeasureViewer {
       screenOverlayContainer: this.viewer.container,
       clampToGround: true,
     })
-    console.log(kmlDataPromise)
-    kmlDataPromise.then((dataSource) => {
-      // console.log(dataSource);
+
+    return kmlDataPromise.then((dataSource) => {
+      // 使用 Cesium 当前时钟，确保时间序列 KML 与画面中的实体位置一致。
+      const time = this.viewer.clock.currentTime.clone()
+
+      // 笛卡尔坐标转经纬高
+      function cartesianToLngLatHeight(cartesian) {
+        const cartographic = Cesium.Cartographic.fromCartesian(cartesian)
+
+        return {
+          longitude: Cesium.Math.toDegrees(cartographic.longitude),
+          latitude: Cesium.Math.toDegrees(cartographic.latitude),
+          height: cartographic.height,
+        }
+      }
+
+      // 生成一个简单红色图钉 SVG
+      const pinSvg = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="48" viewBox="0 0 32 48">
+          <path d="M16 0C7.2 0 0 7.2 0 16c0 12 16 32 16 32s16-20 16-32C32 7.2 24.8 0 16 0z" fill="#ff3333"/>
+          <circle cx="16" cy="16" r="7" fill="white"/>
+        </svg>
+      `
+
+      const pinImage =
+        'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(pinSvg)
+
+      // 添加图钉
+      function addPin(position, name, properties = {}) {
+        return dataSource.entities.add({
+          name,
+          position,
+          billboard: {
+            image: pinImage,
+            width: 24,
+            height: 36,
+
+            // 让图钉的底部对准坐标点
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+
+            // 图钉一直能看见
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+
+            // 图钉是否贴地
+            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+            //heightReference: Cesium.HeightReference.NONE
+          },
+          properties,
+        })
+      }
+
+      // 线和面只在代表位置显示一个名称，不在每个顶点放置图标。
+      // 添加名称 Label（线、面使用）
+      function addNameLabel(position, name, properties = {}) {
+      if (!position || !name) return
+
+      const labelEntity = dataSource.entities.add({
+      id: `kml-label-${properties.sourceEntityId}`,
+
+      name: `${name}`,
+
+      position,
+
+      label: {
+        text: new Cesium.ConstantProperty(name),
+      },
+
+      properties: {
+        sourceType: 'kml-label',
+        ...properties,
+      },
+      })
+
+      styleKmlLabel(labelEntity)
+
+      return labelEntity
+      }
+
+      // 获取折线真实长度中心点
+      function getPolylineCenter(positions) {
+      if (!positions || positions.length === 0) {
+        return undefined
+      }
+
+      if (positions.length === 1) {
+        return positions[0]
+      }
+
+
+      let totalLength = 0
+      const segmentLengths = []
+
+
+      for (let i = 0; i < positions.length - 1; i++) {
+
+        const length =
+          Cesium.Cartesian3.distance(
+            positions[i],
+            positions[i + 1],
+          )
+
+        segmentLengths.push(length)
+        totalLength += length
+      }
+
+
+      let targetLength = totalLength / 2
+
+
+      for (let i = 0; i < segmentLengths.length; i++) {
+
+        if (targetLength <= segmentLengths[i]) {
+
+          const ratio =
+            targetLength / segmentLengths[i]
+
+
+          return Cesium.Cartesian3.lerp(
+            positions[i],
+            positions[i + 1],
+            ratio,
+            new Cesium.Cartesian3(),
+          )
+        }
+
+
+        targetLength -= segmentLengths[i]
+      }
+
+
+      return positions[0]
+      }
+      function getGeometryName(entity) {
+
+        if (entity.name) {
+          return entity.name
+        }
+
+
+        if (entity.parent && entity.parent.name) {
+          return entity.parent.name
+        }
+
+
+        return undefined
+      }
+
+      console.log('数据源：', dataSource)
+
       this.viewer.dataSources.add(dataSource)
       this.viewer.flyTo(dataSource)
+
+      // 建议这里存 dataSource，不要存 kmlDataPromise
       useLayerStore().addLayer(
         kml_file.name,
-        kmlDataPromise,
+        dataSource,
         undefined,
         undefined,
         true,
       )
+
+      const result = []
+
+      // 先复制一份原始 entities
+      // 后面 dataSource.entities.add() 会新增图钉实体
+      const originalEntities = [...dataSource.entities.values]
+
+      //修改默认加载kml时候的label样式 
+      // 统一修改 KML 原始 label 样式
+      function styleKmlLabel(entity, labelText = entity.name || '') {
+        if (!entity.label) return
+
+        entity.label.show = new Cesium.ConstantProperty(true)
+
+        // 文字内容，不想改内容可以不写这一行
+        entity.label.text = new Cesium.ConstantProperty(labelText)
+
+        // 字体
+        entity.label.font = new Cesium.ConstantProperty(
+          'bold 16px "Microsoft YaHei", "PingFang SC", sans-serif'
+        )
+
+        // 填充色
+        entity.label.fillColor = new Cesium.ConstantProperty(
+          Cesium.Color.fromCssColorString('#ffffff')
+        )
+
+        // 描边色
+        entity.label.outlineColor = new Cesium.ConstantProperty(
+          Cesium.Color.fromCssColorString('#222222')
+        )
+
+        // 描边宽度
+        entity.label.outlineWidth = new Cesium.ConstantProperty(3)
+        // 填充 + 描边
+        entity.label.style = new Cesium.ConstantProperty(
+          Cesium.LabelStyle.FILL_AND_OUTLINE
+        )
+        // 相对图标的位置，往上偏移
+        entity.label.pixelOffset = new Cesium.ConstantProperty(
+          new Cesium.Cartesian2(0, -42)
+        )
+        // 水平居中
+        entity.label.horizontalOrigin = new Cesium.ConstantProperty(
+          Cesium.HorizontalOrigin.CENTER
+        )
+        // 垂直位置
+        entity.label.verticalOrigin = new Cesium.ConstantProperty(
+          Cesium.VerticalOrigin.BOTTOM
+        )
+        // 永远不被地形/建筑遮挡
+        entity.label.disableDepthTestDistance = new Cesium.ConstantProperty(
+          Number.POSITIVE_INFINITY
+        )
+        // 可选：背景框
+        entity.label.showBackground = new Cesium.ConstantProperty(true)
+        entity.label.backgroundColor = new Cesium.ConstantProperty(
+          Cesium.Color.fromCssColorString('rgba(0, 0, 0, 0.45)')
+        )
+        entity.label.backgroundPadding = new Cesium.ConstantProperty(
+          new Cesium.Cartesian2(8, 5)
+        )
+      }
+
+      // 先改原始 KML label
+      let polylineIndex = 0
+      let polygonIndex = 0
+
+      originalEntities.forEach((entity) => {
+        const isPoint =
+          !!entity.position &&
+          !entity.polyline &&
+          !entity.polygon &&
+          !entity.rectangle &&
+          !entity.ellipse &&
+          !entity.corridor
+        const entityName = getGeometryName(entity)
+
+        if (isPoint) {
+          if (!entity.label && entityName) {
+            entity.label = new Cesium.LabelGraphics()
+          }
+          if (entity.label && entityName) {
+            styleKmlLabel(entity, entityName)
+          } else if (entity.label) {
+            entity.label.show = new Cesium.ConstantProperty(false)
+          }
+        } else if (entity.label) {
+          // Line and polygon names are shown by the shared hover label.
+          entity.label.show = new Cesium.ConstantProperty(false)
+        }
+      })
+
+      originalEntities.forEach((entity) => {
+        const isPoint =
+          !!entity.position &&
+          !entity.polyline &&
+          !entity.polygon &&
+          !entity.rectangle &&
+          !entity.ellipse &&
+          !entity.corridor
+
+        // 1. KML 里的 Point
+        if (isPoint && entity.position) {
+          const position = entity.position.getValue(time)
+
+          if (position) {
+            result.push({
+              entityName: entity.name,
+              type: 'point',
+              point: cartesianToLngLatHeight(position),
+            })
+
+            addPin(position, `${entity.name || 'point'}-pin`, {
+              sourceType: 'point',
+              sourceEntityId: entity.id,
+            })
+          }
+        }
+
+        // 2. KML 里的 LineString / Polyline
+        if (entity.polyline && entity.polyline.positions) {
+
+          const positions =
+            entity.polyline.positions.getValue(time)
+
+
+          if (positions && positions.length > 1) {
+
+
+            const geometryName =
+              getGeometryName(entity)
+
+
+            result.push({
+              entityName: geometryName,
+              type: 'polyline',
+              points: positions.map((position) =>
+                cartesianToLngLatHeight(position),
+              ),
+            })
+
+
+            // 有名字才显示
+            if (geometryName) {
+
+              entity.__dataHoverName = geometryName
+              entity.__dataHoverGeometry = 'polyline'
+            }
+          }
+        }
+
+        // 3. KML 里的 Polygon
+        if (entity.polygon && entity.polygon.hierarchy) {
+          const hierarchy =
+            entity.polygon.hierarchy.getValue(time)
+
+          if (
+            hierarchy &&
+            hierarchy.positions &&
+            hierarchy.positions.length > 2
+          ) {
+            const geometryName =
+              getGeometryName(entity)
+            result.push({
+              entityName: geometryName,
+              type: 'polygon',
+              points: hierarchy.positions.map((position) =>
+                cartesianToLngLatHeight(position),
+              ),
+            })
+            if (geometryName) {
+              entity.__dataHoverName = geometryName
+              entity.__dataHoverGeometry = 'polygon'
+            }
+          }
+        }
+      })
+
+      console.log('KML 提取结果：', result)
+
+      // 供图层菜单导出，避免从已经添加的 Pin 实体反向推导而产生重复数据。
+      dataSource.__kmlCoordinateExport = result
+      this.viewer.scene.requestRender()
+      return dataSource
+    }).catch((error) => {
+      console.error('KML 加载失败：', error)
+      throw error
     })
-  }
+}
 
   addJson(js_file) {
-    // 加载geojson数据
-    let dataGeo = Cesium.GeoJsonDataSource.load(
-      js_file,
-      //设置样式
-      {
-        stroke: Cesium.Color.RED,
-        fill: Cesium.Color.SKYBLUE.withAlpha(0.5),
-        strokeWidth: 4,
-      },
-    )
-    // viewer.dataSources.add(dataGeo);//可直接进行添加数据
-    //dataGeo Promise对象加载完毕后执行
-    dataGeo.then((dataSources) => {
-      console.log(dataSources)
-      this.viewer.dataSources.add(dataSources)
+    const url = URL.createObjectURL(js_file)
+    const groundHeightReference = Cesium.HeightReference.CLAMP_TO_GROUND
+    const dataGeo = Cesium.GeoJsonDataSource.load(url, {
+      clampToGround: true,
+    })
+
+    const loadResult = dataGeo
+      .then((dataSource) => {
+        console.log(dataSource)
+        this.viewer.dataSources.add(dataSource)
+        this.viewer.flyTo(dataSource)
+        useLayerStore().addLayer(
+          js_file.name,
+          dataGeo,
+          undefined,
+          undefined,
+          true,
+        )
+
+        const pinSvg = `
+          <svg xmlns="http://www.w3.org/2000/svg" width="32" height="48" viewBox="0 0 32 48">
+            <path d="M16 0C7.2 0 0 7.2 0 16c0 12 16 32 16 32s16-20 16-32C32 7.2 24.8 0 16 0z" fill="#ff3333"/>
+            <circle cx="16" cy="16" r="7" fill="white"/>
+          </svg>
+        `
+        const pinImage =
+          'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(pinSvg)
+        const currentTime = this.viewer.clock.currentTime
+
+        const getEntityName = (entity) => {
+          const directName = entity.name
+          if (typeof directName === 'string' && directName.trim()) {
+            return directName.trim()
+          }
+
+          const parentName = entity.parent?.name
+          if (typeof parentName === 'string' && parentName.trim()) {
+            return parentName.trim()
+          }
+
+          const propertyValues = entity.properties?.getValue(currentTime)
+          if (!propertyValues) return undefined
+
+          const nameFields = [
+            'name',
+            'Name',
+            'NAME',
+            'title',
+            'label',
+            '名称',
+          ]
+          for (const field of nameFields) {
+            const value = propertyValues[field]
+            if (typeof value === 'string' && value.trim()) {
+              return value.trim()
+            }
+            if (typeof value === 'number') {
+              return String(value)
+            }
+          }
+
+          return undefined
+        }
+
+        const styleKmlLabel = (label, text) => {
+          label.show = true
+          label.text = text
+          label.font =
+            'bold 16px "Microsoft YaHei", "PingFang SC", sans-serif'
+          label.fillColor = Cesium.Color.WHITE
+          label.outlineColor = Cesium.Color.fromCssColorString('#222222')
+          label.outlineWidth = 3
+          label.style = Cesium.LabelStyle.FILL_AND_OUTLINE
+          label.pixelOffset = new Cesium.Cartesian2(0, -42)
+          label.horizontalOrigin = Cesium.HorizontalOrigin.CENTER
+          label.verticalOrigin = Cesium.VerticalOrigin.BOTTOM
+          label.heightReference = groundHeightReference
+          label.disableDepthTestDistance = Number.POSITIVE_INFINITY
+          label.showBackground = true
+          label.backgroundColor = Cesium.Color.fromCssColorString(
+            'rgba(0, 0, 0, 0.45)',
+          )
+          label.backgroundPadding = new Cesium.Cartesian2(8, 5)
+        }
+
+        const getPolylineCenter = (positions) => {
+          if (!positions || positions.length === 0) return undefined
+          if (positions.length === 1) return positions[0]
+
+          let totalLength = 0
+          const segmentLengths = []
+          for (let i = 0; i < positions.length - 1; i++) {
+            const length = Cesium.Cartesian3.distance(
+              positions[i],
+              positions[i + 1],
+            )
+            segmentLengths.push(length)
+            totalLength += length
+          }
+
+          let targetLength = totalLength / 2
+          for (let i = 0; i < segmentLengths.length; i++) {
+            const segmentLength = segmentLengths[i]
+            if (targetLength <= segmentLength) {
+              return Cesium.Cartesian3.lerp(
+                positions[i],
+                positions[i + 1],
+                targetLength / segmentLength,
+                new Cesium.Cartesian3(),
+              )
+            }
+            targetLength -= segmentLength
+          }
+
+          return positions[0]
+        }
+
+        // The bounding-sphere center can fall outside a concave polygon.
+        // Project the polygon to a local tangent plane and choose an interior point instead.
+        const isPointInsideRing = (point, ring) => {
+          let inside = false
+          for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+            const current = ring[i]
+            const previous = ring[j]
+            const crossesY =
+              current.y > point.y !== previous.y > point.y
+            if (crossesY) {
+              const intersectionX =
+                ((previous.x - current.x) * (point.y - current.y)) /
+                  (previous.y - current.y) +
+                current.x
+              if (point.x < intersectionX) inside = !inside
+            }
+          }
+          return inside
+        }
+
+        const getPolygonLabelPosition = (hierarchy) => {
+          const positions = hierarchy?.positions
+          if (!positions || positions.length < 3) return undefined
+
+          const tangentPlane = Cesium.EllipsoidTangentPlane.fromPoints(
+            positions,
+          )
+          const outerRing = tangentPlane.projectPointsOntoPlane(positions)
+          if (!outerRing || outerRing.length < 3) return undefined
+
+          const holes = (hierarchy.holes || [])
+            .map((hole) => tangentPlane.projectPointsOntoPlane(hole.positions))
+            .filter((ring) => ring && ring.length > 2)
+
+          const getCentroid = (ring) => {
+            let areaTwice = 0
+            let centroidX = 0
+            let centroidY = 0
+
+            for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+              const current = ring[i]
+              const previous = ring[j]
+              const cross = previous.x * current.y - current.x * previous.y
+              areaTwice += cross
+              centroidX += (previous.x + current.x) * cross
+              centroidY += (previous.y + current.y) * cross
+            }
+
+            if (Math.abs(areaTwice) < Cesium.Math.EPSILON10) {
+              const average = outerRing.reduce(
+                (result, point) => {
+                  result.x += point.x
+                  result.y += point.y
+                  return result
+                },
+                new Cesium.Cartesian2(),
+              )
+              return new Cesium.Cartesian2(
+                average.x / outerRing.length,
+                average.y / outerRing.length,
+              )
+            }
+
+            return new Cesium.Cartesian2(
+              centroidX / (3 * areaTwice),
+              centroidY / (3 * areaTwice),
+            )
+          }
+
+          const isInsidePolygon = (point) =>
+            isPointInsideRing(point, outerRing) &&
+            !holes.some((hole) => isPointInsideRing(point, hole))
+
+          const centroid = getCentroid(outerRing)
+          const candidates = [centroid]
+
+          // These fallbacks handle concave polygons whose area centroid is outside.
+          for (let i = 0; i < outerRing.length; i++) {
+            const current = outerRing[i]
+            const next = outerRing[(i + 1) % outerRing.length]
+            candidates.push(
+              new Cesium.Cartesian2(
+                (current.x + next.x + outerRing[0].x) / 3,
+                (current.y + next.y + outerRing[0].y) / 3,
+              ),
+            )
+          }
+          candidates.push(
+            new Cesium.Cartesian2(
+              outerRing.reduce((sum, point) => sum + point.x, 0) /
+                outerRing.length,
+              outerRing.reduce((sum, point) => sum + point.y, 0) /
+                outerRing.length,
+            ),
+          )
+
+          const interiorPoint = candidates.find(isInsidePolygon)
+          if (!interiorPoint) {
+            return Cesium.BoundingSphere.fromPoints(positions).center
+          }
+          return tangentPlane.projectPointOntoEllipsoid(interiorPoint)
+        }
+
+        const addNameLabel = (position, name, sourceEntity, geometryType) => {
+          if (!position || !name) return undefined
+
+          const labelId = `geojson-label-${geometryType}-${sourceEntity.id}`
+          let labelEntity = dataSource.entities.getById(labelId)
+          if (!labelEntity) {
+            labelEntity = dataSource.entities.add({
+              id: labelId,
+              name,
+              position,
+              label: {},
+              properties: {
+                sourceType: 'geojson-label',
+                sourceEntityId: sourceEntity.id,
+                geometryType,
+              },
+            })
+          }
+
+          styleKmlLabel(labelEntity.label, name)
+          return labelEntity
+        }
+
+        const markHoverEntity = (entity, name, geometryType) => {
+          if (!entity || !name) return
+          entity.__dataHoverName = name
+          entity.__dataHoverGeometry = geometryType
+          if (entity.label) entity.label.show = false
+        }
+
+        const originalEntities = [...dataSource.entities.values]
+        originalEntities.forEach((entity) => {
+          const entityName = getEntityName(entity)
+
+          if (entity.point) {
+            entity.point.heightReference = groundHeightReference
+            entity.point.disableDepthTestDistance =
+              Number.POSITIVE_INFINITY
+          }
+
+          if (entity.billboard) {
+            entity.billboard.image = pinImage
+            entity.billboard.width = 24
+            entity.billboard.height = 36
+            entity.billboard.heightReference = groundHeightReference
+            entity.billboard.verticalOrigin = Cesium.VerticalOrigin.BOTTOM
+            entity.billboard.disableDepthTestDistance =
+              Number.POSITIVE_INFINITY
+          }
+
+          const isPoint = entity.point || entity.billboard
+          if (isPoint && entity.position && entityName) {
+            if (!entity.label) {
+              entity.label = new Cesium.LabelGraphics()
+            }
+            styleKmlLabel(entity.label, entityName)
+          } else if (!isPoint && entity.label) {
+            entity.label.show = false
+          }
+
+          if (entity.polyline) {
+            entity.polyline.clampToGround = true
+            const positions = entity.polyline.positions?.getValue(currentTime)
+            if (positions?.length > 1 && entityName) {
+              markHoverEntity(entity, entityName, 'polyline')
+            }
+          }
+
+          if (entity.polygon) {
+            entity.polygon.perPositionHeight = false
+            entity.polygon.height = undefined
+            entity.polygon.heightReference = groundHeightReference
+            entity.polygon.extrudedHeight = undefined
+            entity.polygon.extrudedHeightReference = groundHeightReference
+
+            const hierarchy = entity.polygon.hierarchy?.getValue(currentTime)
+            if (hierarchy?.positions?.length > 2 && entityName) {
+              markHoverEntity(entity, entityName, 'polygon')
+            }
+          }
+
+          if (entity.rectangle) {
+            entity.rectangle.height = undefined
+            entity.rectangle.heightReference = groundHeightReference
+            entity.rectangle.extrudedHeight = undefined
+
+            const rectangle = entity.rectangle.coordinates?.getValue(currentTime)
+            if (rectangle && entityName) {
+              markHoverEntity(entity, entityName, 'rectangle')
+            }
+          }
+
+          if (entity.ellipse) {
+            entity.ellipse.height = undefined
+            entity.ellipse.heightReference = groundHeightReference
+            entity.ellipse.extrudedHeight = undefined
+
+            const position = entity.position?.getValue(currentTime)
+            if (position && entityName) {
+              markHoverEntity(entity, entityName, 'ellipse')
+            }
+          }
+
+          if (entity.corridor) {
+            entity.corridor.height = undefined
+            entity.corridor.heightReference = groundHeightReference
+            entity.corridor.extrudedHeight = undefined
+
+            const positions = entity.corridor.positions?.getValue(currentTime)
+            if (positions?.length && entityName) {
+              markHoverEntity(entity, entityName, 'corridor')
+            }
+          }
+        })
+
+        this.viewer.scene.requestRender()
+        return dataSource
+      })
+      .catch((error) => {
+        console.error('GeoJSON load failed:', error)
+        throw error
+      })
+      .finally(() => {
+        URL.revokeObjectURL(url)
+      })
+
+    return loadResult
+  }
+
+  /**
+   * 加载 Cesium 3D Tiles。url 可以是网络 tileset.json，也可以是已经将
+   * 本地目录映射为 Blob URL 的 tileset.json。
+   */
+  async add3DTiles(url, name = '3D Tiles', objectUrls = []) {
+    if (!url) throw new Error('未提供 3D Tiles tileset.json 地址')
+
+    let tileset
+    try {
+      if (Cesium.Cesium3DTileset?.fromUrl) {
+        tileset = await Cesium.Cesium3DTileset.fromUrl(url, {
+          // 先加载可见的中等精度瓦片，避免大量白膜同时请求最高细节。
+          maximumScreenSpaceError: 32,
+          skipLevelOfDetail: true,
+          baseScreenSpaceError: 1024,
+          skipScreenSpaceErrorFactor: 16,
+          skipLevels: 1,
+          immediatelyLoadDesiredLevelOfDetail: false,
+          loadSiblings: false,
+        })
+      } else {
+        tileset = new Cesium.Cesium3DTileset({ url })
+        if (tileset.readyPromise) await tileset.readyPromise
+      }
+
+      this.viewer.scene.primitives.add(tileset)
+      await this.viewer.flyTo(tileset)
       useLayerStore().addLayer(
-        js_file.name,
-        dataGeo,
+        name,
+        undefined,
         undefined,
         undefined,
         true,
+        markRaw(tileset),
+        objectUrls,
       )
-
-      // 获取datasources中的实体
-      let entities = dataSources.entities.values
-      //获取每一个实体
-      // entities.forEach((entity, i) => {
-      //     //设置随机颜色
-      //     entity.polygon.material = new Cesium.ColorMaterialProperty(
-      //         Cesium.Color.fromRandom({
-      //             alpha: 1,
-      //         })
-      //     );
-      //     entity.polygon.outline = false;
-      //     //随机高度（5个级别）
-      //     let randomNum = parseInt(Math.random() * 5);
-      //     //挤出高度
-      //     entity.polygon.extrudedHeight = 100000 * randomNum;
-      // });
-    })
+      this.viewer.scene.requestRender()
+      return tileset
+    } catch (error) {
+      if (tileset) {
+        if (this.viewer.scene.primitives.contains(tileset)) {
+          this.viewer.scene.primitives.remove(tileset)
+        }
+        if (typeof tileset.destroy === 'function' && !tileset.isDestroyed?.()) {
+          tileset.destroy()
+        }
+      }
+      objectUrls.forEach((objectUrl) => URL.revokeObjectURL(objectUrl))
+      throw error
+    }
   }
 //添加WMS图层函数
   async AddWMSLayer(url, layers, bounds) {

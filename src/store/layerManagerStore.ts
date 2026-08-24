@@ -6,6 +6,8 @@ type layer = {
   dataSource?: any //数据源
   imageLayer?: any //图层
   entity?: any[]   //几何实体
+  tileset?: any // Cesium 3D Tiles 图层
+  objectUrls?: string[] // 本地 Tiles 资源对应的 Blob URL
   show: boolean    //是否显示
 }
 
@@ -35,6 +37,8 @@ export const useLayerStore = defineStore('LayerStore', {
       imageLayer?: any,
       entity?: any[],
       show = true,
+      tileset?: any,
+      objectUrls?: string[],
     ) {
       let time = new Date()
       //自定义的layer类型 用于展示图层的属性
@@ -42,6 +46,8 @@ export const useLayerStore = defineStore('LayerStore', {
         dataSource: dataSource,
         imageLayer: imageLayer,
         entity: entity,
+        tileset,
+        objectUrls,
         lId: time.getTime().toString(),
         lName: lName,
         show: show,

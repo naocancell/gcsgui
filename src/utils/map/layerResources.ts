@@ -4,6 +4,8 @@ type ManagedLayer = {
   dataSource?: unknown
   imageLayer?: unknown
   entity?: unknown[]
+  tileset?: any
+  objectUrls?: string[]
 }
 
 export async function removeLayerResources(viewer: any, layer: ManagedLayer) {
@@ -23,5 +25,21 @@ export async function removeLayerResources(viewer: any, layer: ManagedLayer) {
 
   for (const entity of layer.entity ?? []) {
     if (entity) viewer.entities.remove(entity)
+  }
+
+  const tileset = toRaw(layer.tileset)
+  if (tileset) {
+    if (viewer.scene?.primitives?.contains?.(tileset)) {
+      viewer.scene.primitives.remove(tileset)
+    }
+    if (typeof tileset.destroy === 'function' && !tileset.isDestroyed?.()) {
+      tileset.destroy()
+    }
+  }
+
+  for (const objectUrl of layer.objectUrls ?? []) {
+    if (typeof objectUrl === 'string' && objectUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(objectUrl)
+    }
   }
 }

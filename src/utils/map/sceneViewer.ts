@@ -67,8 +67,10 @@ function initViewer(container: string | Element): Viewer {
   // viewer.resolutionScale = window.devicePixelRatio
   // 视图重绘后确保清晰度
   viewer.scene.preRender.addEventListener(function () {
-    if (viewer.resolutionScale !== window.devicePixelRatio) {
-      viewer.resolutionScale = window.devicePixelRatio
+    // 高 DPI 屏幕会将渲染像素放大数倍，限制到 1 可显著降低白膜 GPU 压力。
+    const renderScale = Math.min(window.devicePixelRatio || 1, 1)
+    if (viewer.resolutionScale !== renderScale) {
+      viewer.resolutionScale = renderScale
     }
   })
   // 去掉entity的点击事件（双击、单击）
@@ -98,8 +100,8 @@ function perfViewer(viewer: Viewer) {
   viewer.scene.sun.show = false
   viewer.scene.skyBox.show = false
   // 优化加载WMTS图层速度
-  RequestScheduler.maximumRequestsPerServer = 18 // 设置cesium请求调度器的最大并发数量
-  RequestScheduler.throttleRequests = false //关闭请求调度器的请求节流
+  RequestScheduler.maximumRequestsPerServer = 8 // 白膜加载时限制单服务器并发，避免请求和解析任务同时堆积
+  RequestScheduler.throttleRequests = true // 让 Cesium 根据优先级调度可见瓦片
 }
 
 function showNavigator(viewer: Viewer) {
