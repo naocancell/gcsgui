@@ -66,6 +66,7 @@ import { formatNoFlyZoneConflictMessage } from '@/utils/map/noFlyZoneService'
 import { useRouter } from 'vue-router'
 import { getUnicode } from '@/types/entityoptions.ts'
 import { invoke } from '@tauri-apps/api/core'
+import shp from 'shpjs'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { storeToRefs } from 'pinia'
@@ -700,6 +701,7 @@ function handleMeasureSelect(key) {
 const dataOptions = [
   { label: '加载 KML / KMZ', key: 'kml' },
   { label: '加载 GeoJSON', key: 'geojson' },
+  { label: '加载 Shapefile', key: 'shp' },
   { label: '加载 3D Tiles（选择 tileset.json）', key: '3dtiles' },
 ]
 
@@ -870,23 +872,83 @@ async function createLocalTilesetUrl(assets: LocalAsset[]) {
   }
 }
 
-async function loadDataFile(kind: 'kml' | 'geojson') {
+function pickShapefileParts(): Promise<File[] | undefined> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.multiple = true
+    input.accept = '.shp,.shx,.dbf,.prj,.qpj,.cpg'
+    input.onchange = () => {
+      resolve(Array.from(input.files ?? []))
+      input.remove()
+    }
+    input.oncancel = () => {
+      resolve(undefined)
+      input.remove()
+    }
+    input.click()
+  })
+}
+
+async function loadShapefile() {
+  const selected = await pickShapefileParts()
+  if (!selected?.length) return
+
+  const shpFile = selected.find((file) => /\.shp$/i.test(file.name))
+  if (!shpFile) throw new Error('请选择 .shp 文件，并同时选择对应的 .dbf、.shx 文件')
+
+  const stem = shpFile.name.replace(/\.shp$/i, '')
+  const byExtension = (extension: string) =>
+    selected.find((file) => file.name.replace(/\.[^.]+$/, '').toLowerCase() === stem.toLowerCase() && file.name.toLowerCase().endsWith(extension))
+
+  const dbfFile = byExtension('.dbf')
+  const prjFile = byExtension('.prj') || byExtension('.qpj')
+  const cpgFile = byExtension('.cpg')
+  if (!dbfFile) {
+    throw new Error('缺少与 .shp 同名的 .dbf 文件，无法读取属性名称')
+  }
+  const geojson = await shp({
+    shp: await shpFile.arrayBuffer(),
+    dbf: dbfFile ? await dbfFile.arrayBuffer() : undefined,
+    // shpjs 会根据 WKT 投影定义把坐标转换为 WGS84 经纬度
+    prj: prjFile ? await prjFile.text() : undefined,
+    // 国内 DBF 没有 .cpg 时通常是 GBK，直接按 UTF-8 读取会导致属性名称乱码
+    cpg: cpgFile ? (await cpgFile.text()).trim() : 'GBK',
+  })
+  const features = Array.isArray(geojson) ? geojson : [geojson]
+  const output = features.length === 1 ? features[0] : {
+    type: 'FeatureCollection',
+    features: features.flatMap((item: any) => item.features || []),
+  }
+  const geojsonFile = new File(
+    [JSON.stringify(output)],
+    `${stem}.geojson`,
+    { type: 'application/geo+json' },
+  )
+  await loadDataFile('geojson', geojsonFile, 'Shapefile')
+}
+
+async function loadDataFile(
+  kind: 'kml' | 'geojson',
+  selectedFile?: File,
+  displayKind = kind === 'kml' ? 'KML' : 'GeoJSON',
+) {
   const accept =
     kind === 'kml'
       ? { 'application/vnd.google-earth.kml+xml': ['.kml'], 'application/vnd.google-earth.kmz': ['.kmz'] }
       : { 'application/geo+json': ['.geojson'], 'application/json': ['.json', '.topojson'] }
-  const file = await pickSingleFile(accept)
+  const file = selectedFile || (await pickSingleFile(accept))
   if (!file) return
   if (!window.measureViewer || !window.viewer) {
     message.error('地图尚未初始化完成')
     return
   }
-  const loading = message.loading(`${kind === 'kml' ? 'KML' : 'GeoJSON'} 加载中`, { duration: 0 })
+  const loading = message.loading(`${displayKind} 加载中`, { duration: 0 })
   try {
     await (kind === 'kml' ? window.measureViewer.addKml(file) : window.measureViewer.addJson(file))
-    message.success(`${kind === 'kml' ? 'KML' : 'GeoJSON'} 加载成功`)
+    message.success(`${displayKind} 加载成功`)
   } catch (error) {
-    message.error(`${kind === 'kml' ? 'KML' : 'GeoJSON'} 加载失败：${error instanceof Error ? error.message : String(error)}`)
+    message.error(`${displayKind} 加载失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
     loading.destroy()
   }
@@ -918,6 +980,7 @@ async function load3DTiles() {
 async function handleDataSelect(key: string) {
   try {
     if (key === 'kml' || key === 'geojson') await loadDataFile(key)
+    else if (key === 'shp') await loadShapefile()
     else if (key === '3dtiles') await load3DTiles()
   } catch (error) {
     if (!isAbortError(error)) message.error(`选择数据失败：${error instanceof Error ? error.message : String(error)}`)

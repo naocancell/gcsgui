@@ -43,6 +43,7 @@
     "naive-ui": "^2.35.0",
     "pinia": "^2.1.7",
     "pinia-plugin-persist": "^1.0.0",
+    "shpjs": "^6.2.0",
     "tokml": "^0.4.0",
     "turf": "^3.0.14",
     "vue": "^3.4.21",
