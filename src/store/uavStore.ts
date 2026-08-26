@@ -69,6 +69,7 @@ export const useUavStore = defineStore('uav', () => {
   const availablePorts = ref<string[]>([])
 
   const networkInterfaces = ref<{ name: string; ip: string }[]>([])
+  // 链路健康数据
   const rxHealth = shallowRef<RxHealthSnapshot>({ links: [], aircraft: [] })
 
   let unlisten: UnlistenFn | null = null
@@ -83,8 +84,9 @@ export const useUavStore = defineStore('uav', () => {
   let healthUnlisten: UnlistenFn | null = null
   let healthListenPromise: Promise<void> | null = null
   let healthListenerGeneration = 0
-
+// 检查当前通信链路列表中，是否存在一个“启用状态 + 协议是 FP95”的链路
   function needsFp95Listening() {
+    // some() 是 JavaScript 数组方法  是否有满足条件的链路
     return links.value.some((link) => link.enabled && link.protocol === 'FP95')
   }
 
@@ -195,9 +197,11 @@ export const useUavStore = defineStore('uav', () => {
       if (fp981cListenPromise === pending) fp981cListenPromise = null
     }
   }
-
+//让当前窗口安全地订阅 Rust 后端发送的无人机健康状态数据，并保证不会重复监听、不会并发启动、不会让旧监听影响新状态。
   async function startHealthListening(lifecycleGeneration: number) {
+    // 健康监听已经存在，就不要再次启动，直接退出这个函数
     if (healthUnlisten) return
+    //正在启动 防止再次启动
     if (healthListenPromise) {
       await healthListenPromise
       if (!healthUnlisten && needsHealthListening()) {
@@ -205,12 +209,14 @@ export const useUavStore = defineStore('uav', () => {
       }
       return
     }
-
+    //创建异步函数 并立即执行
     const pending = (async () => {
+      // 暂存的取消监听句柄
       const candidateUnlisten = await listen<RxHealthSnapshot>(
         'link-health-event',
         (event) => {
           if (
+            //lifecycleGeneration内部  healthListenerGeneration全局
             lifecycleGeneration === healthListenerGeneration &&
             needsHealthListening()
           ) {
@@ -222,6 +228,7 @@ export const useUavStore = defineStore('uav', () => {
         lifecycleGeneration === healthListenerGeneration &&
         needsHealthListening()
       ) {
+        //保存取消链路健康监听句柄到全局
         healthUnlisten = candidateUnlisten
         console.log('前端已挂载链路健康监听服务')
       } else {
@@ -279,6 +286,7 @@ export const useUavStore = defineStore('uav', () => {
 
   function deactivateUnusedProtocolListeners() {
     if (!needsFp95Listening()) {
+      //版本控制 防止异步旧数据返回
       fp95ListenerGeneration += 1
       stopFp95Listening()
       clearFp95State()
@@ -288,6 +296,7 @@ export const useUavStore = defineStore('uav', () => {
       stopFp981cListening()
       fp981cMap.value = new Map()
     }
+    //有激活的链路就需要 链路健康状态”的监听
     if (!needsHealthListening()) {
       healthListenerGeneration += 1
       stopHealthListening()
@@ -309,6 +318,7 @@ export const useUavStore = defineStore('uav', () => {
       await startFp981cListening(fp981cLifecycleGeneration)
     }
     if (needsHealthListening()) {
+      //开启健康链路监听
       await startHealthListening(healthListenerGeneration)
     }
   }
@@ -491,13 +501,16 @@ export const useUavStore = defineStore('uav', () => {
 
   async function loadCommsConfig() {
     try {
+      //读取本地配置文件comms.js文件
       const config = await invoke<PersistedCommsConfig>('get_comms_config')
       console.log('读取到本地通信配置:', config)
       if (config?.udp?.length || config?.serial?.length) {
+        // 读取并整理这个配置文件 输一个链路描述数组
         links.value = fromCommsConfig(config)
       } else {
         links.value = createDefaultLinkDrafts()
       }
+
       await syncProtocolListeners()
       return config
     } catch (err) {

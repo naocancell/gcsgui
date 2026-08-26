@@ -108,9 +108,10 @@ export function createDefaultLinkDrafts(): LinkDraft[] {
 function protocolForLink(kind: LinkKind, protocol: ProtocolType): ProtocolType {
   return kind === 'serial' && protocol === 'UAVInfo' ? 'FP981C' : protocol
 }
-
+//整理Udp 串口配置中的数据 并返回
 export function fromCommsConfig(config: PersistedCommsConfig): LinkDraft[] {
   const udpLinks = (config.udp ?? []).map((item, index) => {
+    // udp模式判断 单播或组播
     const mode = item.mode === 'unicast' ? 'udp-unicast' : 'udp-multicast'
     return {
       id: makeId(`udp-${index}`),
@@ -139,7 +140,7 @@ export function fromCommsConfig(config: PersistedCommsConfig): LinkDraft[] {
     localPort: 0,
     targetPort: 0,
     interfaceIp: '',
-    portName: item.port_name,
+    portName: item.port_name, //com1
     baudRate: item.baud_rate,
   }))
 

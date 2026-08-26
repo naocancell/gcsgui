@@ -104,6 +104,12 @@ import {
 import LosAnalyseOptions from './LosAnalyseOptions.vue'
 import type { RouteLosAnalyseParams } from '@/types/routeLineOfSight'
 import type { LinkDraft, LinkKind } from '@/store/commsConfig'
+import {
+  useViewSettingsStore,
+  type AdministrativeLevel,
+} from '@/store/viewSettingsStore'
+import { toggleAdministrativeBoundary } from '@/utils/map/viewSettings'
+import { setGraticuleVisible } from '@/utils/map/graticule'
 
 declare global {
   interface Window {
@@ -166,7 +172,9 @@ const airportListLoading = ref(false)
 const selectedAirportIds = ref<number[]>([])
 const airportList = ref<any[]>([])
 const allAirportsSelected = computed(
-  () => airportList.value.length > 0 && selectedAirportIds.value.length === airportList.value.length,
+  () =>
+    airportList.value.length > 0 &&
+    selectedAirportIds.value.length === airportList.value.length,
 )
 const obstacleLoadingOptions = computed(() =>
   store.menuOptions.obstacleOptions.map((option) => {
@@ -234,6 +242,74 @@ let showDetection = ref(false)
 let store = useStaticStore()
 const uavStore = useUavStore()
 let lStore = useLayerStore()
+const viewSettingsStore = useViewSettingsStore()
+const viewSettingsLoading = ref(false)
+const viewSettingsOptions = computed(() => [
+  {
+    label: viewSettingsStore.showCoordinates ? '隐藏经纬度' : '显示经纬度',
+    key: 'coordinates',
+  },
+  {
+    label: viewSettingsStore.showProvince ? '隐藏省级行政区' : '显示省级行政区',
+    key: 'province',
+  },
+  {
+    label: viewSettingsStore.showCity ? '隐藏市级行政区' : '显示市级行政区',
+    key: 'city',
+  },
+  {
+    label: viewSettingsStore.showCounty ? '隐藏县级行政区' : '显示县级行政区',
+    key: 'county',
+  },
+])
+const viewSettingsActive = computed(
+  () =>
+    viewSettingsStore.showCoordinates ||
+    viewSettingsStore.showProvince ||
+    viewSettingsStore.showCity ||
+    viewSettingsStore.showCounty,
+)
+
+function setAdministrativeVisibility(
+  level: AdministrativeLevel,
+  visible: boolean,
+) {
+  if (level === 'province') viewSettingsStore.showProvince = visible
+  if (level === 'city') viewSettingsStore.showCity = visible
+  if (level === 'county') viewSettingsStore.showCounty = visible
+}
+
+async function handleViewSettingsSelect(key: string | number) {
+  if (key === 'coordinates') {
+    viewSettingsStore.showCoordinates = !viewSettingsStore.showCoordinates
+    const viewer = window.viewer as Cesium.Viewer | undefined
+    if (viewer) {
+      setGraticuleVisible(viewer, viewSettingsStore.showCoordinates)
+    }
+    return
+  }
+
+  if (viewSettingsLoading.value) return
+  if (key !== 'province' && key !== 'city' && key !== 'county') return
+
+  const viewer = window.viewer as Cesium.Viewer | undefined
+  if (!viewer) {
+    message.warning('地图尚未初始化')
+    return
+  }
+
+  viewSettingsLoading.value = true
+  try {
+    const visible = await toggleAdministrativeBoundary(viewer, key)
+    setAdministrativeVisibility(key, visible)
+  } catch (error) {
+    message.error(
+      `行政区边界加载失败：${error instanceof Error ? error.message : String(error)}`,
+    )
+  } finally {
+    viewSettingsLoading.value = false
+  }
+}
 let groundHeight = ref(-1)
 let detectDivHeight = ref(25)
 const spatialAnalyse = ref(null)
@@ -539,8 +615,12 @@ async function loadSelectedAirports() {
     const result = await loadAirports(selected)
     obstacleVisible.value = true
     showAirportModal.value = false
-    const updated = result.results.filter((item) => item.source === 'updated').length
-    const remote = result.results.filter((item) => item.source === 'remote').length
+    const updated = result.results.filter(
+      (item) => item.source === 'updated',
+    ).length
+    const remote = result.results.filter(
+      (item) => item.source === 'remote',
+    ).length
     const stale = result.results.filter((item) => item.stale).length
     const details = [
       `${selected.length} 个机场，共 ${result.count} 个障碍物`,
@@ -740,7 +820,8 @@ async function collectDirectoryAssets(directory: any): Promise<LocalAsset[]> {
   async function visit(handle: any, prefix = '') {
     for await (const [name, child] of handle.entries()) {
       const path = prefix ? `${prefix}/${name}` : name
-      if (child.kind === 'file') assets.push({ path, file: await child.getFile() })
+      if (child.kind === 'file')
+        assets.push({ path, file: await child.getFile() })
       else await visit(child, path)
     }
   }
@@ -795,8 +876,12 @@ function normalizeAssetPath(path: string) {
 
 /** 将目录中的相对资源转换成 Blob URL，使 tileset.json 可在本地 WebView 中加载。 */
 async function createLocalTilesetUrl(assets: LocalAsset[]) {
-  const files = new Map(assets.map((asset) => [normalizeAssetPath(asset.path), asset.file]))
-  const rootPath = [...files.keys()].find((path) => /(^|\/)tileset\.json$/i.test(path))
+  const files = new Map(
+    assets.map((asset) => [normalizeAssetPath(asset.path), asset.file]),
+  )
+  const rootPath = [...files.keys()].find((path) =>
+    /(^|\/)tileset\.json$/i.test(path),
+  )
   if (!rootPath) throw new Error('所选目录中未找到 tileset.json')
 
   const objectUrls: string[] = []
@@ -847,7 +932,9 @@ async function createLocalTilesetUrl(assets: LocalAsset[]) {
           return result
         }
         const rewritten = await rewrite(value)
-        blob = new Blob([JSON.stringify(rewritten)], { type: file.type || 'application/json' })
+        blob = new Blob([JSON.stringify(rewritten)], {
+          type: file.type || 'application/json',
+        })
       } else {
         blob = file
       }
@@ -895,11 +982,16 @@ async function loadShapefile() {
   if (!selected?.length) return
 
   const shpFile = selected.find((file) => /\.shp$/i.test(file.name))
-  if (!shpFile) throw new Error('请选择 .shp 文件，并同时选择对应的 .dbf、.shx 文件')
+  if (!shpFile)
+    throw new Error('请选择 .shp 文件，并同时选择对应的 .dbf、.shx 文件')
 
   const stem = shpFile.name.replace(/\.shp$/i, '')
   const byExtension = (extension: string) =>
-    selected.find((file) => file.name.replace(/\.[^.]+$/, '').toLowerCase() === stem.toLowerCase() && file.name.toLowerCase().endsWith(extension))
+    selected.find(
+      (file) =>
+        file.name.replace(/\.[^.]+$/, '').toLowerCase() ===
+          stem.toLowerCase() && file.name.toLowerCase().endsWith(extension),
+    )
 
   const dbfFile = byExtension('.dbf')
   const prjFile = byExtension('.prj') || byExtension('.qpj')
@@ -916,15 +1008,16 @@ async function loadShapefile() {
     cpg: cpgFile ? (await cpgFile.text()).trim() : 'GBK',
   })
   const features = Array.isArray(geojson) ? geojson : [geojson]
-  const output = features.length === 1 ? features[0] : {
-    type: 'FeatureCollection',
-    features: features.flatMap((item: any) => item.features || []),
-  }
-  const geojsonFile = new File(
-    [JSON.stringify(output)],
-    `${stem}.geojson`,
-    { type: 'application/geo+json' },
-  )
+  const output =
+    features.length === 1
+      ? features[0]
+      : {
+          type: 'FeatureCollection',
+          features: features.flatMap((item: any) => item.features || []),
+        }
+  const geojsonFile = new File([JSON.stringify(output)], `${stem}.geojson`, {
+    type: 'application/geo+json',
+  })
   await loadDataFile('geojson', geojsonFile, 'Shapefile')
 }
 
@@ -935,8 +1028,14 @@ async function loadDataFile(
 ) {
   const accept =
     kind === 'kml'
-      ? { 'application/vnd.google-earth.kml+xml': ['.kml'], 'application/vnd.google-earth.kmz': ['.kmz'] }
-      : { 'application/geo+json': ['.geojson'], 'application/json': ['.json', '.topojson'] }
+      ? {
+          'application/vnd.google-earth.kml+xml': ['.kml'],
+          'application/vnd.google-earth.kmz': ['.kmz'],
+        }
+      : {
+          'application/geo+json': ['.geojson'],
+          'application/json': ['.json', '.topojson'],
+        }
   const file = selectedFile || (await pickSingleFile(accept))
   if (!file) return
   if (!window.measureViewer || !window.viewer) {
@@ -945,10 +1044,14 @@ async function loadDataFile(
   }
   const loading = message.loading(`${displayKind} 加载中`, { duration: 0 })
   try {
-    await (kind === 'kml' ? window.measureViewer.addKml(file) : window.measureViewer.addJson(file))
+    await (kind === 'kml'
+      ? window.measureViewer.addKml(file)
+      : window.measureViewer.addJson(file))
     message.success(`${displayKind} 加载成功`)
   } catch (error) {
-    message.error(`${displayKind} 加载失败：${error instanceof Error ? error.message : String(error)}`)
+    message.error(
+      `${displayKind} 加载失败：${error instanceof Error ? error.message : String(error)}`,
+    )
   } finally {
     loading.destroy()
   }
@@ -965,13 +1068,12 @@ async function load3DTiles() {
       'pick_3d_tiles_file',
     )
     if (!selection) return
-    await window.measureViewer.add3DTiles(
-      selection.url,
-      selection.name,
-    )
+    await window.measureViewer.add3DTiles(selection.url, selection.name)
     message.success('3D Tiles 加载成功')
   } catch (error) {
-    message.error(`3D Tiles 加载失败：${error instanceof Error ? error.message : String(error)}`)
+    message.error(
+      `3D Tiles 加载失败：${error instanceof Error ? error.message : String(error)}`,
+    )
   } finally {
     loading.destroy()
   }
@@ -983,7 +1085,10 @@ async function handleDataSelect(key: string) {
     else if (key === 'shp') await loadShapefile()
     else if (key === '3dtiles') await load3DTiles()
   } catch (error) {
-    if (!isAbortError(error)) message.error(`选择数据失败：${error instanceof Error ? error.message : String(error)}`)
+    if (!isAbortError(error))
+      message.error(
+        `选择数据失败：${error instanceof Error ? error.message : String(error)}`,
+      )
   }
 }
 
@@ -1766,13 +1871,16 @@ function toggleSelectedPlaneTerrainWarning() {
 }
 
 const { loadAirports, toggleObstaclesVisible } = useMarkObstacle()
-
+//聚焦  创建航电页面
 async function showTelemetryInfo() {
   try {
     const existingWin = await WebviewWindow.getByLabel('telemetry')
     if (existingWin) {
+      //如果存在将窗口置顶
       await restoreTelemetryWindow(existingWin)
     } else {
+      //不存在使用tauri API:WebviewWindow创建这个页面窗口
+      // 参数 窗口名字、窗口配置
       new WebviewWindow('telemetry', telemetryWindowOptions)
     }
   } catch (err) {
@@ -2064,6 +2172,24 @@ async function showLinkHealthInfo() {
       </n-dropdown>
 
       <!-- 刷新页面 -->
+      <!-- 视图设置：行政区边界和经纬度显示，放在刷新按钮前 -->
+      <n-dropdown
+        :options="viewSettingsOptions"
+        @select="handleViewSettingsSelect"
+      >
+        <n-button
+          tertiary
+          circle
+          :type="viewSettingsActive ? 'success' : 'warning'"
+          :loading="viewSettingsLoading"
+          title="视图设置"
+          aria-label="视图设置"
+        >
+          <template #icon>
+            <n-icon><EarthOutline /></n-icon>
+          </template>
+        </n-button>
+      </n-dropdown>
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
           <n-button tertiary type="warning" @click="refreshPage">
@@ -2487,7 +2613,9 @@ async function showLinkHealthInfo() {
       >
         全选
       </n-checkbox>
-      <span>已选 {{ selectedAirportIds.length }} / {{ airportList.length }}</span>
+      <span>
+        已选 {{ selectedAirportIds.length }} / {{ airportList.length }}
+      </span>
     </div>
     <n-spin :show="airportListLoading">
       <n-checkbox-group v-model:value="selectedAirportIds">
@@ -2502,7 +2630,10 @@ async function showLinkHealthInfo() {
               <span class="airport-obstacle-code">{{ airport.code }}</span>
             </n-checkbox>
             <div class="airport-obstacle-meta">
-              <span>{{ airport.obstacle_count ?? airport.obstacleCount ?? 0 }} 个障碍物</span>
+              <span>
+                {{ airport.obstacle_count ?? airport.obstacleCount ?? 0 }}
+                个障碍物
+              </span>
             </div>
           </div>
           <n-empty

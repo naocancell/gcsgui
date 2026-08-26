@@ -13,7 +13,8 @@ export interface PreventableCloseEvent {
 }
 
 export const telemetryWindowOptions = {
-  url: 'index.html#/telemetry',
+  //窗口打开并展示哪个页面
+  url: 'index.html#/telemetry', //入口文件+hash+Vue路由路径
   title: '无人机航电系统 - UAV AVIONICS',
   width: 820,
   height: 820,
@@ -21,7 +22,7 @@ export const telemetryWindowOptions = {
   minHeight: 820,
   resizable: false,
   maximizable: false,
-  decorations: false,
+  decorations: false,//系统窗口自带的标题栏
   center: true,
   focus: true,
 }

@@ -5,7 +5,7 @@ export type AircraftConnectivity =
   | 'degraded'
   | 'recovering'
   | 'offline'
-
+//链路健康快照
 export interface LinkHealthSnapshot {
   linkName: string
   protocol: LinkProtocol

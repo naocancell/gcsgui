@@ -7,7 +7,7 @@
 -->
 <template>
   <div id="cesium-viewer" ref="viewerDivRef"></div>
-  <PlaneInfo v-if="viewerReady"/>
+  <PlaneInfo v-if="viewerReady" />
   <!-- 地图右侧定位按钮（在放大缩小按钮正上方） -->
   <n-tooltip placement="left" trigger="hover">
     <template #trigger>
@@ -24,7 +24,14 @@
 <script setup lang="ts">
 import PlaneInfo from './PlaneInfo.vue'
 import { onMounted, onUnmounted, ref } from 'vue'
-import { Viewer, Ion, CustomDataSource,createWorldTerrainAsync,Cartesian3,createWorldImageryAsync } from 'cesium'
+import {
+  Viewer,
+  Ion,
+  CustomDataSource,
+  createWorldTerrainAsync,
+  Cartesian3,
+  createWorldImageryAsync,
+} from 'cesium'
 import { NIcon, NTooltip } from 'naive-ui'
 import { LocateOutline } from '@vicons/ionicons5'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
@@ -32,7 +39,7 @@ import {
   TDTLayerType,
   TDTProjectionType,
   getTDTProvider,
-  getTDTTerrainProvider
+  getTDTTerrainProvider,
 } from '@/utils/map/TDTProvider.ts'
 import {
   initViewer,
@@ -40,8 +47,11 @@ import {
   showNavigator,
 } from '@/utils/map/sceneViewer.ts'
 import MeasureViewer from '@/assets/js/measureViewer.js'
-import { useLoadPlane } from "@/hooks/useLoadPlane";
+import { useLoadPlane } from '@/hooks/useLoadPlane'
 import { cacheCommonModelsToDisk } from '@/utils/model/modelCache'
+import { clearAdministrativeBoundaries } from '@/utils/map/viewSettings'
+import { clearGraticule, setGraticuleVisible } from '@/utils/map/graticule'
+import { useViewSettingsStore } from '@/store/viewSettingsStore'
 
 const viewerDivRef = ref<HTMLDivElement>()
 let viewer: Viewer
@@ -49,9 +59,14 @@ window.CESIUM_BASE_URL = import.meta.env.DEV ? '/Cesium/' : './Cesium/'
 Ion.defaultAccessToken =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI3YjU4MjJlMS0wMWE4LTRhOWQtYjQ1OC04MTgzMzFhMzQ5ZjAiLCJpZCI6MTE1ODUxLCJpYXQiOjE2NjkyMDM1MzN9.8ajEuv3VKYg8wvFiQlUWWY6Ng6JfY4PuVgRyStL1B-E'
 const viewerReady = ref(false)
+const viewSettingsStore = useViewSettingsStore()
 
 // 存储软件启动时获取到的初始定位信息
-const initialLocation = ref<{ longitude: number; latitude: number; height: number }>({
+const initialLocation = ref<{
+  longitude: number
+  latitude: number
+  height: number
+}>({
   longitude: 107.4191777,
   latitude: 37.855152,
   height: 5000,
@@ -69,7 +84,7 @@ const flyToInitialLocation = () => {
 //延时
 let modelWarmupTimer: ReturnType<typeof setTimeout> | undefined
 // 组件加载就监听显示飞机实施的位置
-  const {init,clearAll} = useLoadPlane();
+const { init, clearAll } = useLoadPlane()
 
 function waitForLocalFirstFrame(): Promise<void> {
   return new Promise((resolve) => {
@@ -82,7 +97,11 @@ async function loadOnlineImagery() {
 
   let onlineImageryLoaded = false
   try {
-    const imageryProvider = await createWorldImageryAsync()
+    // const imageryProvider = await createWorldImageryAsync()
+    const imageryProvider = getTDTProvider(
+    TDTLayerType.Img,
+    TDTProjectionType.WebMercator,
+  )
     if (!viewer.isDestroyed()) {
       viewer.imageryLayers.addImageryProvider(imageryProvider)
       onlineImageryLoaded = true
@@ -127,12 +146,12 @@ onMounted(async () => {
   //初始化
   viewer = initViewer(viewerDivRef.value as HTMLElement)
   // 显示帧率
-  viewer.scene.debugShowFramesPerSecond = true;
+  viewer.scene.debugShowFramesPerSecond = true
   //监听飞机模型数据
-  init(viewer);
+  init(viewer)
 
   //显示子组件
-  viewerReady.value= true
+  viewerReady.value = true
 
   // 性能优化
   perfViewer(viewer)
@@ -143,16 +162,17 @@ onMounted(async () => {
   viewer.camera.setView({
     destination: Cartesian3.fromDegrees(
       104.195397, // 中国中心经度
-      35.86166,   // 中国中心纬度
-      8000000     // 高度 800 万米，看清中国全景
-    )
-  });
+      35.86166, // 中国中心纬度
+      8000000, // 高度 800 万米，看清中国全景
+    ),
+  })
 
   // 显示罗盘和比例尺
   showNavigator(viewer)
 
   // 挂载在window，供全局组件共享
   window.viewer = viewer
+  setGraticuleVisible(viewer, viewSettingsStore.showCoordinates)
   window.measureViewer = new MeasureViewer(viewer)
 
   // 先完成本地底图首帧，再启动在线资源请求。在线服务异常时不会阻塞地图。
@@ -166,19 +186,19 @@ onMounted(async () => {
   void loadOnlineTerrain()
 
   // 等地图完成首帧显示后，再后台检查模型缓存
-    modelWarmupTimer = setTimeout(() => {
-      if (!navigator.onLine) return
+  modelWarmupTimer = setTimeout(() => {
+    if (!navigator.onLine) return
 
-      void cacheCommonModelsToDisk().catch(error => {
-        console.warn('常用模型磁盘缓存失败:', error)
-      })
-    }, 2000)
+    void cacheCommonModelsToDisk().catch((error) => {
+      console.warn('常用模型磁盘缓存失败:', error)
+    })
+  }, 2000)
 
   //加载建筑物图标
   // const markObstacle = useMarkObstacle(viewer)
   // markObstacle.addAllObstacles()
 
-   // 2. 使用原生系统地理定位（不受代理影响，能拿到真实位置）
+  // 2. 使用原生系统地理定位（不受代理影响，能拿到真实位置）
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
       (position) => {
@@ -191,42 +211,54 @@ onMounted(async () => {
         viewer.camera.flyTo({
           destination: Cartesian3.fromDegrees(lon, lat, alt),
           duration: 2,
-        });
+        })
       },
       (error) => {
-        console.warn('获取真实地理位置失败:', error.message);
+        console.warn('获取真实地理位置失败:', error.message)
         // 如果最终获取失败（比如没给权限），则平滑回退到默认大视角
-        initialLocation.value = { longitude: 107.4191777, latitude: 37.855152, height: 5000 }
+        initialLocation.value = {
+          longitude: 107.4191777,
+          latitude: 37.855152,
+          height: 5000,
+        }
         viewer.camera.flyTo({
           destination: Cartesian3.fromDegrees(107.4191777, 37.855152, 5000),
           duration: 2,
-        });
+        })
       },
       {
         enableHighAccuracy: true, // 开启高精度，调用系统底层定位
-        timeout: 10000,           // 给足 10 秒时间等待系统定位服务“预热”响应
-        maximumAge: 0 
-      }
-    );
+        timeout: 10000, // 给足 10 秒时间等待系统定位服务“预热”响应
+        maximumAge: 0,
+      },
+    )
   } else {
-    initialLocation.value = { longitude: 107.4191777, latitude: 37.855152, height: 5000 }
+    initialLocation.value = {
+      longitude: 107.4191777,
+      latitude: 37.855152,
+      height: 5000,
+    }
     viewer.camera.flyTo({
       destination: Cartesian3.fromDegrees(107.4191777, 37.855152, 5000),
       duration: 2,
-    });
+    })
   }
 })
 
 onUnmounted(() => {
-   if (modelWarmupTimer) {
+  if (modelWarmupTimer) {
     clearTimeout(modelWarmupTimer)
   }
-  clearAll(viewer);//清除监听
+  clearAll(viewer) //清除监听
   if (viewer) {
+    clearAdministrativeBoundaries(viewer)
+    clearGraticule(viewer)
+    viewSettingsStore.showProvince = false
+    viewSettingsStore.showCity = false
+    viewSettingsStore.showCounty = false
     viewer.destroy()
     viewer = null
   }
-  
 })
 </script>
 
@@ -252,7 +284,9 @@ onUnmounted(() => {
   cursor: pointer;
   color: #ffffff;
   z-index: 10;
-  transition: background-color 0.2s, color 0.2s;
+  transition:
+    background-color 0.2s,
+    color 0.2s;
 }
 
 .location-btn:hover {
@@ -264,4 +298,3 @@ onUnmounted(() => {
   background: rgba(100, 100, 100, 0.9);
 }
 </style>
-

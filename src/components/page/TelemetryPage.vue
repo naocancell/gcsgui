@@ -29,23 +29,25 @@ let networkHandlerOnline: (() => void) | null = null
 let networkHandlerOffline: (() => void) | null = null
 let configChangedUnlisten: UnlistenFn | null = null
 let closeRequestedUnlisten: UnlistenFn | null = null
-
+//获取当前窗口
 const telemetryWindow = getCurrentWindow()
-
+//最小
 async function handleWindowMinimize() {
   await telemetryWindow.minimize()
 }
-
+//关闭
 async function handleWindowClose() {
   await hideTelemetryWindow(telemetryWindow)
 }
 
 onMounted(async () => {
+   //窗口关闭监听 执行回调
   closeRequestedUnlisten = await telemetryWindow.onCloseRequested(async (event) => {
+    // ts中自定义函数  阻止关闭 隐藏窗口到后台
     await preserveTelemetryWindowOnClose(event, telemetryWindow)
   })
 
-  // 检查离线状态
+   // navigator：浏览器环境信息对象 检查离线状态
   if (!window.navigator.onLine) {
     staticStore.networkStatus.offlineMode = true
   }
@@ -67,9 +69,9 @@ onMounted(async () => {
     })
 
     // 初始加载通信配置并同步后端全部监听服务
-    await uavStore.loadCommsConfig()
+    await uavStore.loadCommsConfig()//读取通信配置（已经开启全部监听、并监听链路健康）
     await uavStore.startPortsMonitoring()
-    await uavStore.startListening()
+    await uavStore.startListening()//这里重复了
     await uavStore.syncProtocolListeners()
   } catch (err) {
     message.error('航电窗口数据服务挂载失败: ' + err)
