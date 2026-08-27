@@ -81,6 +81,7 @@
                                         <span>空中</span>
                                     </label>
                                 </div>
+                                <!-- aria-live="polite" 自动把新数字读出来-->
                                 <output class="readback-value" aria-live="polite">
                                     <span class="readback-caption">回读</span>
                                     {{ uavStore.transponderSwitchReadback.airGroundState || '—' }}

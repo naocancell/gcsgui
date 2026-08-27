@@ -197,7 +197,8 @@ export const useUavStore = defineStore('uav', () => {
       if (fp981cListenPromise === pending) fp981cListenPromise = null
     }
   }
-//让当前窗口安全地订阅 Rust 后端发送的无人机健康状态数据，并保证不会重复监听、不会并发启动、不会让旧监听影响新状态。
+//让当前窗口安全地订阅 Rust 后端发送的无人机健康状态数据，并保证不会重复监听、不会并发启动
+//后端发来的最新健康数据，原封不动地赋值给前端的响应式变量 rxHealth。
   async function startHealthListening(lifecycleGeneration: number) {
     // 健康监听已经存在，就不要再次启动，直接退出这个函数
     if (healthUnlisten) return
@@ -284,6 +285,8 @@ export const useUavStore = defineStore('uav', () => {
     clearTransponderState()
   }
 
+  //自动识别并关闭当前配置下不再需要的协议监听服务，同时清理残留状态数据，
+  // 并通过递增版本号防止过时的异步数据返回后污染界面
   function deactivateUnusedProtocolListeners() {
     if (!needsFp95Listening()) {
       //版本控制 防止异步旧数据返回
@@ -305,7 +308,9 @@ export const useUavStore = defineStore('uav', () => {
   }
 
   async function syncProtocolListeners() {
+    //检查不用的服务 停止前端监听服务 残留状态数据
     deactivateUnusedProtocolListeners()
+    //开启需要的前端监听服务
     if (needsUavInfoListening()) {
       await startListening()
     } else {
@@ -510,7 +515,7 @@ export const useUavStore = defineStore('uav', () => {
       } else {
         links.value = createDefaultLinkDrafts()
       }
-
+      // 统一启停各类协议监听服务，使实际运行的监听状态与业务需求保持同步
       await syncProtocolListeners()
       return config
     } catch (err) {
@@ -756,7 +761,7 @@ export const useUavStore = defineStore('uav', () => {
     })
     transponderSwitchConfig.value = { ...config }
   }
-
+  // 查询应答机（空地）状态
   async function queryTransponderSwitches() {
     const aircraftId = currentFp95AircraftId()
     return runTransponderOperation(async () => {

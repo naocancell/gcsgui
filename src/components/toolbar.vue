@@ -30,6 +30,7 @@ import {
   CompassOutline,
   CaretForwardCircleOutline,
   PulseOutline,
+  LocationOutline,
 } from '@vicons/ionicons5'
 //引入监听hooks和飞机数据状态管理
 
@@ -61,6 +62,7 @@ import RouteManageViewer from '@/assets/js/RouteManageViewer.js'
 import RouteOptions from '@/components/RouteOptions.vue'
 import { useRouteStore } from '@/store/RouteStore'
 import MarkerDialog from '@/components/MarkerDialog.vue'
+import MarkerPointsPanel from '@/components/MarkerPointsPanel.vue'
 import NFZViewer from '@/assets/js/NFZViewer.js'
 import { formatNoFlyZoneConflictMessage } from '@/utils/map/noFlyZoneService'
 import { useRouter } from 'vue-router'
@@ -316,6 +318,7 @@ const spatialAnalyse = ref(null)
 const layerManager = ref(null)
 const collisionDetection = ref(null)
 const markerDialog = ref(null)
+const markerPointsPanel = ref(null)
 
 SceneValue = ref('untrace')
 let frameCount = 0
@@ -684,6 +687,11 @@ function handleEditSelect(key) {
     // 里面有一个showRouteManage变量，控制航线管理面板的显示和隐藏
     store.showRouteManage = true
   }
+}
+
+function openMarkerPointsPanel() {
+  if (blockWhileLosPointPicking()) return
+  markerPointsPanel.value?.open()
 }
 function handleAnalyseSelect(key) {
   if (blockWhileLosPointPicking()) return
@@ -1941,6 +1949,23 @@ async function showLinkHealthInfo() {
         </template>
         <span>图层管理</span>
       </n-tooltip>
+      <!-- 标记点 -->
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
+          <n-button
+            tertiary
+            circle
+            type="warning"
+            aria-label="标记点"
+            @click="openMarkerPointsPanel"
+          >
+            <template #icon>
+              <n-icon><LocationOutline /></n-icon>
+            </template>
+          </n-button>
+        </template>
+        标记点
+      </n-tooltip>
       <!-- 添加数据 -->
       <n-dropdown :options="dataOptions" @select="handleDataSelect">
         <n-button tertiary circle type="warning">
@@ -2672,6 +2697,7 @@ async function showLinkHealthInfo() {
     @cancelLosAnalyse="showLosAnalyseModal = false"
   />
   <MarkerDialog ref="markerDialog"></MarkerDialog>
+  <MarkerPointsPanel ref="markerPointsPanel"></MarkerPointsPanel>
   <AltitudeWarning :warningResult="altitudeWarningResult" />
 </template>
 
