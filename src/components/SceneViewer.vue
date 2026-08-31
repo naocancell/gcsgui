@@ -19,6 +19,17 @@
     </template>
     回到当前位置
   </n-tooltip>
+  <!-- 地图右侧重置视角按钮 -->
+  <n-tooltip placement="left" trigger="hover">
+    <template #trigger>
+      <div class="location-btn global-view-btn" @click="flyToGlobalView">
+        <n-icon size="18">
+          <GlobeOutline />
+        </n-icon>
+      </div>
+    </template>
+    全球视角
+  </n-tooltip>
 </template>
 
 <script setup lang="ts">
@@ -30,17 +41,11 @@ import {
   CustomDataSource,
   createWorldTerrainAsync,
   Cartesian3,
-  createWorldImageryAsync,
+  Rectangle,
 } from 'cesium'
 import { NIcon, NTooltip } from 'naive-ui'
-import { LocateOutline } from '@vicons/ionicons5'
+import { LocateOutline, GlobeOutline } from '@vicons/ionicons5'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
-import {
-  TDTLayerType,
-  TDTProjectionType,
-  getTDTProvider,
-  getTDTTerrainProvider,
-} from '@/utils/map/TDTProvider.ts'
 import {
   initViewer,
   perfViewer,
@@ -81,6 +86,15 @@ const flyToInitialLocation = () => {
     duration: 1.5,
   })
 }
+
+// 飞往完整地球范围，避免复用定位按钮的局部视角。
+const flyToGlobalView = () => {
+  if (!viewer || viewer.isDestroyed()) return
+  viewer.camera.flyTo({
+    destination: Rectangle.fromDegrees(30, -20, 180, 80),
+    duration: 1.5,
+  })
+}
 //延时
 let modelWarmupTimer: ReturnType<typeof setTimeout> | undefined
 // 组件加载就监听显示飞机实施的位置
@@ -90,43 +104,6 @@ function waitForLocalFirstFrame(): Promise<void> {
   return new Promise((resolve) => {
     requestAnimationFrame(() => resolve())
   })
-}
-
-async function loadOnlineImagery() {
-  if (!viewer || viewer.isDestroyed() || !navigator.onLine) return
-
-  let onlineImageryLoaded = false
-  try {
-    // const imageryProvider = await createWorldImageryAsync()
-    const imageryProvider = getTDTProvider(
-    TDTLayerType.Img,
-    TDTProjectionType.WebMercator,
-  )
-    if (!viewer.isDestroyed()) {
-      viewer.imageryLayers.addImageryProvider(imageryProvider)
-      onlineImageryLoaded = true
-      viewer.scene.requestRender()
-    }
-  } catch (error) {
-    console.warn('在线影像加载失败，本地底图继续使用:', error)
-  }
-
-  // 注记必须在在线影像添加后再加入，确保它位于最上层。
-  try {
-    if (!viewer.isDestroyed()) {
-      viewer.imageryLayers.addImageryProvider(
-        getTDTProvider(TDTLayerType.Cia, TDTProjectionType.WebMercator),
-      )
-      viewer.scene.requestRender()
-    }
-  } catch (error) {
-    console.warn(
-      onlineImageryLoaded
-        ? '在线地图注记加载失败，在线影像继续使用:'
-        : '在线地图加载失败，本地底图继续使用:',
-      error,
-    )
-  }
 }
 
 async function loadOnlineTerrain() {
@@ -144,7 +121,7 @@ async function loadOnlineTerrain() {
 
 onMounted(async () => {
   //初始化
-  viewer = initViewer(viewerDivRef.value as HTMLElement)
+  viewer = await initViewer(viewerDivRef.value as HTMLElement)
   // 显示帧率
   viewer.scene.debugShowFramesPerSecond = true
   //监听飞机模型数据
@@ -182,7 +159,6 @@ onMounted(async () => {
   const markerLayer = new CustomDataSource('Marker')
   viewer.dataSources.add(markerLayer)
 
-  void loadOnlineImagery()
   void loadOnlineTerrain()
 
   // 等地图完成首帧显示后，再后台检查模型缓存
@@ -296,5 +272,9 @@ onUnmounted(() => {
 
 .location-btn:active {
   background: rgba(100, 100, 100, 0.9);
+}
+
+.global-view-btn {
+  top: calc(55vh - 5rem);
 }
 </style>

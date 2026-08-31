@@ -2350,6 +2350,7 @@ export default class MeasureViewer {
     let centerPoint = null
     let radius = 0.01
     let aPolygon = undefined
+    let borderEntity = undefined
 
     // 辅助拾取地表点函数，优先支持地形起伏
     const pickPoint = (position) => {
@@ -2385,9 +2386,7 @@ export default class MeasureViewer {
             ellipse: {
               heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
               material: this.graphicStyle.material,
-              outline: true,
-              outlineColor: this.graphicStyle.borderColor,
-              outlineWidth: this.graphicStyle.borderWidth,
+              outline: false,
               fill: true,
               semiMajorAxis: new Cesium.CallbackProperty(() => {
                 return radius
@@ -2398,40 +2397,39 @@ export default class MeasureViewer {
             },
           })
           const circlePositions = new Cesium.CallbackProperty(() => {
-          if (!centerPoint || radius <= 0) return []
+            if (!centerPoint || radius <= 0) return []
 
-          const transform = Cesium.Transforms.eastNorthUpToFixedFrame(centerPoint)
-          const positions = []
-          const segments = 128
+            // Use the same ellipsoid-aware perimeter algorithm as EllipseGraphics.
+            // A tangent-plane circle drifts away from the filled ellipse in 2D.
+            const perimeter =
+              Cesium.EllipseGeometryLibrary.computeEllipsePositions(
+                {
+                  center: centerPoint,
+                  semiMajorAxis: radius,
+                  semiMinorAxis: radius,
+                  rotation: 0,
+                  granularity: Cesium.Math.RADIANS_PER_DEGREE,
+                },
+                false,
+                true,
+              ).outerPositions
+            const positions = Cesium.Cartesian3.unpackArray(perimeter)
 
-          for (let i = 0; i <= segments; i++) {
-            const angle = (i / segments) * Cesium.Math.TWO_PI
-            const localPoint = new Cesium.Cartesian3(
-              radius * Math.cos(angle),
-              radius * Math.sin(angle),
-              0,
-            )
+            if (positions.length > 0) {
+              positions.push(Cesium.Cartesian3.clone(positions[0]))
+            }
 
-            positions.push(
-              Cesium.Matrix4.multiplyByPoint(
-                transform,
-                localPoint,
-                new Cesium.Cartesian3(),
-              ),
-            )
-          }
+            return positions
+          }, false)
 
-          return positions
-        }, false)
-
-        const borderEntity = this.viewer.entities.add({
-          polyline: {
-            positions: circlePositions,
-            width: this.graphicStyle.borderWidth || 2,
-            material: this.graphicStyle.borderColor,
-            clampToGround: true,
-          },
-        })
+          borderEntity = this.viewer.entities.add({
+            polyline: {
+              positions: circlePositions,
+              width: this.graphicStyle.borderWidth || 2,
+              material: this.graphicStyle.borderColor,
+              clampToGround: true,
+            },
+          })
         }
 
         this.viewer.scene.requestRender()
@@ -2448,10 +2446,16 @@ export default class MeasureViewer {
         }
         this.viewer.scene.requestRender()
         this.graphics.push(aPolygon)
+        if (borderEntity) {
+          this.graphics.push(borderEntity)
+        }
         this._stopDraw()
       } else {
         if (aPolygon) {
           this.viewer.entities.remove(aPolygon)
+        }
+        if (borderEntity) {
+          this.viewer.entities.remove(borderEntity)
         }
         this._stopDraw()
       }

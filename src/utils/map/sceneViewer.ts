@@ -10,29 +10,199 @@ import {
   Viewer,
   TileMapServiceImageryProvider,
   ScreenSpaceEventType,
-  ImageryLayer,
   RequestScheduler,
   SceneMode,
   Rectangle,
+  Cartesian3,
+  GeocodeType,
+  IonGeocoderService,
   buildModuleUrl,
+  createWorldImageryAsync,
+  IonWorldImageryStyle,
+  ProviderViewModel,
+  UrlTemplateImageryProvider,
+  GeographicTilingScheme,
+  ArcGisMapServerImageryProvider,
+  OpenStreetMapImageryProvider
 } from 'cesium'
+import type { ImageryProvider, Scene } from 'cesium'
 import CesiumNavigation from 'cesium-navigation-es6'
+import {
+  Geocoder as tdtGeocoder,
+  getTDTProvider,
+  searchTDTPlaces,
+  TDTLayerType,
+  TDTProjectionType,
+} from './TDTProvider'
 
 //离线地球底图
-const earth_native = TileMapServiceImageryProvider.fromUrl(
-  // 'node_modules/cesium/Build/CesiumUnminified/Assets/Textures/NaturalEarthII',
-  // buildModuleUrl('Assets/Textures/NaturalEarthII'),
+const localImageryProviderPromise = TileMapServiceImageryProvider.fromUrl(
   '/Cesium/Assets/Textures/NaturalEarthII',
 )
+
+function createImageryProviderViewModels(
+  localImageryProvider: ImageryProvider,
+): ProviderViewModel[] {
+  return [
+    new ProviderViewModel({
+      name: 'Bing 影像',
+      tooltip: 'Cesium ion 提供的 Bing 全球卫星影像',
+      iconUrl: buildModuleUrl('Widgets/Images/ImageryProviders/bingAerial.png'),
+      category: '影像底图',
+      creationFunction: () =>
+        [
+          localImageryProvider,
+          createWorldImageryAsync({
+            style: IonWorldImageryStyle.AERIAL,
+          }),
+           getTDTProvider(TDTLayerType.Cia, TDTProjectionType.WebMercator),
+        ] as unknown as ImageryProvider[],
+    }),
+    new ProviderViewModel({
+      name: '天地图影像',
+      tooltip: '天地图卫星影像与中文注记',
+      iconUrl: buildModuleUrl(
+        'Widgets/Images/ImageryProviders/TDT.png',
+      ),
+      category: '影像底图',
+      creationFunction: () => [
+        localImageryProvider,
+        getTDTProvider(TDTLayerType.Img, TDTProjectionType.WebMercator),
+        getTDTProvider(TDTLayerType.Cia, TDTProjectionType.WebMercator),
+      ],
+    }),
+    new ProviderViewModel({
+      name: 'Google 影像',
+      tooltip: 'Google 卫星影像（需要可访问 Google 地图服务）',
+      iconUrl: buildModuleUrl(
+        'Widgets/Images/ImageryProviders/mapboxSatellite.png',
+      ),
+      category: '影像底图',
+      creationFunction: () => [
+        localImageryProvider,
+        new UrlTemplateImageryProvider({
+                url: "https://tileser.giiiis.com/timetile/0/{z}/{x}/{y}.jpg",
+                minimumLevel: 0,
+                maximumLevel: 20,
+                tilingScheme: new GeographicTilingScheme()//4326椭球瓦片
+            }
+            ),
+         getTDTProvider(TDTLayerType.Cia, TDTProjectionType.WebMercator),
+      ],
+    }),
+    new ProviderViewModel({
+      name: 'ArcGIS 影像',
+      tooltip: 'ArcGIS 影像',
+      iconUrl: buildModuleUrl(
+        'Widgets/Images/ImageryProviders/ArcGisMapServiceWorldImagery.png',
+      ),
+      category: '影像底图',
+      creationFunction: () => [
+        localImageryProvider,
+        new UrlTemplateImageryProvider({
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        minimumLevel: 0,
+        maximumLevel: 18,
+      }),
+         getTDTProvider(TDTLayerType.Cia, TDTProjectionType.WebMercator),
+      ],
+    }),
+
+  ]
+}
+
+/** 将天地图地理编码响应适配为 Cesium 的搜索服务接口。 */
+class TiandituGeocoderService {
+  private async searchPlaces(keyword: string) {
+    try {
+      const response = await searchTDTPlaces(keyword)
+      return (response.data.pois ?? []).flatMap((poi) => {
+        const [lonText, latText] = poi.lonlat.split(',')
+        const lon = Number(lonText)
+        const lat = Number(latText)
+        if (!Number.isFinite(lon) || !Number.isFinite(lat)) return []
+
+        return [
+          {
+            displayName: poi.address
+              ? `${poi.name} (${poi.address})`
+              : poi.name,
+            destination: Cartesian3.fromDegrees(lon, lat),
+          },
+        ]
+      })
+    } catch (error) {
+      console.warn('天地图地名联想失败:', error)
+      return []
+    }
+  }
+
+  async geocode(query: string, type: GeocodeType = GeocodeType.SEARCH) {
+    const keyword = query.trim()
+    if (!keyword) return []
+
+    if (type === GeocodeType.AUTOCOMPLETE) {
+      return keyword.length >= 2 ? this.searchPlaces(keyword) : []
+    }
+
+    try {
+      const response = await tdtGeocoder(keyword)
+      const { location, msg, status } = response.data
+      const lon = Number(location?.lon)
+      const lat = Number(location?.lat)
+
+      if (status === '0' && Number.isFinite(lon) && Number.isFinite(lat)) {
+        return [
+          {
+            displayName: location?.keyWord || keyword,
+            destination: Cartesian3.fromDegrees(lon, lat),
+          },
+        ]
+      }
+      console.warn('天地图地理编码失败:', msg)
+    } catch (error) {
+      console.warn('天地图地理编码请求失败:', error)
+    }
+
+    return this.searchPlaces(keyword)
+  }
+}
+
+/** 中文使用天地图，其余输入保持使用 Cesium 默认的 Ion 搜索。 */
+class HybridGeocoderService {
+  private readonly tianditu = new TiandituGeocoderService()
+  private ion?: IonGeocoderService
+
+  setScene(scene: Scene) {
+    this.ion = new IonGeocoderService({ scene })
+  }
+
+  get credit() {
+    return this.ion?.credit
+  }
+
+  geocode(query: string, type?: GeocodeType) {
+    if (/[\u3400-\u9fff\uf900-\ufaff]/.test(query)) {
+      return this.tianditu.geocode(query, type)
+    }
+    return this.ion?.geocode(query, type) ?? Promise.resolve([])
+  }
+}
 /**
  * Viewer初始化
  * @param container :id或HTML对象
  * @returns :viewer对象
  */
-function initViewer(container: string | Element): Viewer {
+async function initViewer(container: string | Element): Promise<Viewer> {
+  const localImageryProvider = await localImageryProviderPromise
+  const imageryProviderViewModels =
+    createImageryProviderViewModels(localImageryProvider)
+  const geocoderService = new HybridGeocoderService()
+
   //未联网状态加载默认本地底图，保证地球有底图显示
   const viewer = new Viewer(container as HTMLElement, {
     infoBox: false, //是否显示点击要素之后显示的信息
+    geocoder: [geocoderService],
     homeButton: false, //是否显示Home按钮
     navigationHelpButton: false, //是否显示帮助信息控件
     timeline: false, //是否显示时间线控件
@@ -40,7 +210,10 @@ function initViewer(container: string | Element): Viewer {
     sceneModePicker: true, //是否显示投影方式控件
     sceneMode: SceneMode.SCENE3D, //设置场景模式，3D球体
     // terrain: Cesium.Terrain.fromWorldTerrain(),
-    baseLayerPicker: false, //是否显示图层选择控件
+    baseLayerPicker: true, //显示Cesium自带的底图选择控件
+    imageryProviderViewModels,
+    selectedImageryProviderViewModel: imageryProviderViewModels[1],
+    terrainProviderViewModels: [],
     targetFrameRate: 60, //活动场景固定以最高 60 FPS 调度
     requestRenderMode: true, //启用请求渲染模式
     scene3DOnly: false, //每个几何实例将只能以3D渲染以节省GPU内存
@@ -49,8 +222,10 @@ function initViewer(container: string | Element): Viewer {
     contextOptions: { webgl: { alpha: true } },
     maximumRenderTimeChange: Infinity, // 无操作时自动渲染帧率，设为数字会消耗性能，Infinity为无操作不渲染
     // mapProjection: new Cesium.WebMercatorProjection(),
-    baseLayer: ImageryLayer.fromProviderAsync(earth_native, {}),
   })
+  // 设置搜索结果定位的飞行时间，单位为秒
+viewer.geocoder.viewModel.flightDuration = 1
+  geocoderService.setScene(viewer.scene)
   //去除cesium logo，隐藏版本信息
   const creditContainer = viewer.cesiumWidget.creditContainer as HTMLDivElement
   creditContainer.style.display = 'none'

@@ -248,7 +248,7 @@ const viewSettingsStore = useViewSettingsStore()
 const viewSettingsLoading = ref(false)
 const viewSettingsOptions = computed(() => [
   {
-    label: viewSettingsStore.showCoordinates ? '隐藏经纬度' : '显示经纬度',
+    label: viewSettingsStore.showCoordinates ? '隐藏经纬网' : '显示经纬网',
     key: 'coordinates',
   },
   {

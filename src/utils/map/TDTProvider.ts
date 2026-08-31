@@ -29,6 +29,8 @@ enum TDTProjectionType {
   WGS84 = 'c',
 }
 //天地图token
+//专用地理编码服务
+const TDT_geoCode = 'fdcb75858870c951753957ac29bc8167'
 const TDT_tk = '1c5b7cbf9da7d33b221f68c32b6a1791'
 const TDT_tk3D = '910a4befdfd04d5423268b0aced82248'
 // 服务域名
@@ -108,9 +110,51 @@ export function getTDTTerrainProvider() {
  * 天地图地理编码服务
  * @param word 地名
  */
+export interface TDTGeocoderResponse {
+  msg: string
+  status: string
+  searchVersion?: string
+  location?: {
+    score: number
+    level: string
+    lon: string
+    lat: string
+    keyWord: string
+  }
+}
+
 export function Geocoder(word: string) {
-  let url = `https://api.tianditu.gov.cn/geocoder?ds={"keyWord":"${word}"}&tk=`
-  return axios.get(url + TDT_tk)
+  const ds = encodeURIComponent(JSON.stringify({ keyWord: word }))
+  const url = `https://api.tianditu.gov.cn/geocoder?ds=${ds}&tk=${TDT_geoCode}`
+  return axios.get<TDTGeocoderResponse>(url)
+}
+
+export interface TDTPlaceSearchPoi {
+  name: string
+  address?: string
+  lonlat: string
+}
+
+export interface TDTPlaceSearchResponse {
+  count?: string | number
+  msg?: string
+  pois?: TDTPlaceSearchPoi[]
+}
+
+/** 天地图地名搜索服务，用于 Cesium 搜索框的中文联想。 */
+export function searchTDTPlaces(word: string, count: number = 8) {
+  const postStr = encodeURIComponent(
+    JSON.stringify({
+      keyWord: word,
+      level: 12,
+      mapBound: '73,18,135,54',
+      queryType: 1,
+      start: 0,
+      count,
+    }),
+  )
+  const url = `https://api.tianditu.gov.cn/v2/search?postStr=${postStr}&type=query&tk=${TDT_geoCode}`
+  return axios.get<TDTPlaceSearchResponse>(url)
 }
 
 /**
