@@ -103,12 +103,12 @@ pub fn stop_serial_listener(
     state: tauri::State<'_, state::AppState>,
     name: String,
 ) -> Result<String, String> {
-    if let Some((_, link)) = state.active_links.remove(&name) {
+    match state.active_links.remove(&name) { Some((_, link)) => {
         link.transport.stop();
         Ok(format!("已停止串口链路 [{}]", name))
-    } else {
+    } _ => {
         Err(format!("找不到指定的串口链路 [{}]", name))
-    }
+    }}
 }
 
 /// 启动串口热插拔监测后台任务 (每秒轮询一次系统串口并推送变更)

@@ -142,10 +142,10 @@ pub fn stop_udp_listener(
     state: tauri::State<'_, state::AppState>,
     name: String,
 ) -> Result<String, String> {
-    if let Some((_, link)) = state.active_links.remove(&name) {
+    match state.active_links.remove(&name) { Some((_, link)) => {
         link.transport.stop();
         Ok(format!("UDP 监听服务 [{}] 已停止", name))
-    } else {
+    } _ => {
         Err(format!("未找到指定的 UDP 链路 [{}]", name))
-    }
+    }}
 }

@@ -7,7 +7,7 @@ pub async fn upload_route(
     link_name: String,
     route: protocol::route_info::RouteUpload,
 ) -> Result<String, String> {
-    if let Some(link) = state.active_links.get(&link_name) {
+    match state.active_links.get(&link_name) { Some(link) => {
         let mut success_count = 0;
         for pt in &route.points {
             let bytes = pt.to_bytes(route.code);
@@ -15,7 +15,7 @@ pub async fn upload_route(
             success_count += 1;
         }
         Ok(format!("航线数据下发成功：{}", success_count))
-    } else {
+    } _ => {
         Err(format!("找不到指定的通信链路 [{}] 进行下发", link_name))
-    }
+    }}
 }

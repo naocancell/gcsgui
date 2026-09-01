@@ -86,7 +86,7 @@ pub fn run() {
 
             let _ = std::fs::create_dir_all(&log_dir);
 
-            if let Err(e) = app.handle().plugin(
+            match app.handle().plugin(
                 tauri_plugin_log::Builder::default()
                     .targets([
                         Target::new(TargetKind::Stdout),
@@ -98,12 +98,12 @@ pub fn run() {
                     ])
                     .level(log::LevelFilter::Info)
                     .build(),
-            ) {
+            ) { Err(e) => {
                 eprintln!("初始化日志插件失败: {}", e);
-            } else {
+            } _ => {
                 log::info!("=== GCSGUI 地面站日志系统初始化成功 ===");
                 log::info!("日志持久化保存路径: {:?}", log_dir);
-            }
+            }}
 
             // 软件开启时，把本地配置中的 enabled 全部重置为 false，避免前后端状态不一致
             let mut comms_config = config::comms::CommsConfig::load(app.handle());

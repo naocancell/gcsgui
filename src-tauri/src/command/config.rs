@@ -29,11 +29,11 @@ async fn apply_comms_hot_reload(
                     cfg.effective_target_port(),
                     cfg.interface_ip
                 );
-                if let Some(link) = state.active_links.get(&name) {
+                match state.active_links.get(&name) { Some(link) => {
                     link.endpoint_info != expected_endpoint || link.protocol != cfg.protocol
-                } else {
+                } _ => {
                     true
-                }
+                }}
             }
             _ => true,
         };
@@ -85,11 +85,11 @@ async fn apply_comms_hot_reload(
         let should_remove = match matching_config {
             Some(cfg) if cfg.enabled => {
                 let expected_endpoint = format!("{}:{}", cfg.port_name, cfg.baud_rate);
-                if let Some(link) = state.active_links.get(&name) {
+                match state.active_links.get(&name) { Some(link) => {
                     link.endpoint_info != expected_endpoint || link.protocol != cfg.protocol
-                } else {
+                } _ => {
                     true
-                }
+                }}
             }
             _ => true,
         };

@@ -6,7 +6,7 @@ pub enum CommsError {
     Io(#[from] io::Error),
 
     #[error("串口错误: {0}")]
-    Serial(#[from] tokio_serial::Error),
+    Serial(#[from] serialport::Error),
 
     #[error("无效的配置参数: {0}")]
     InvalidConfig(String),
