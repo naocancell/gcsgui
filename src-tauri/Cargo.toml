@@ -1,12 +1,13 @@
 [package]
-name = "app"
-version = "0.1.1"
-description = "A Tauri App"
-authors = ["you"]
-license = ""
-repository = ""
-edition = "2021"
-rust-version = "1.77.2"
+name = "GCSGUI"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -15,27 +16,35 @@ name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.2", features = [] }
+tauri-build.workspace = true
 
 [dependencies]
-serde_json = "1.0"
-serde = { version = "1.0.228", features = ["derive"] }
-log = "0.4"
-tauri = { version = "2.11.2", features = ["protocol-asset"] }
-tauri-plugin-log = "2"
-tokio = { version = "1.52.3", features = ["full"] }
-get_if_addrs = "0.5"
-gcs-macros = {path = "../crates/gcs-macros"}
-comms-core = {path = "../crates/comms-core"}
-tokio-serial = "5.5.0"
-tokio-util = { version = "0.7.13", features = ["rt"] }
-dashmap = "6.2.1"
-bytes = "1.5"
-once_cell = { version = "1.21.4", features = ["parking_lot"] }
-tauri-plugin-single-instance = "2.0"
-tauri-plugin-dialog = "2.0"
-reqwest = { version = "0.12",default-features = false,features = ["json", "rustls-tls"] }
-aes-gcm = "0.10"
+# 内部 crate
+comms-core.workspace = true
+gcs-macros.workspace = true
+
+# 基础框架与异步
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-serial.workspace = true
+
+# 序列化与工具
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+dashmap.workspace = true
+bytes.workspace = true
+once_cell.workspace = true
+get_if_addrs.workspace = true
+aes-gcm.workspace = true
+reqwest.workspace = true
+
+# Tauri 插件
+tauri.workspace = true
+tauri-plugin-log.workspace = true
+tauri-plugin-dialog.workspace = true
+tauri-plugin-single-instance.workspace = true
+
 [dev-dependencies]
-async-trait = "0.1"
-tokio = { version = "1.52.3", features = ["test-util"] }
+async-trait.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

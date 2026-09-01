@@ -4,3 +4,49 @@ members = [
     "crates/*"
 ]
 resolver = "2"
+
+[workspace.package]
+version = "0.1.1"
+description = "Ground Control Station (GCS) GUI application built with Tauri and Vue"
+authors = ["sdfp 504 Software Development Team"]
+license = "Proprietary"
+repository = "http://123.57.91.222:3000/504-Software-Development-Group/GCS_2026.git"
+edition = "2024"
+rust-version = "1.98.0"
+publish = false
+
+[workspace.dependencies]
+# 内部成员 crate
+comms-core = { path = "crates/comms-core" }
+gcs-macros = { path = "crates/gcs-macros" }
+
+# 核心异步与网络库
+tokio = { version = "1.53.1", features = ["full"] }
+tokio-util = { version = "0.7.19", features = ["rt"] }
+tokio-serial = "5.5.0"
+serialport = "4.10.0"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+get_if_addrs = "0.5"
+
+# 序列化与工具
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+log = "0.4.34"
+async-trait = "0.1.92"
+thiserror = "2"
+dashmap = "6.2.1"
+bytes = "1.5"
+once_cell = { version = "1.21.4", features = ["parking_lot"] }
+aes-gcm = "0.10"
+
+# Tauri 生态
+tauri = { version = "2.11.2", features = ["protocol-asset"] }
+tauri-build = { version = "2.6.2", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-dialog = "2.0"
+tauri-plugin-single-instance = "2.0"
+
+# 过程宏相关
+syn = { version = "2.0.118", features = ["full"] }
+quote = "1.0.46"
+proc-macro2 = "1.0.106"

@@ -154,7 +154,7 @@ async function updatePackageVersion(newVersion) {
  */
 async function updateCargoVersion(newVersion) {
   const _dirname = process.cwd()
-  const cargoTomlPath = path.join(_dirname, 'src-tauri', 'Cargo.toml')
+  const cargoTomlPath = path.join(_dirname, 'Cargo.toml')
   try {
     const data = await fs.readFile(cargoTomlPath, 'utf8')
     const lines = data.split('\n')
@@ -162,8 +162,10 @@ async function updateCargoVersion(newVersion) {
       ? newVersion.slice(1)
       : newVersion
 
+    let updated = false
     const updatedLines = lines.map((line) => {
       if (line.trim().startsWith('version =')) {
+        updated = true
         return line.replace(
           /version\s*=\s*"[^"]+"/,
           `version = "${versionWithoutV}"`,
@@ -172,8 +174,12 @@ async function updateCargoVersion(newVersion) {
       return line
     })
 
+    if (!updated) {
+      console.warn('[WARN]: Could not find `version = "..."` in root Cargo.toml to update.')
+    }
+
     await fs.writeFile(cargoTomlPath, updatedLines.join('\n'), 'utf8')
-    console.log(`[INFO]: Cargo.toml version updated to: ${versionWithoutV}`)
+    console.log(`[INFO]: Root Cargo.toml version updated to: ${versionWithoutV}`)
   } catch (error) {
     console.error('Error updating Cargo.toml version:', error)
     throw error
