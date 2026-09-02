@@ -2,11 +2,18 @@
   <n-modal
     :show="show"
     preset="card"
-    title="机场障碍物"
     class="airport-obstacle-modal"
     :mask-closable="!obstacleLoading"
     @update:show="$emit('update:show', $event)"
   >
+    <template #header>
+      <div class="modal-title-wrap">
+        <n-icon size="18" color="#f59e0b">
+          <AirplaneOutline />
+        </n-icon>
+        <span>机场周边障碍物</span>
+      </div>
+    </template>
     <div class="airport-obstacle-toolbar">
       <n-checkbox
         :checked="allAirportsSelected"
@@ -28,8 +35,13 @@
             class="airport-obstacle-row"
           >
             <n-checkbox :value="Number(airport.id)">
-              <span class="airport-obstacle-name">{{ airport.name }}</span>
-              <span class="airport-obstacle-code">{{ airport.code }}</span>
+              <div class="airport-item-info">
+                <n-icon size="15" class="airport-row-icon">
+                  <LocationOutline />
+                </n-icon>
+                <span class="airport-obstacle-name">{{ airport.name }}</span>
+                <span class="airport-obstacle-code">{{ airport.code }}</span>
+              </div>
             </n-checkbox>
             <div class="airport-obstacle-meta">
               <span>
@@ -74,10 +86,13 @@ import {
   NEmpty,
   NSpace,
   NButton,
+  NIcon,
   useMessage,
 } from 'naive-ui'
+import { AirplaneOutline, LocationOutline } from '@vicons/ionicons5'
 import { invoke } from '@tauri-apps/api/core'
 import { useMarkObstacle } from '@/hooks/useMarkObstacle'
+import { isTauri } from '@/utils/homeWindowData'
 
 const props = defineProps<{
   show: boolean
@@ -105,7 +120,17 @@ const allAirportsSelected = computed(
 async function queryAirports() {
   airportListLoading.value = true
   try {
-    airportList.value = await invoke<any[]>('list_obstacle_airports')
+    if (isTauri()) {
+      airportList.value = await invoke<any[]>('list_obstacle_airports')
+    } else {
+      // 纯网页调试环境下默认提供模拟机场数据
+      airportList.value = [
+        { id: 1, name: '首都国际机场', code: 'ZBAA', obstacle_count: 12 },
+        { id: 2, name: '大兴国际机场', code: 'ZBAD', obstacle_count: 8 },
+        { id: 3, name: '海口美兰机场', code: 'ZJHK', obstacle_count: 15 },
+        { id: 4, name: '三亚凤凰机场', code: 'ZJSY', obstacle_count: 9 },
+      ]
+    }
     selectedAirportIds.value = selectedAirportIds.value.filter((id) =>
       airportList.value.some((airport) => Number(airport.id) === id),
     )
@@ -167,6 +192,13 @@ watch(
   width: min(560px, calc(100vw - 32px));
 }
 
+.modal-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: bold;
+}
+
 .airport-obstacle-toolbar,
 .airport-obstacle-row,
 .airport-obstacle-meta {
@@ -195,9 +227,19 @@ watch(
   border-bottom: 1px solid var(--n-divider-color, #e5e7eb);
 }
 
+.airport-item-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.airport-row-icon {
+  color: #38bdf8;
+}
+
 .airport-obstacle-name {
-  margin-right: 8px;
   color: var(--n-text-color-1, #1f2937);
+  font-weight: 500;
 }
 
 .airport-obstacle-code {

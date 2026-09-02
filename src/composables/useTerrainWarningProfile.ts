@@ -187,7 +187,28 @@ export function useTerrainWarningProfile() {
       : `安全：最小离地高度 ${clearance} m`
   })
 
+  function initTerrainWarning() {
+    if (!window.viewer || (typeof window.viewer.isDestroyed === 'function' && window.viewer.isDestroyed())) {
+      return
+    }
+    if (terrainWarningApi.value) return
+    terrainWarningApi.value = useTerrainWarning(
+      window.viewer,
+      getTerrainWarningAircraftPosition,
+      getTerrainWarningAircraftHeading,
+      {
+        distance: terrainWarningDistance.value,
+        steps: 50,
+        intervalMs: 100,
+        terrainLevel: 13,
+        warnClearance: terrainWarningClearance.value,
+      },
+    )
+  }
+
   function toggleSelectedPlaneTerrainWarning() {
+    initTerrainWarning()
+
     if (terrainWarningActive.value) {
       terrainWarningApi.value?.stop()
       terrainWarningTarget = null
@@ -208,22 +229,6 @@ export function useTerrainWarningProfile() {
     }
     terrainWarningTargetLabel.value = label
     terrainWarningApi.value?.start()
-  }
-
-  function initTerrainWarning() {
-    if (!window.viewer) return
-    terrainWarningApi.value = useTerrainWarning(
-      window.viewer,
-      getTerrainWarningAircraftPosition,
-      getTerrainWarningAircraftHeading,
-      {
-        distance: terrainWarningDistance.value,
-        steps: 50,
-        intervalMs: 100,
-        terrainLevel: 13,
-        warnClearance: terrainWarningClearance.value,
-      },
-    )
   }
 
   onMounted(() => {

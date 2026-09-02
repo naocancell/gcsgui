@@ -1,18 +1,18 @@
 <template>
   <div class="route-tab-panel">
-    <n-flex vertical class="route-profile-panel">
-      <n-space justify="space-evenly" style="padding: 0 0.5rem">
-        <n-ellipsis>采样间隔</n-ellipsis>
+    <div class="route-profile-panel">
+      <div class="profile-toolbar">
+        <span class="toolbar-label">采样间隔</span>
 
         <n-input-number
           :value="interval"
           size="small"
           placeholder="默认1000米"
-          style="width: 8rem"
+          style="width: 7.5rem"
           :min="100"
           :step="100"
           @update:value="$emit('update:interval', $event)"
-        ></n-input-number>
+        />
 
         <n-button
           type="success"
@@ -22,20 +22,21 @@
         >
           重新绘图
         </n-button>
-      </n-space>
+      </div>
 
-      <div v-show="hasSelectedRoute" id="echarts-profile"></div>
-    </n-flex>
+      <div v-show="hasSelectedRoute" id="echarts-profile" class="profile-chart-wrap"></div>
+      <div v-show="!hasSelectedRoute" class="empty-wrap">
+        <n-empty description="请先选择航线以查看地形剖面" style="margin-top: 3rem;" />
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import {
-  NFlex,
-  NSpace,
-  NEllipsis,
   NInputNumber,
   NButton,
+  NEmpty,
 } from 'naive-ui'
 
 defineProps<{
@@ -54,18 +55,42 @@ defineEmits<{
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .route-profile-panel {
   height: 100%;
   min-height: 0;
-  margin: 0.5rem 0;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
 }
 
-#echarts-profile {
+.profile-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  flex-shrink: 0;
+}
+
+.toolbar-label {
+  font-size: 13px;
+  color: var(--n-text-color-2, #aaa);
+}
+
+.profile-chart-wrap {
   flex: 1;
-  min-height: 0;
+  min-height: 220px;
   width: 100%;
+  height: 100%;
+}
+
+.empty-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: center;
   height: 100%;
 }
 </style>

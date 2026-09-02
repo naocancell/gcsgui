@@ -1,3 +1,6 @@
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
+import { isTauri } from '@/utils/homeWindowData'
+
 export interface RestorableTelemetryWindow {
   unminimize: () => Promise<void>
   show: () => Promise<void>
@@ -13,8 +16,7 @@ export interface PreventableCloseEvent {
 }
 
 export const telemetryWindowOptions = {
-  //窗口打开并展示哪个页面
-  url: 'index.html#/telemetry', //入口文件+hash+Vue路由路径
+  url: 'index.html#/telemetry',
   title: '无人机航电系统 - UAV AVIONICS',
   width: 820,
   height: 820,
@@ -22,15 +24,39 @@ export const telemetryWindowOptions = {
   minHeight: 820,
   resizable: false,
   maximizable: false,
-  decorations: false,//系统窗口自带的标题栏
+  decorations: false,
   center: true,
   focus: true,
 }
 
-export async function restoreTelemetryWindow(window: RestorableTelemetryWindow) {
-  await window.unminimize()
-  await window.show()
-  await window.setFocus()
+export async function openOrRestoreTelemetryWindow() {
+  if (!isTauri()) {
+    window.open(
+      telemetryWindowOptions.url,
+      'telemetry',
+      `width=${telemetryWindowOptions.width},height=${telemetryWindowOptions.height}`,
+    )
+    return
+  }
+
+  const existingWindow = await WebviewWindow.getByLabel('telemetry')
+  if (existingWindow) {
+    await existingWindow.unminimize()
+    await existingWindow.show()
+    await existingWindow.setFocus()
+  } else {
+    new WebviewWindow('telemetry', telemetryWindowOptions)
+  }
+}
+
+export async function restoreTelemetryWindow(window: RestorableTelemetryWindow | null) {
+  if (window) {
+    await window.unminimize()
+    await window.show()
+    await window.setFocus()
+  } else {
+    await openOrRestoreTelemetryWindow()
+  }
 }
 
 export async function hideTelemetryWindow(window: HideableTelemetryWindow) {

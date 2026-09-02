@@ -248,7 +248,7 @@
       <!-- 刷新页面 -->
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
-          <n-button tertiary type="warning" @click="$emit('refreshPage')">
+          <n-button tertiary type="warning" @click="handleRefresh">
             <template #icon>
               <n-icon><ReloadSharp /></n-icon>
             </template>
@@ -345,7 +345,7 @@ defineProps<{
   viewSettingsLoading: boolean
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   (e: 'manageLayer'): void
   (e: 'openMarkerPointsPanel'): void
   (e: 'selectData', key: string): void
@@ -370,6 +370,11 @@ defineEmits<{
 }>()
 
 const barIsOpen = ref(true)
+
+function handleRefresh() {
+  emit('refreshPage')
+  window.location.reload()
+}
 </script>
 
 <style scoped>

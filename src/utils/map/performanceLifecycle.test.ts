@@ -273,12 +273,13 @@ describe('Milestone 5: Performance & Memory Lifecycle Optimization', () => {
   })
 
   describe('1. Cesium 3D Globe Memory & Scene Tuning', () => {
-    it('configures tileCacheSize to 100, scene3DOnly to true, and avoids preRender polling', async () => {
+    it('configures tileCacheSize to 100, sceneModePicker to true, and avoids preRender polling', async () => {
       const container = mockDocument.createElement('div')
       const viewer = await initViewer(container)
 
-      // 验证 scene3DOnly 与 tileCacheSize 优化
-      expect(viewer.options.scene3DOnly).toBe(true)
+      // 验证 sceneModePicker 与 tileCacheSize 优化
+      expect(viewer.options.sceneModePicker).toBe(true)
+      expect(viewer.options.scene3DOnly).toBe(false)
       expect(viewer.options.requestRenderMode).toBe(true)
       expect(viewer.scene.globe.tileCacheSize).toBe(100)
 

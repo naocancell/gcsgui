@@ -218,15 +218,15 @@ async function initViewer(container: string | Element): Promise<Viewer> {
     navigationHelpButton: false, //是否显示帮助信息控件
     timeline: false, //是否显示时间线控件
     animation: false, //是否显示动画控件
-    sceneModePicker: false, //当 scene3DOnly 为 true 时必须禁用 sceneModePicker，避免 Cesium 抛出 DeveloperError 崩溃
-    sceneMode: SceneMode.SCENE3D, //设置场景模式，3D球体
+    sceneModePicker: true, //显示二三维切换控件 (2D / 3D / Columbus View)
+    sceneMode: SceneMode.SCENE3D, //设置默认场景模式为 3D 球体
     baseLayerPicker: true, //显示Cesium自带的底图选择控件
     imageryProviderViewModels,
     selectedImageryProviderViewModel: imageryProviderViewModels[0],
     terrainProviderViewModels: [],
     targetFrameRate: 60, //活动场景固定以最高 60 FPS 调度
     requestRenderMode: true, //启用请求渲染模式
-    scene3DOnly: true, //每个几何实例将只能以3D渲染以节省GPU内存
+    scene3DOnly: false, //设为 false 以支持二三维视图自由切换
     fullscreenButton: false, //右下角 全屏控件
     orderIndependentTranslucency: false,
     contextOptions: { webgl: { alpha: true } },

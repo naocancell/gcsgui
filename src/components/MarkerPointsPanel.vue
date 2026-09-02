@@ -290,7 +290,7 @@ function createMarkerEntity(point: Omit<MarkerPoint, 'entity'>) {
       name: point.name,
       position,
       billboard: {
-        image: getMapAssetsFile('marker.svg'),
+        image: '/images/marker.svg',
         width: 32,
         height: 32,
         heightReference: HeightReference.NONE,

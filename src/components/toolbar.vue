@@ -24,11 +24,13 @@ import { isTauri } from '@/utils/homeWindowData'
 import {
   exitApplicationOnClose,
   restoreTelemetryWindow,
+  openOrRestoreTelemetryWindow,
   telemetryWindowOptions,
 } from '@/utils/telemetryWindow'
 import {
   linkHealthWindowOptions,
   restoreLinkHealthWindow,
+  openOrRestoreLinkHealthWindow,
 } from '@/utils/linkHealthWindow'
 
 // 引入拆解的 Composables
@@ -289,8 +291,8 @@ onBeforeUnmount(() => {
     @toggle-terrain-warning="toggleSelectedPlaneTerrainWarning"
     @toggle-companion-mode="activeCompanionMode"
     @select-obstacle="handleObstacleSelect"
-    @show-link-health="() => restoreLinkHealthWindow(null).catch(() => new WebviewWindow('linkHealth', linkHealthWindowOptions))"
-    @show-telemetry="() => restoreTelemetryWindow(null).catch(() => new WebviewWindow('telemetry', telemetryWindowOptions))"
+    @show-link-health="openOrRestoreLinkHealthWindow"
+    @show-telemetry="openOrRestoreTelemetryWindow"
     @select-los-analyse="handleLosAnalyseSelect"
     @select-view-settings="handleViewSettingsSelect"
     @refresh-page="() => window.location.reload()"
