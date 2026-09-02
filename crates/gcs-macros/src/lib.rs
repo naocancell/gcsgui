@@ -12,29 +12,43 @@ pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
     let mut frame_id = None;
     for attr in &ast.attrs {
         if attr.path().is_ident("frame") {
-            let _ = attr.parse_nested_meta(|meta| {
+            if let Err(err) = attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("payload_size") {
                     let value = meta.value()?;
                     let lit: LitInt = value.parse()?;
-                    expected_payload_size = Some(lit.base10_parse::<usize>().unwrap());
+                    expected_payload_size = Some(lit.base10_parse::<usize>()?);
+                    Ok(())
                 } else if meta.path.is_ident("id") {
                     let value = meta.value()?;
                     let lit: LitInt = value.parse()?;
-                    frame_id = Some(lit.base10_parse::<u8>().unwrap());
+                    frame_id = Some(lit.base10_parse::<u8>()?);
+                    Ok(())
+                } else {
+                    Err(meta.error(format!(
+                        "未知 #[frame(...)] 属性参数: {}",
+                        meta.path.get_ident().map(|i| i.to_string()).unwrap_or_default()
+                    )))
                 }
-                Ok(())
-            });
+            }) {
+                return err.to_compile_error().into();
+            }
         }
     }
 
-    let fields = if let Data::Struct(data_struct) = &ast.data {
-        if let Fields::Named(named_fields) = &data_struct.fields {
-            &named_fields.named
-        } else {
-            panic!("FPPacketParser 只能用于带命名字段的结构体");
+    let fields = match &ast.data {
+        Data::Struct(data_struct) => match &data_struct.fields {
+            Fields::Named(named_fields) => &named_fields.named,
+            _ => {
+                return syn::Error::new_spanned(&ast, "FPPacketParser 只能用于带命名字段的结构体")
+                    .to_compile_error()
+                    .into();
+            }
+        },
+        _ => {
+            return syn::Error::new_spanned(&ast, "FPPacketParser 只能用于结构体")
+                .to_compile_error()
+                .into();
         }
-    } else {
-        panic!("FPPacketParser 只能用于结构体");
     };
 
     let mut parse_quotes: Vec<proc_macro2::TokenStream> = Vec::new();
@@ -42,7 +56,6 @@ pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
     // 编译期大小累加表达式，用于 const assert
     let mut compile_time_size_expr = quote! { 0usize };
     let mut compile_time_bit_acc: usize = 0;
-    let mut has_subframe_without_size = false;
 
     for f in fields.iter() {
         let field_name = &f.ident;
@@ -59,45 +72,94 @@ pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
         for attr in &f.attrs {
             if attr.path().is_ident("bits") {
                 // 解析 #[bits(3)] —— 单参数语法
-                let lit: LitInt = attr.parse_args().unwrap();
-                bits_count = Some(lit.base10_parse::<usize>().unwrap());
+                let lit: LitInt = match attr.parse_args() {
+                    Ok(l) => l,
+                    Err(err) => return err.to_compile_error().into(),
+                };
+                let count = match lit.base10_parse::<usize>() {
+                    Ok(c) => c,
+                    Err(err) => return err.to_compile_error().into(),
+                };
+                if count > 32 || count == 0 {
+                    return syn::Error::new_spanned(attr, "#[bits(N)] 中的 N 必须在 1 到 32 之间")
+                        .to_compile_error()
+                        .into();
+                }
+                bits_count = Some(count);
             } else if attr.path().is_ident("scale") {
-                let _ = attr.parse_nested_meta(|meta| {
+                if let Err(err) = attr.parse_nested_meta(|meta| {
                     if meta.path.is_ident("raw_type") {
                         let value = meta.value()?;
                         let lit: LitStr = value.parse()?;
                         scale_raw_type = Some(lit.value());
+                        Ok(())
                     } else if meta.path.is_ident("factor") {
                         let value = meta.value()?;
                         let lit: LitStr = value.parse()?;
                         scale_factor = Some(lit.value());
+                        Ok(())
                     } else if meta.path.is_ident("offset") {
                         let value = meta.value()?;
                         let lit: LitStr = value.parse()?;
                         scale_offset = Some(lit.value());
+                        Ok(())
+                    } else {
+                        Err(meta.error(format!(
+                            "未知 #[scale(...)] 属性参数: {}",
+                            meta.path.get_ident().map(|i| i.to_string()).unwrap_or_default()
+                        )))
                     }
-                    Ok(())
-                });
+                }) {
+                    return err.to_compile_error().into();
+                }
             } else if attr.path().is_ident("subframe") {
                 is_subframe = true;
-                let _ = attr.parse_nested_meta(|meta| {
+                if let Err(err) = attr.parse_nested_meta(|meta| {
                     if meta.path.is_ident("size") {
                         let value = meta.value()?;
                         let lit: LitInt = value.parse()?;
-                        subframe_size = Some(lit.base10_parse::<usize>().unwrap());
+                        subframe_size = Some(lit.base10_parse::<usize>()?);
+                        Ok(())
+                    } else {
+                        Err(meta.error(format!(
+                            "未知 #[subframe(...)] 属性参数: {}",
+                            meta.path.get_ident().map(|i| i.to_string()).unwrap_or_default()
+                        )))
                     }
-                    Ok(())
-                });
+                }) {
+                    return err.to_compile_error().into();
+                }
             } else if attr.path().is_ident("bitflags") {
-                let _ = attr.parse_nested_meta(|meta| {
+                if let Err(err) = attr.parse_nested_meta(|meta| {
                     if meta.path.is_ident("raw_type") {
                         let value = meta.value()?;
                         let lit: LitStr = value.parse()?;
                         bitflags_raw_type = Some(lit.value());
+                        Ok(())
+                    } else {
+                        Err(meta.error(format!(
+                            "未知 #[bitflags(...)] 属性参数: {}",
+                            meta.path.get_ident().map(|i| i.to_string()).unwrap_or_default()
+                        )))
                     }
-                    Ok(())
-                });
+                }) {
+                    return err.to_compile_error().into();
+                }
             }
+        }
+
+        let mut attr_count = 0;
+        if bits_count.is_some() { attr_count += 1; }
+        if scale_raw_type.is_some() { attr_count += 1; }
+        if is_subframe { attr_count += 1; }
+        if bitflags_raw_type.is_some() { attr_count += 1; }
+        if attr_count > 1 {
+            return syn::Error::new_spanned(
+                f,
+                "字段属性 #[bits]、#[scale]、#[subframe]、#[bitflags] 互斥，不能同时标注在同一字段上",
+            )
+            .to_compile_error()
+            .into();
         }
 
         if is_subframe {
@@ -113,33 +175,42 @@ pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
                 compile_time_bit_acc = 0;
             }
 
-            if let Some(s) = subframe_size {
-                // 子帧 ID(1字节) + 子帧本身的大小
-                compile_time_size_expr = quote! { #compile_time_size_expr + 1usize + #s };
-            } else {
-                has_subframe_without_size = true;
-            }
+            let s = match subframe_size {
+                Some(s) => s,
+                None => {
+                    return syn::Error::new_spanned(
+                        f,
+                        "带有 #[subframe] 的字段必须明确指定大小，例如: #[subframe(size = 6)]",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+            };
+
+            // 子帧 ID(1字节) + 子帧本身的大小
+            compile_time_size_expr = quote! { #compile_time_size_expr + 1usize + #s };
 
             parse_quotes.push(quote! {
                 let sub_frame_id = *data.get(offset).ok_or_else(|| "读取子帧ID越界".to_string())?;
                 offset += 1;
                 let sub_slice = data.get(offset..).ok_or_else(|| "读取子帧内容越界".to_string())?;
                 let #field_name = <#field_type>::from_bytes(sub_frame_id, sub_slice)?;
+                offset += #s;
             });
         } else if let Some(n) = bits_count {
             // ===== 位域字段（支持最多32位跨字节安全拼接） =====
             let byte_index = bit_cursor / 8;
             let bit_within_byte = bit_cursor % 8;
             let needed_bytes = (bit_within_byte + n + 7) / 8;
-            let mask = (1u32 << n) - 1;
+            let mask = if n >= 32 { !0u32 } else { (1u32 << n) - 1 };
 
             parse_quotes.push(quote! {
                 let slice = data.get(offset + #byte_index .. offset + #byte_index + #needed_bytes)
                     .ok_or_else(|| format!("读取位域字段 {} 越界", stringify!(#field_name)))?;
-                let mut buf = [0u8; 4];
+                let mut buf = [0u8; 8];
                 buf[..#needed_bytes].copy_from_slice(slice);
-                let raw_u32 = u32::from_le_bytes(buf);
-                let #field_name = ((raw_u32 >> #bit_within_byte) & #mask) as #field_type;
+                let raw_u64 = u64::from_le_bytes(buf);
+                let #field_name = (((raw_u64 >> #bit_within_byte) as u32) & #mask) as #field_type;
             });
 
             bit_cursor += n;
@@ -159,7 +230,10 @@ pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
             }
 
             if let Some(raw_type_str) = bitflags_raw_type {
-                let raw_type: proc_macro2::TokenStream = raw_type_str.parse().unwrap();
+                let raw_type: proc_macro2::TokenStream = match raw_type_str.parse() {
+                    Ok(t) => t,
+                    Err(err) => return syn::Error::new_spanned(f, err.to_string()).to_compile_error().into(),
+                };
                 parse_quotes.push(quote! {
                     let size = std::mem::size_of::<#raw_type>();
                     let slice = data.get(offset..offset + size)
@@ -172,14 +246,20 @@ pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
                     quote! { #compile_time_size_expr + std::mem::size_of::<#raw_type>() };
             } else if let Some(raw_type_str) = scale_raw_type {
                 // 带缩放的字段
-                let factor: proc_macro2::TokenStream = scale_factor
+                let factor: proc_macro2::TokenStream = match scale_factor
                     .unwrap_or_else(|| "1.0".to_string())
                     .parse()
-                    .unwrap();
-                let offset_val: proc_macro2::TokenStream = scale_offset
+                {
+                    Ok(t) => t,
+                    Err(err) => return syn::Error::new_spanned(f, err.to_string()).to_compile_error().into(),
+                };
+                let offset_val: proc_macro2::TokenStream = match scale_offset
                     .unwrap_or_else(|| "0.0".to_string())
                     .parse()
-                    .unwrap();
+                {
+                    Ok(t) => t,
+                    Err(err) => return syn::Error::new_spanned(f, err.to_string()).to_compile_error().into(),
+                };
 
                 if raw_type_str == "u24" {
                     parse_quotes.push(quote! {
@@ -192,7 +272,10 @@ pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
                     });
                     compile_time_size_expr = quote! { #compile_time_size_expr + 3usize };
                 } else {
-                    let raw_type: proc_macro2::TokenStream = raw_type_str.parse().unwrap();
+                    let raw_type: proc_macro2::TokenStream = match raw_type_str.parse() {
+                        Ok(t) => t,
+                        Err(err) => return syn::Error::new_spanned(f, err.to_string()).to_compile_error().into(),
+                    };
                     parse_quotes.push(quote! {
                         let size = std::mem::size_of::<#raw_type>();
                         let slice = data.get(offset..offset + size)
@@ -242,12 +325,17 @@ pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
 
     let field_names: Vec<_> = fields.iter().map(|f| &f.ident).collect();
 
-    let expected_payload_size = expected_payload_size
-        .expect("使用 FPPacketParser 必须在结构体上标注 #[frame(payload_size = N)] 以确保安全");
-
-    if has_subframe_without_size {
-        panic!("带有 #[subframe] 的字段必须明确指定大小，例如: #[subframe(size = 6)]");
-    }
+    let expected_payload_size = match expected_payload_size {
+        Some(s) => s,
+        None => {
+            return syn::Error::new_spanned(
+                &ast,
+                "使用 FPPacketParser 必须在结构体上标注 #[frame(payload_size = N)] 以确保安全",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
 
     // 编译期 const assert 校验 payload_size
     let compile_time_check = quote! {
@@ -268,6 +356,8 @@ pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
     let expanded = quote! {
         #compile_time_check
 
+        #[automatically_derived]
+        #[allow(unused_assignments, clippy::all)]
         impl #struct_name {
             #frame_id_const
 
@@ -290,10 +380,13 @@ pub fn derive_sub_frame(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
     let enum_name = &ast.ident;
 
-    let variants = if let Data::Enum(data_enum) = &ast.data {
-        &data_enum.variants
-    } else {
-        panic!("FPSubFrame 只能用于枚举");
+    let variants = match &ast.data {
+        Data::Enum(data_enum) => &data_enum.variants,
+        _ => {
+            return syn::Error::new_spanned(&ast, "FPSubFrame 只能用于枚举")
+                .to_compile_error()
+                .into();
+        }
     };
 
     let mut match_arms: Vec<proc_macro2::TokenStream> = Vec::new();
@@ -305,21 +398,42 @@ pub fn derive_sub_frame(input: TokenStream) -> TokenStream {
         let mut id_value: Option<u8> = None;
         for attr in &variant.attrs {
             if attr.path().is_ident("id") {
-                let lit: LitInt = attr.parse_args().unwrap();
-                id_value = Some(lit.base10_parse::<u8>().unwrap());
+                let lit: LitInt = match attr.parse_args() {
+                    Ok(l) => l,
+                    Err(err) => return err.to_compile_error().into(),
+                };
+                match lit.base10_parse::<u8>() {
+                    Ok(val) => id_value = Some(val),
+                    Err(err) => return err.to_compile_error().into(),
+                }
             }
         }
-        let id = id_value.unwrap_or_else(|| panic!("子帧变体 {} 缺少 #[id(N)] 属性", variant_name));
+        let id = match id_value {
+            Some(i) => i,
+            None => {
+                return syn::Error::new_spanned(
+                    variant,
+                    format!("子帧变体 {} 缺少 #[id(N)] 属性", variant_name),
+                )
+                .to_compile_error()
+                .into();
+            }
+        };
 
-        // 获取元组变体的内部类型
-        let inner_type = if let Fields::Unnamed(fields) = &variant.fields {
-            &fields
-                .unnamed
-                .first()
-                .expect("子帧变体必须包含一个内部类型")
-                .ty
-        } else {
-            panic!("子帧变体 {} 必须是元组形式，如 SF0(TypeName)", variant_name);
+        // 获取元组变体的内部类型（严格校验仅包含 1 个字段）
+        let inner_type = match &variant.fields {
+            Fields::Unnamed(fields) if fields.unnamed.len() == 1 => &fields.unnamed[0].ty,
+            _ => {
+                return syn::Error::new_spanned(
+                    variant,
+                    format!(
+                        "子帧变体 {} 必须是且仅包含单个内部类型的元组形式，如 SF0(TypeName)",
+                        variant_name
+                    ),
+                )
+                .to_compile_error()
+                .into();
+            }
         };
 
         match_arms.push(quote! {
@@ -328,6 +442,8 @@ pub fn derive_sub_frame(input: TokenStream) -> TokenStream {
     }
 
     let expanded = quote! {
+        #[automatically_derived]
+        #[allow(clippy::all)]
         impl #enum_name {
             pub fn from_bytes(id: u8, data: &[u8]) -> Result<Self, String> {
                 match id {
@@ -347,14 +463,20 @@ pub fn derive_bit_flags(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
     let struct_name = &ast.ident;
 
-    let fields = if let Data::Struct(data_struct) = &ast.data {
-        if let Fields::Named(named_fields) = &data_struct.fields {
-            &named_fields.named
-        } else {
-            panic!("FPBitFlags 只能用于带命名字段的结构体");
+    let fields = match &ast.data {
+        Data::Struct(data_struct) => match &data_struct.fields {
+            Fields::Named(named_fields) => &named_fields.named,
+            _ => {
+                return syn::Error::new_spanned(&ast, "FPBitFlags 只能用于带命名字段的结构体")
+                    .to_compile_error()
+                    .into();
+            }
+        },
+        _ => {
+            return syn::Error::new_spanned(&ast, "FPBitFlags 只能用于结构体")
+                .to_compile_error()
+                .into();
         }
-    } else {
-        panic!("FPBitFlags 只能用于结构体");
     };
 
     let mut field_assigns = Vec::new();
@@ -369,11 +491,23 @@ pub fn derive_bit_flags(input: TokenStream) -> TokenStream {
 
         for attr in &f.attrs {
             if attr.path().is_ident("skip") {
-                let lit: LitInt = attr.parse_args().unwrap();
-                skip_count += lit.base10_parse::<usize>().unwrap();
+                let lit: LitInt = match attr.parse_args() {
+                    Ok(l) => l,
+                    Err(err) => return err.to_compile_error().into(),
+                };
+                match lit.base10_parse::<usize>() {
+                    Ok(c) => skip_count += c,
+                    Err(err) => return err.to_compile_error().into(),
+                }
             } else if attr.path().is_ident("bits") {
-                let lit: LitInt = attr.parse_args().unwrap();
-                bits_count = Some(lit.base10_parse::<usize>().unwrap());
+                let lit: LitInt = match attr.parse_args() {
+                    Ok(l) => l,
+                    Err(err) => return err.to_compile_error().into(),
+                };
+                match lit.base10_parse::<usize>() {
+                    Ok(c) => bits_count = Some(c),
+                    Err(err) => return err.to_compile_error().into(),
+                }
             }
         }
 
@@ -396,6 +530,8 @@ pub fn derive_bit_flags(input: TokenStream) -> TokenStream {
     }
 
     let expanded = quote! {
+        #[automatically_derived]
+        #[allow(clippy::all)]
         impl #struct_name {
             pub fn from_raw<T: Into<u64>>(val: T) -> Self {
                 let val: u64 = val.into();
@@ -415,28 +551,44 @@ pub fn derive_aggregate(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
     let enum_name = &ast.ident;
 
-    let mut agg_struct_name = syn::Ident::new("FP981CAggregate", enum_name.span());
+    let default_name = format!("{}Aggregate", enum_name);
+    let mut agg_struct_name = syn::Ident::new(&default_name, enum_name.span());
     let mut aggregate_rename_all: Option<LitStr> = None;
     for attr in &ast.attrs {
         if attr.path().is_ident("aggregate_struct") {
-            let _ = attr.parse_nested_meta(|meta| {
+            if let Err(err) = attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("rename_all") {
                     aggregate_rename_all = Some(meta.value()?.parse()?);
+                    Ok(())
+                } else if meta.path.is_ident("name") {
+                    let lit: LitStr = meta.value()?.parse()?;
+                    agg_struct_name = syn::Ident::new(&lit.value(), lit.span());
+                    Ok(())
                 } else if let Some(ident) = meta.path.get_ident() {
                     agg_struct_name = ident.clone();
+                    Ok(())
+                } else {
+                    Err(meta.error(format!(
+                        "未知 #[aggregate_struct(...)] 属性参数: {}",
+                        meta.path.get_ident().map(|i| i.to_string()).unwrap_or_default()
+                    )))
                 }
-                Ok(())
-            });
+            }) {
+                return err.to_compile_error().into();
+            }
         }
     }
 
     let aggregate_serde_attr =
         aggregate_rename_all.map(|value| quote! { #[serde(rename_all = #value)] });
 
-    let variants = if let Data::Enum(data_enum) = &ast.data {
-        &data_enum.variants
-    } else {
-        panic!("FPAggregate 只能用于枚举");
+    let variants = match &ast.data {
+        Data::Enum(data_enum) => &data_enum.variants,
+        _ => {
+            return syn::Error::new_spanned(&ast, "FPAggregate 只能用于枚举")
+                .to_compile_error()
+                .into();
+        }
     };
 
     let mut struct_fields: Vec<proc_macro2::TokenStream> = Vec::new();
@@ -451,10 +603,19 @@ pub fn derive_aggregate(input: TokenStream) -> TokenStream {
             variant_ident.span(),
         );
 
-        let inner_ty = if let Fields::Unnamed(fields) = &variant.fields {
-            &fields.unnamed.first().expect("变体必须包含一个内部类型").ty
-        } else {
-            panic!("变体必须是元组形式");
+        let inner_ty = match &variant.fields {
+            Fields::Unnamed(fields) if fields.unnamed.len() == 1 => &fields.unnamed[0].ty,
+            _ => {
+                return syn::Error::new_spanned(
+                    variant,
+                    format!(
+                        "变体 {} 必须是且仅包含单个内部类型的元组形式，如 V1(TypeName)",
+                        variant_ident
+                    ),
+                )
+                .to_compile_error()
+                .into();
+            }
         };
 
         struct_fields.push(quote! { pub #field_name: Option<#inner_ty> });
@@ -465,7 +626,7 @@ pub fn derive_aggregate(input: TokenStream) -> TokenStream {
 
         for attr in &variant.attrs {
             if attr.path().is_ident("aggregate") {
-                let _ = attr.parse_nested_meta(|meta| {
+                if let Err(err) = attr.parse_nested_meta(|meta| {
                     if meta.path.is_ident("sub_enum") {
                         let value = meta.value()?;
                         let lit: LitStr = value.parse()?;
@@ -473,6 +634,7 @@ pub fn derive_aggregate(input: TokenStream) -> TokenStream {
                             &lit.value(),
                             proc_macro2::Span::call_site(),
                         ));
+                        Ok(())
                     } else if meta.path.is_ident("sub_field") {
                         let value = meta.value()?;
                         let lit: LitStr = value.parse()?;
@@ -480,14 +642,18 @@ pub fn derive_aggregate(input: TokenStream) -> TokenStream {
                             &lit.value(),
                             proc_macro2::Span::call_site(),
                         ));
+                        Ok(())
                     } else if meta.path.is_ident("subs") {
-                        let _ = meta.parse_nested_meta(|sub_meta| {
-                            let sub_variant = sub_meta.path.get_ident().unwrap().clone();
+                        meta.parse_nested_meta(|sub_meta| {
+                            let sub_variant = match sub_meta.path.get_ident() {
+                                Some(i) => i.clone(),
+                                None => return Err(sub_meta.error("subs 变体名称必须是标识符")),
+                            };
                             let mut sub_ty: Option<syn::Ident> = None;
-                            let _ = sub_meta.parse_nested_meta(|inner_meta| {
-                                sub_ty = Some(inner_meta.path.get_ident().unwrap().clone());
+                            sub_meta.parse_nested_meta(|inner_meta| {
+                                sub_ty = inner_meta.path.get_ident().cloned();
                                 Ok(())
-                            });
+                            })?;
                             if let Some(ty) = sub_ty {
                                 let sub_field_name = syn::Ident::new(
                                     &format!(
@@ -500,10 +666,16 @@ pub fn derive_aggregate(input: TokenStream) -> TokenStream {
                                 sub_items.push((sub_variant, ty, sub_field_name));
                             }
                             Ok(())
-                        });
+                        })
+                    } else {
+                        Err(meta.error(format!(
+                            "未知 #[aggregate(...)] 属性参数: {}",
+                            meta.path.get_ident().map(|i| i.to_string()).unwrap_or_default()
+                        )))
                     }
-                    Ok(())
-                });
+                }) {
+                    return err.to_compile_error().into();
+                }
             }
         }
 
@@ -538,6 +710,8 @@ pub fn derive_aggregate(input: TokenStream) -> TokenStream {
             #(#struct_fields),*
         }
 
+        #[automatically_derived]
+        #[allow(clippy::all)]
         impl #agg_struct_name {
             pub fn merge(&mut self, parsed: #enum_name) {
                 match parsed {

@@ -93,6 +93,11 @@ impl UdpLink {
                                 }).await;
                             }
                             Err(e) => {
+                                // Windows 平台下如果先前发包目标端口未开放返回 ICMP Port Unreachable，后续 recv_from 会收到 10054 (ConnectionReset)
+                                // 这属于非致命临时错误，忽略并继续监听
+                                if e.kind() == std::io::ErrorKind::ConnectionReset {
+                                    continue;
+                                }
                                 log::error!("UDP链路 {} 读取异常: {}", rx_name, e);
                                 let _ = rx_tx.send(LinkEvent::StatusChanged {
                                     link_name: rx_name.clone(),

@@ -78,6 +78,7 @@ impl SerialLink {
 
         let _ = thread::Builder::new().name(thread_name).spawn(move || {
             let mut buf = vec![0u8; buf_size];
+            let mut faulted = false;
 
             while is_running.load(Ordering::Relaxed) {
                 match reader.read(&mut buf) {
@@ -102,9 +103,17 @@ impl SerialLink {
                             link_name: rx_name.clone(),
                             status: LinkStatus::Faulted(e.to_string()),
                         });
+                        faulted = true;
                         break;
                     }
                 }
+            }
+
+            if !faulted {
+                let _ = rx_tx.blocking_send(LinkEvent::StatusChanged {
+                    link_name: rx_name,
+                    status: LinkStatus::Stopped,
+                });
             }
         });
 

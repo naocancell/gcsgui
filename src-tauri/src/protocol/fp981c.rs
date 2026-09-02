@@ -9,6 +9,7 @@ use serde::Serialize;
 
 // ================= 解析与聚合入口 =================
 #[derive(FPSubFrame, FPAggregate, Debug, Clone, Serialize)]
+#[aggregate_struct(FP981CAggregate)]
 pub enum ParsedSubFrame {
     #[id(0xC0)]
     C0(FrameC0),
