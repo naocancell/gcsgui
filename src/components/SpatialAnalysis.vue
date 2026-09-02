@@ -4,15 +4,16 @@
   创建人：Zhaipeixiu
 -->
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import {
   drawEchartsProfileAnalyse,
   drawEchartsVisibility,
+  disposeProfileEChart,
   elevationProfile,
   profileAnalyse,
   visibilityAnalyse2,
 } from '@/utils/map/SpatialAnalysis.ts'
-import { useStaticStore } from '@/store/staticOptions'
+import { useStaticStore } from '@/store/staticStore'
 import { useMessage } from 'naive-ui'
 import { Cartesian3 } from 'cesium'
 let showResultModal = ref(false)
@@ -28,14 +29,20 @@ let formParams = ref({
   curve: true,
 })
 let isVisible = ref(false)
-// 关闭地形分析结果窗口德回调
+// 关闭地形分析结果窗口的回调
 const handleCloseProfile = () => {
+  // 释放 ECharts 图表资源，避免内存泄漏
+  disposeProfileEChart()
   //移除图形元素
-  window.measureViewer.clearProfileEntities()
+  window.measureViewer?.clearProfileEntities?.()
   //地形点数组归零
   store.analysisVars.profilePts = []
   store.analysisVars.analysisType = -1
 }
+
+onBeforeUnmount(() => {
+  disposeProfileEChart()
+})
 
 // 执行地形分析
 function executeTopographicAnalyse(polyline: Cartesian3[]) {

@@ -10,7 +10,6 @@ import {
   WebMapTileServiceImageryProvider,
   GeographicTilingScheme,
   WebMercatorTilingScheme,
-  CesiumTerrainProvider,
 } from 'cesium'
 import axios from 'axios'
 
@@ -32,7 +31,6 @@ enum TDTProjectionType {
 //专用地理编码服务
 const TDT_geoCode = 'fdcb75858870c951753957ac29bc8167'
 const TDT_tk = '1c5b7cbf9da7d33b221f68c32b6a1791'
-const TDT_tk3D = '910a4befdfd04d5423268b0aced82248'
 // 服务域名
 const tdtUrl = 'https://t{s}.tianditu.gov.cn'
 // 服务负载子域
@@ -76,34 +74,6 @@ export function getTDTProvider(
     tileMatrixLabels: tileMatrixLabels,
   })
   return imageryProvider
-}
-/**
- * 获取天地图三维地形服务
- * @returns ImageryProvider
- */
-export function getTDTTerrainProvider() {
-  const terrainUrls: string[] = []
-
-  for (let i = 0; i < subdomains.length; i++) {
-    const url =
-      tdtUrl.replace('{s}', subdomains[i]) +
-      '/mapservice/swdx?T=elv_c&tk=' +
-      TDT_tk3D
-    terrainUrls.push(url)
-  }
-
-  const provider = new window.Cesium.GeoTerrainProvider({
-    urls: terrainUrls,
-  })
-  if (provider.errorEvent) {
-    provider.errorEvent.addEventListener((error: any) => {
-      // 静默处理瓦片请求或解析失败引起的异常，关闭重试以避免频繁日志刷屏
-      if (error) {
-        error.retry = false
-      }
-    })
-  }
-  return provider
 }
 
 /**

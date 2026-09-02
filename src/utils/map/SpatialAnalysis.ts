@@ -305,12 +305,27 @@ export function visibilityAnalyse2(
 }
 
 /**
+ * 销毁剖面与通视分析图表实例并释放资源
+ */
+export function disposeProfileEChart() {
+  const dom = document.getElementById('profileEChart')
+  if (dom) {
+    const chart = echarts.getInstanceByDom(dom)
+    if (chart) {
+      chart.dispose()
+    }
+  }
+}
+
+/**
  *  绘制地形剖面折线图
  * @param xData x数组
  * @param yData y数组，以面积线绘制
  */
 export function drawEchartsProfileAnalyse(xData: number[], yData: number[]) {
-  let myChart = echarts.init(document.getElementById('profileEChart'))
+  const dom = document.getElementById('profileEChart')
+  if (!dom) return
+  let myChart = echarts.getInstanceByDom(dom) ?? echarts.init(dom)
   // 绘制图表
   myChart.setOption({
     legend: {
@@ -685,7 +700,9 @@ export const drawEchartsVisibility = (
   startHeight: number,
   endHeight: number,
 ) => {
-  let myChart = echarts.init(document.getElementById('profileEChart')) //Echarts-UnitTest
+  const dom = document.getElementById('profileEChart')
+  if (!dom) return
+  let myChart = echarts.getInstanceByDom(dom) ?? echarts.init(dom) //Echarts-UnitTest
   // 绘制图表
   myChart.setOption({
     legend: {

@@ -773,11 +773,33 @@ export function useMarkObstacle() {
         return visible
     }
 
+    /**
+     * 彻底销毁障碍物图层资源与事件监听器，避免事件泄露和内存占用
+     */
+    function destroy(): void {
+        if (hoverHandler && !hoverHandler.isDestroyed()) {
+            hoverHandler.destroy()
+            hoverHandler = undefined
+        }
+        clearObstacles()
+        if (hoverLabelEntity && window.viewer?.entities) {
+            window.viewer.entities.remove(hoverLabelEntity)
+            hoverLabelEntity = undefined
+        }
+        if (window.viewer && !window.viewer.isDestroyed?.()) {
+            const el = (window.viewer as any)._element
+            if (el) el.style.cursor = 'default'
+            window.viewer.scene?.requestRender?.()
+        }
+    }
+
     return {
         addObstacle,
         loadAirports,
         // 保留文件加载能力，供需要直接导入 JSON 的场景使用。
         addAllObstacles: addAllObstaclesFromFile,
         toggleObstaclesVisible,
+        clearObstacles,
+        destroy,
     }
 }

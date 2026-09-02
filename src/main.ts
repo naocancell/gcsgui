@@ -5,6 +5,9 @@ import { createPinia } from 'pinia'
 import 'virtual:svg-icons-register'
 import naive from 'naive-ui'
 import router from './router'
+if (typeof window !== 'undefined') {
+  window.CESIUM_BASE_URL = import.meta.env.DEV ? '/Cesium/' : './Cesium/'
+}
 
 const pinia = createPinia()
 const app = createApp(App)

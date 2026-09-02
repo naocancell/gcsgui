@@ -35,38 +35,55 @@ import {
   TDTProjectionType,
 } from './TDTProvider'
 
-//离线地球底图
-const localImageryProviderPromise = TileMapServiceImageryProvider.fromUrl(
-  '/Cesium/Assets/Textures/NaturalEarthII',
-)
+// 防御性保护：防止在时钟 tick 阶段因为生命周期/异步加载导致 _dataSourceDisplay 暂未就绪或已销毁时抛出异常导致红框
+if (typeof Viewer !== 'undefined' && Viewer.prototype && !(Viewer.prototype as any)._safeOnTickPatched) {
+  const originalOnTick = Viewer.prototype._onTick
+  Viewer.prototype._onTick = function (clock: any) {
+    if (!this._dataSourceDisplay || (typeof this.isDestroyed === 'function' && this.isDestroyed())) {
+      return
+    }
+    return originalOnTick.call(this, clock)
+  }
+  ;(Viewer.prototype as any)._safeOnTickPatched = true
+}
+
+// 离线地球底图异步加载，带 800ms 超时回退保护
+async function getLocalImageryProvider(): Promise<ImageryProvider | undefined> {
+  try {
+    const p = TileMapServiceImageryProvider.fromUrl(
+      '/Cesium/Assets/Textures/NaturalEarthII',
+    )
+    const timeout = new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 800))
+    return await Promise.race([p, timeout])
+  } catch {
+    return undefined
+  }
+}
 
 function createImageryProviderViewModels(
-  localImageryProvider: ImageryProvider,
+  localImageryProvider?: ImageryProvider,
 ): ProviderViewModel[] {
+  const baseLayers = localImageryProvider ? [localImageryProvider] : []
+
   return [
+    new ProviderViewModel({
+      name: '天地图影像',
+      tooltip: '天地图卫星影像与中文注记',
+      iconUrl: buildModuleUrl('Widgets/Images/ImageryProviders/TDT.png'),
+      category: '影像底图',
+      creationFunction: () => [
+        ...baseLayers,
+        getTDTProvider(TDTLayerType.Img, TDTProjectionType.WebMercator),
+        getTDTProvider(TDTLayerType.Cia, TDTProjectionType.WebMercator),
+      ],
+    }),
     new ProviderViewModel({
       name: 'Bing 影像',
       tooltip: 'Cesium ion 提供的 Bing 全球卫星影像',
       iconUrl: buildModuleUrl('Widgets/Images/ImageryProviders/bingAerial.png'),
       category: '影像底图',
-      creationFunction: () =>
-        [
-          localImageryProvider,
-          createWorldImageryAsync({
-            style: IonWorldImageryStyle.AERIAL,
-          }),
-           getTDTProvider(TDTLayerType.Cia, TDTProjectionType.WebMercator),
-        ] as unknown as ImageryProvider[],
-    }),
-    new ProviderViewModel({
-      name: '天地图影像',
-      tooltip: '天地图卫星影像与中文注记',
-      iconUrl: buildModuleUrl(
-        'Widgets/Images/ImageryProviders/TDT.png',
-      ),
-      category: '影像底图',
       creationFunction: () => [
-        localImageryProvider,
+        ...baseLayers,
         getTDTProvider(TDTLayerType.Img, TDTProjectionType.WebMercator),
         getTDTProvider(TDTLayerType.Cia, TDTProjectionType.WebMercator),
       ],
@@ -74,40 +91,34 @@ function createImageryProviderViewModels(
     new ProviderViewModel({
       name: 'Google 影像',
       tooltip: 'Google 卫星影像（需要可访问 Google 地图服务）',
-      iconUrl: buildModuleUrl(
-        'Widgets/Images/ImageryProviders/mapboxSatellite.png',
-      ),
+      iconUrl: buildModuleUrl('Widgets/Images/ImageryProviders/mapboxSatellite.png'),
       category: '影像底图',
       creationFunction: () => [
-        localImageryProvider,
+        ...baseLayers,
         new UrlTemplateImageryProvider({
-                url: "https://tileser.giiiis.com/timetile/0/{z}/{x}/{y}.jpg",
-                minimumLevel: 0,
-                maximumLevel: 20,
-                tilingScheme: new GeographicTilingScheme()//4326椭球瓦片
-            }
-            ),
-         getTDTProvider(TDTLayerType.Cia, TDTProjectionType.WebMercator),
+          url: 'https://tileser.giiiis.com/timetile/0/{z}/{x}/{y}.jpg',
+          minimumLevel: 0,
+          maximumLevel: 20,
+          tilingScheme: new GeographicTilingScheme(),
+        }),
+        getTDTProvider(TDTLayerType.Cia, TDTProjectionType.WebMercator),
       ],
     }),
     new ProviderViewModel({
       name: 'ArcGIS 影像',
       tooltip: 'ArcGIS 影像',
-      iconUrl: buildModuleUrl(
-        'Widgets/Images/ImageryProviders/ArcGisMapServiceWorldImagery.png',
-      ),
+      iconUrl: buildModuleUrl('Widgets/Images/ImageryProviders/ArcGisMapServiceWorldImagery.png'),
       category: '影像底图',
       creationFunction: () => [
-        localImageryProvider,
+        ...baseLayers,
         new UrlTemplateImageryProvider({
-        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        minimumLevel: 0,
-        maximumLevel: 18,
-      }),
-         getTDTProvider(TDTLayerType.Cia, TDTProjectionType.WebMercator),
+          url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+          minimumLevel: 0,
+          maximumLevel: 18,
+        }),
+        getTDTProvider(TDTLayerType.Cia, TDTProjectionType.WebMercator),
       ],
     }),
-
   ]
 }
 
@@ -194,7 +205,7 @@ class HybridGeocoderService {
  * @returns :viewer对象
  */
 async function initViewer(container: string | Element): Promise<Viewer> {
-  const localImageryProvider = await localImageryProviderPromise
+  const localImageryProvider = await getLocalImageryProvider()
   const imageryProviderViewModels =
     createImageryProviderViewModels(localImageryProvider)
   const geocoderService = new HybridGeocoderService()
@@ -207,30 +218,30 @@ async function initViewer(container: string | Element): Promise<Viewer> {
     navigationHelpButton: false, //是否显示帮助信息控件
     timeline: false, //是否显示时间线控件
     animation: false, //是否显示动画控件
-    sceneModePicker: true, //是否显示投影方式控件
+    sceneModePicker: false, //当 scene3DOnly 为 true 时必须禁用 sceneModePicker，避免 Cesium 抛出 DeveloperError 崩溃
     sceneMode: SceneMode.SCENE3D, //设置场景模式，3D球体
-    // terrain: Cesium.Terrain.fromWorldTerrain(),
     baseLayerPicker: true, //显示Cesium自带的底图选择控件
     imageryProviderViewModels,
-    selectedImageryProviderViewModel: imageryProviderViewModels[1],
+    selectedImageryProviderViewModel: imageryProviderViewModels[0],
     terrainProviderViewModels: [],
     targetFrameRate: 60, //活动场景固定以最高 60 FPS 调度
     requestRenderMode: true, //启用请求渲染模式
-    scene3DOnly: false, //每个几何实例将只能以3D渲染以节省GPU内存
+    scene3DOnly: true, //每个几何实例将只能以3D渲染以节省GPU内存
     fullscreenButton: false, //右下角 全屏控件
     orderIndependentTranslucency: false,
     contextOptions: { webgl: { alpha: true } },
-    maximumRenderTimeChange: Infinity, // 无操作时自动渲染帧率，设为数字会消耗性能，Infinity为无操作不渲染
-    // mapProjection: new Cesium.WebMercatorProjection(),
+    maximumRenderTimeChange: 0.5, // 限制最大无操作渲染间隔为 0.5s，确保异步瓦片下载后自动刷新呈现
   })
   // 设置搜索结果定位的飞行时间，单位为秒
-viewer.geocoder.viewModel.flightDuration = 1
+  viewer.geocoder.viewModel.flightDuration = 2
   geocoderService.setScene(viewer.scene)
   //去除cesium logo，隐藏版本信息
   const creditContainer = viewer.cesiumWidget.creditContainer as HTMLDivElement
   creditContainer.style.display = 'none'
   // 开启深度检测
   viewer.scene.globe.depthTestAgainstTerrain = true
+  // 限制瓦片缓存大小，防止内存与显存无限膨胀
+  viewer.scene.globe.tileCacheSize = 100
   // 水雾特效
   viewer.scene.globe.showGroundAtmosphere = true
   // 设置更高的缩放惯性以使缩放操作更平滑
@@ -238,16 +249,12 @@ viewer.geocoder.viewModel.flightDuration = 1
   // 限制相机缩放
   viewer.scene.screenSpaceCameraController.minimumZoomDistance = 1 //相机的高度的最小值
   viewer.scene.screenSpaceCameraController.maximumZoomDistance = 13050000 //相机高度的最大值
-  // 设置设备像素比，可能会影响渲染性能
-  // viewer.resolutionScale = window.devicePixelRatio
-  // 视图重绘后确保清晰度
-  viewer.scene.preRender.addEventListener(function () {
-    // 高 DPI 屏幕会将渲染像素放大数倍，限制到 1 可显著降低白膜 GPU 压力。
-    const renderScale = Math.min(window.devicePixelRatio || 1, 1)
-    if (viewer.resolutionScale !== renderScale) {
-      viewer.resolutionScale = renderScale
-    }
-  })
+  // 设置设备像素比（初始化时设置一次，避免每帧 preRender 监听产生额外开销）
+  const renderScale = Math.min(
+    typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
+    1,
+  )
+  viewer.resolutionScale = renderScale
   // 去掉entity的点击事件（双击、单击）
   viewer.cesiumWidget.screenSpaceEventHandler.removeInputAction(
     ScreenSpaceEventType.LEFT_DOUBLE_CLICK,
@@ -269,6 +276,8 @@ function perfViewer(viewer: Viewer) {
   //   viewer.resolutionScale = window.devicePixelRatio
   // }
   viewer.scene.postProcessStages.fxaa.enabled = true
+  // 限制瓦片缓存大小
+  viewer.scene.globe.tileCacheSize = 100
   // 关闭太阳，月亮，天空盒，雾等相关特效
   viewer.scene.moon.show = false
   viewer.scene.fog.enabled = false

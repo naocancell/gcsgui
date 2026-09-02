@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { markRaw } from 'vue'
 import { Airline, routeTerrain } from '@/types/entityoptions.ts'
 type layer = {
   lName: string   //图层名称
@@ -41,12 +42,20 @@ export const useLayerStore = defineStore('LayerStore', {
       objectUrls?: string[],
     ) {
       let time = new Date()
-      //自定义的layer类型 用于展示图层的属性
+      //自定义的layer类型 用于展示图层的属性，使用 markRaw 避免 Cesium 原生对象被 Pinia 深度代理
       let layer: layer = {
-        dataSource: dataSource,
-        imageLayer: imageLayer,
-        entity: entity,
-        tileset,
+        dataSource: dataSource ? markRaw(dataSource) : undefined,
+        imageLayer: imageLayer ? markRaw(imageLayer) : undefined,
+        entity: entity
+          ? markRaw(
+              Array.isArray(entity)
+                ? entity.map((e) =>
+                    typeof e === 'object' && e !== null ? markRaw(e) : e,
+                  )
+                : entity,
+            )
+          : undefined,
+        tileset: tileset ? markRaw(tileset) : undefined,
         objectUrls,
         lId: time.getTime().toString(),
         lName: lName,

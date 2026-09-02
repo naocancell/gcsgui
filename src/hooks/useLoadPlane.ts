@@ -10,6 +10,7 @@ import {
   normalizeFP981C,
   normalizeTransponder,
 } from '@/utils/plane/planeAdapter'
+
 export function useLoadPlane() {
   //获取飞机的状态管理store
   const store = useUavStore()
@@ -328,8 +329,8 @@ export function useLoadPlane() {
 
   //主函数，在Cesium初始化后调用
   const init = (viewer: Cesium.Viewer) => {
-    // 开启 Cesium 渲染循环 关闭请求渲染模式
-    viewer.scene.requestRenderMode = false
+    // 保持请求渲染模式，按需渲染以节约 GPU 算力与电力消耗
+    viewer.scene.requestRenderMode = true
 
     // 监听 store 中两类飞机数据的变化 把不同结构的数据 normalize 成统一 PlaneState。
     stopWatch = watch(
@@ -367,14 +368,14 @@ export function useLoadPlane() {
     )
 
     const planeOfflineTimeout = 1_000
-    intervalId = window.setInterval(() => {
+    intervalId = (typeof window !== 'undefined' ? window.setInterval : setInterval)(() => {
       const now = Date.now()
       for (const [key, lastSeen] of Array.from(lastSeenMap.entries())) {
         if (now - lastSeen > planeOfflineTimeout) {
           removePlane(viewer, key)
         }
       }
-    }, 1000)
+    }, 1000) as unknown as number
 
     //Cesium 每一帧更新前执行 统一更新所有飞机模型的 modelMatrix，
     const onPreUpdate = () => {

@@ -51,7 +51,7 @@ import {
   perfViewer,
   showNavigator,
 } from '@/utils/map/sceneViewer.ts'
-import MeasureViewer from '@/assets/js/measureViewer.js'
+import MeasureViewer from '@/core/gis/MeasureViewer'
 import { useLoadPlane } from '@/hooks/useLoadPlane'
 import { cacheCommonModelsToDisk } from '@/utils/model/modelCache'
 import { clearAdministrativeBoundaries } from '@/utils/map/viewSettings'
@@ -110,114 +110,100 @@ async function loadOnlineTerrain() {
   if (!viewer || viewer.isDestroyed() || !navigator.onLine) return
 
   try {
-    const terrainProvider = await createWorldTerrainAsync()
+    const terrainPromise = createWorldTerrainAsync()
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('在线地形请求超时')), 2000),
+    )
+    const terrainProvider = await Promise.race([terrainPromise, timeoutPromise])
     if (viewer.isDestroyed()) return
     viewer.terrainProvider = terrainProvider
     viewer.scene.requestRender()
   } catch (error) {
-    console.warn('在线地形加载失败，继续使用当前地形:', error)
+    console.warn('在线地形加载跳过，使用默认椭球:', error)
   }
 }
 
 onMounted(async () => {
-  //初始化
-  viewer = await initViewer(viewerDivRef.value as HTMLElement)
-  // 显示帧率
-  viewer.scene.debugShowFramesPerSecond = true
-  //监听飞机模型数据
-  init(viewer)
+  try {
+    //初始化
+    viewer = await initViewer(viewerDivRef.value as HTMLElement)
+    // 显示帧率
+    viewer.scene.debugShowFramesPerSecond = true
+    //监听飞机模型数据
+    init(viewer)
 
-  //显示子组件
-  viewerReady.value = true
+    //显示子组件
+    viewerReady.value = true
 
-  // 性能优化
-  perfViewer(viewer)
-  // 定位到中国
-  // flyToDefault(viewer)
+    // 性能优化
+    perfViewer(viewer)
 
-  // 1. 初始化时，瞬间将视角切换到中国全貌，彻底避免一开始在地球全景停顿卡顿。
-  viewer.camera.setView({
-    destination: Cartesian3.fromDegrees(
-      104.195397, // 中国中心经度
-      35.86166, // 中国中心纬度
-      8000000, // 高度 800 万米，看清中国全景
-    ),
-  })
-
-  // 显示罗盘和比例尺
-  showNavigator(viewer)
-
-  // 挂载在window，供全局组件共享
-  window.viewer = viewer
-  setGraticuleVisible(viewer, viewSettingsStore.showCoordinates)
-  window.measureViewer = new MeasureViewer(viewer)
-
-  // 先完成本地底图首帧，再启动在线资源请求。在线服务异常时不会阻塞地图。
-  await waitForLocalFirstFrame()
-
-  // 标记点图层不依赖在线地图，立即完成初始化。
-  const markerLayer = new CustomDataSource('Marker')
-  viewer.dataSources.add(markerLayer)
-
-  void loadOnlineTerrain()
-
-  // 等地图完成首帧显示后，再后台检查模型缓存
-  modelWarmupTimer = setTimeout(() => {
-    if (!navigator.onLine) return
-
-    void cacheCommonModelsToDisk().catch((error) => {
-      console.warn('常用模型磁盘缓存失败:', error)
+    // 1. 初始化时，瞬间将视角切换到中国全貌
+    viewer.camera.setView({
+      destination: Cartesian3.fromDegrees(
+        104.195397, // 中国中心经度
+        35.86166, // 中国中心纬度
+        8000000, // 高度 800 万米，看清中国全景
+      ),
     })
-  }, 2000)
 
-  //加载建筑物图标
-  // const markObstacle = useMarkObstacle(viewer)
-  // markObstacle.addAllObstacles()
+    // 显示罗盘和比例尺
+    showNavigator(viewer)
 
-  // 2. 使用原生系统地理定位（不受代理影响，能拿到真实位置）
-  if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const lon = position.coords.longitude
-        const lat = position.coords.latitude
-        const alt = 1000
-        initialLocation.value = { longitude: lon, latitude: lat, height: alt }
+    // 挂载在window，供全局组件共享
+    window.viewer = viewer
+    setGraticuleVisible(viewer, viewSettingsStore.showCoordinates)
+    window.measureViewer = new MeasureViewer(viewer)
 
-        // 获取成功后，从刚才的初始高空平滑飞往你的真实位置，高度降低以获得更大视角
-        viewer.camera.flyTo({
-          destination: Cartesian3.fromDegrees(lon, lat, alt),
-          duration: 2,
-        })
-      },
-      (error) => {
-        console.warn('获取真实地理位置失败:', error.message)
-        // 如果最终获取失败（比如没给权限），则平滑回退到默认大视角
-        initialLocation.value = {
-          longitude: 107.4191777,
-          latitude: 37.855152,
-          height: 5000,
-        }
-        viewer.camera.flyTo({
-          destination: Cartesian3.fromDegrees(107.4191777, 37.855152, 5000),
-          duration: 2,
-        })
-      },
-      {
-        enableHighAccuracy: true, // 开启高精度，调用系统底层定位
-        timeout: 10000, // 给足 10 秒时间等待系统定位服务“预热”响应
-        maximumAge: 0,
-      },
-    )
-  } else {
-    initialLocation.value = {
-      longitude: 107.4191777,
-      latitude: 37.855152,
-      height: 5000,
+    // 标记点图层立即完成初始化
+    const markerLayer = new CustomDataSource('Marker')
+    viewer.dataSources.add(markerLayer)
+
+    // 触发首帧重绘
+    viewer.scene.requestRender()
+
+    void loadOnlineTerrain()
+
+    // 等地图完成首帧显示后，再后台检查模型缓存
+    modelWarmupTimer = setTimeout(() => {
+      if (!navigator.onLine) return
+
+      void cacheCommonModelsToDisk().catch((error) => {
+        console.warn('常用模型磁盘缓存失败:', error)
+      })
+    }, 2000)
+
+    // 2. 原生系统地理定位（带 1.5s 快速超时，避免长期阻塞卡顿）
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          if (!viewer || viewer.isDestroyed()) return
+          const lon = position.coords.longitude
+          const lat = position.coords.latitude
+          const alt = 1000
+          initialLocation.value = { longitude: lon, latitude: lat, height: alt }
+          viewer.camera.flyTo({
+            destination: Cartesian3.fromDegrees(lon, lat, alt),
+            duration: 2,
+          })
+        },
+        () => {
+          // 定位失败或超时保持中国全景或默认中心
+          initialLocation.value = {
+            longitude: 107.4191777,
+            latitude: 37.855152,
+            height: 5000,
+          }
+        },
+        {
+          enableHighAccuracy: false,
+          timeout: 1500,
+          maximumAge: 60000,
+        },
+      )
     }
-    viewer.camera.flyTo({
-      destination: Cartesian3.fromDegrees(107.4191777, 37.855152, 5000),
-      duration: 2,
-    })
+  } catch (err: any) {
+    console.error('SceneViewer onMounted 异常:', err)
   }
 })
 

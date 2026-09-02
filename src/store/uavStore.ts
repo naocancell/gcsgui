@@ -34,7 +34,7 @@ import {
 } from './commsConfig'
 
 export const useUavStore = defineStore('uav', () => {
-  const uavInfo = ref<UAVInfo | null>(null)
+  const uavInfo = shallowRef<UAVInfo | null>(null)
 
   const links = ref<LinkDraft[]>(createDefaultLinkDrafts())
 
