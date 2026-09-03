@@ -470,5 +470,9 @@ describe('Milestone 5: Performance & Memory Lifecycle Optimization', () => {
       expect(mockViewer.entities.remove).toHaveBeenCalled()
       expect(mockViewer.scene.requestRender).toHaveBeenCalled()
     })
+
+    it('shares one obstacle manager between the toolbar and airport modal', () => {
+      expect(useMarkObstacle()).toBe(useMarkObstacle())
+    })
   })
 })

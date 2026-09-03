@@ -103,7 +103,7 @@ function getLonLatByMagneticBearingDistance(
     }
 }
 
-export function useMarkObstacle() {
+function createMarkObstacleManager() {
     // 保存所有障碍物实体
     const obstacleEntities: Cesium.Entity[] = []
 
@@ -585,6 +585,8 @@ export function useMarkObstacle() {
             window.viewer.entities.resumeEvents()
         }
         obstacleEntities.length = 0
+        obstacleVisible = false
+        obstaclesLoaded = false
         hoverObstacleEntity = undefined
         hideHoverLabel()
     }
@@ -802,4 +804,15 @@ export function useMarkObstacle() {
         clearObstacles,
         destroy,
     }
+}
+
+type MarkObstacleManager = ReturnType<typeof createMarkObstacleManager>
+
+let markObstacleManager: MarkObstacleManager | undefined
+
+export function useMarkObstacle(): MarkObstacleManager {
+    if (!markObstacleManager) {
+        markObstacleManager = createMarkObstacleManager()
+    }
+    return markObstacleManager
 }
