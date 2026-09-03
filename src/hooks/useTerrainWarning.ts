@@ -366,6 +366,10 @@ export function useTerrainWarning(
         100,
         2000,
       )
+
+      if (Number.isFinite(minClearance.value)) {
+        isWarning.value = minClearance.value < configuredWarnClearance
+      }
     }
 
     sampleVersion++

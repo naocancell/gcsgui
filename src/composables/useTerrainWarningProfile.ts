@@ -144,12 +144,14 @@ export function useTerrainWarningProfile() {
   }
 
   function updateTerrainWarningDistance(value: number | null) {
+    terrainWarningDistanceInput.value = value
     if (value === null || value < 1000 || value > 10000) return
     terrainWarningDistance.value = value
     applyTerrainWarningOptions()
   }
 
   function updateTerrainWarningClearance(value: number | null) {
+    terrainWarningClearanceInput.value = value
     if (value === null || value < 100 || value > 2000) return
     terrainWarningClearance.value = value
     applyTerrainWarningOptions()

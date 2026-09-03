@@ -1,6 +1,8 @@
 import axios, { type AxiosResponse } from 'axios'
 import CryptoJS from 'crypto-js'
 
+const WEATHER_REQUEST_TIMEOUT_MS = 10000
+
 export interface WeatherResponse<T = unknown> {
   success: boolean
   code: number
@@ -22,6 +24,7 @@ export function query_surface_forecast(
   return axios({
     method: 'POST',
     url: '/onlinetest/htfp/weather/v1/surface/querySurfaceForecast',
+    timeout: WEATHER_REQUEST_TIMEOUT_MS,
     headers: {
       'Content-Type': 'application/json',
       timestamp: timestamp,
@@ -52,6 +55,7 @@ export function query_upper_forecast(
   return axios({
     method: 'POST',
     url: '/onlinetest/htfp/weather/v1/upper/queryUpperForecast',
+    timeout: WEATHER_REQUEST_TIMEOUT_MS,
     headers: {
       'Content-Type': 'application/json',
       timestamp: timestamp,
@@ -76,6 +80,7 @@ export function requireWeatherLevel(): Promise<AxiosResponse<WeatherResponse>> {
   return axios({
     method: 'POST',
     url: '/onlinetest/htfp/weather/v1/info/queryLevelsAvailable',
+    timeout: WEATHER_REQUEST_TIMEOUT_MS,
     headers: {
       'Content-Type': 'application/json',
       timestamp: timestamp,

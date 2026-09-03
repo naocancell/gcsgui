@@ -148,7 +148,11 @@ function switchTab(tab: 'detail' | 'profile' | 'weather') {
     }
     if (tab === 'weather') {
       resizeWeatherChart()
-      if (hasSelectedRoute.value) refreshWeatherOfCurrentPoint()
+      if (hasSelectedRoute.value) {
+        refreshWeatherOfCurrentPoint()
+      } else {
+        uiMsg.warning('请先选择航线以加载气象信息')
+      }
     }
   })
 }

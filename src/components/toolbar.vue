@@ -176,6 +176,10 @@ function handleObstacleSelect(key: string) {
   }
 }
 
+function refreshPage() {
+  window.location.reload()
+}
+
 // 10. 航线绘制与测量标绘
 function handleEditSelect(key: string) {
   if (routeStore.routeActionMode === 'losPointPicking') return
@@ -295,7 +299,7 @@ onBeforeUnmount(() => {
     @show-telemetry="openOrRestoreTelemetryWindow"
     @select-los-analyse="handleLosAnalyseSelect"
     @select-view-settings="handleViewSettingsSelect"
-    @refresh-page="() => window.location.reload()"
+    @refresh-page="refreshPage"
     @minimize-app="() => getCurrentWindow().minimize()"
     @close-app="() => invoke('close_app')"
   />

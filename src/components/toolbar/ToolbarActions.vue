@@ -373,7 +373,6 @@ const barIsOpen = ref(true)
 
 function handleRefresh() {
   emit('refreshPage')
-  window.location.reload()
 }
 </script>
 
