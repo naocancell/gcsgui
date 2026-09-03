@@ -3,6 +3,7 @@
     :show="show"
     preset="card"
     class="airport-obstacle-modal"
+    style="width: min(560px, calc(100vw - 32px))"
     :mask-closable="!obstacleLoading"
     @update:show="$emit('update:show', $event)"
   >
@@ -190,6 +191,7 @@ watch(
 <style scoped>
 .airport-obstacle-modal {
   width: min(560px, calc(100vw - 32px));
+  max-width: 560px;
 }
 
 .modal-title-wrap {

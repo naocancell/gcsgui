@@ -8,28 +8,39 @@
 <template>
   <div id="cesium-viewer" ref="viewerDivRef"></div>
   <PlaneInfo v-if="viewerReady" />
-  <!-- 地图右侧定位按钮（在放大缩小按钮正上方） -->
-  <n-tooltip placement="left" trigger="hover">
-    <template #trigger>
-      <div class="location-btn" @click="flyToInitialLocation">
-        <n-icon size="18">
-          <LocateOutline />
-        </n-icon>
-      </div>
-    </template>
-    回到当前位置
-  </n-tooltip>
-  <!-- 地图右侧重置视角按钮 -->
-  <n-tooltip placement="left" trigger="hover">
-    <template #trigger>
-      <div class="location-btn global-view-btn" @click="flyToGlobalView">
-        <n-icon size="18">
-          <GlobeOutline />
-        </n-icon>
-      </div>
-    </template>
-    全球视角
-  </n-tooltip>
+  <div class="map-view-actions">
+    <n-tooltip placement="left" trigger="hover">
+      <template #trigger>
+        <button
+          type="button"
+          class="location-btn"
+          aria-label="全球视角"
+          @click="flyToGlobalView"
+        >
+          <n-icon size="18">
+            <GlobeOutline />
+          </n-icon>
+        </button>
+      </template>
+      全球视角
+    </n-tooltip>
+
+    <n-tooltip placement="left" trigger="hover">
+      <template #trigger>
+        <button
+          type="button"
+          class="location-btn"
+          aria-label="回到当前位置"
+          @click="flyToInitialLocation"
+        >
+          <n-icon size="18">
+            <LocateOutline />
+          </n-icon>
+        </button>
+      </template>
+      回到当前位置
+    </n-tooltip>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -232,9 +243,7 @@ onUnmounted(() => {
 }
 
 .location-btn {
-  position: absolute;
-  right: 1.8rem;
-  top: calc(55vh - 2.5rem);
+  padding: 0;
   width: 2rem;
   height: 2rem;
   background: rgba(47, 53, 60, 0.8);
@@ -251,6 +260,16 @@ onUnmounted(() => {
     color 0.2s;
 }
 
+.map-view-actions {
+  position: absolute;
+  right: 1.8rem;
+  top: calc(55vh + 5rem);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  z-index: 10;
+}
+
 .location-btn:hover {
   background: rgba(204, 204, 204, 0.78);
   color: #ffffff;
@@ -260,7 +279,9 @@ onUnmounted(() => {
   background: rgba(100, 100, 100, 0.9);
 }
 
-.global-view-btn {
-  top: calc(55vh - 5rem);
+@media screen and (max-width: 700px), screen and (max-height: 420px) {
+  .map-view-actions {
+    display: none;
+  }
 }
 </style>

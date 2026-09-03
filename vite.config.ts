@@ -51,6 +51,9 @@ export default defineConfig({
     },
   },
   server: {
+    watch: {
+      ignored: ['**/target/**'],
+    },
     port: port,
     strictPort: true,
     host: host || false,

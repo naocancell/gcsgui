@@ -1,60 +1,57 @@
 <template>
   <div class="route-tab-panel">
-    <div class="route-weather-panel">
-      <div v-if="hasSelectedRoute" class="weather-content-wrap">
-        <div class="routePtSelector">
-          <n-button
-            size="small"
-            @click="$emit('prevPt')"
-            :disabled="routePtNumber <= 1"
-          >
-            <template #icon><ArrowBackOutline /></template>
-          </n-button>
+    <n-flex vertical class="route-weather-panel">
+      <n-space justify="space-around" class="routePtSelector">
+        <n-button
+          size="small"
+          @click="$emit('prevPt')"
+          :disabled="routePtNumber <= 1 || !hasSelectedRoute"
+        >
+          <template #icon><ArrowBackOutline /></template>
+        </n-button>
 
-          <span class="pt-label">航点 {{ routePtNumber }} / {{ totalPoints }}</span>
+        <n-ellipsis>航点 {{ routePtNumber }}</n-ellipsis>
 
-          <n-button
-            size="small"
-            @click="$emit('nextPt')"
-            :disabled="totalPoints <= routePtNumber"
-          >
-            <template #icon><ArrowForwardOutline /></template>
-          </n-button>
-        </div>
+        <n-button
+          size="small"
+          @click="$emit('nextPt')"
+          :disabled="!hasSelectedRoute || totalPoints <= routePtNumber"
+        >
+          <template #icon><ArrowForwardOutline /></template>
+        </n-button>
+      </n-space>
 
-        <div class="weather-meta-row">
-          <span class="time-label">{{ nowTime }}</span>
+      <n-space justify="center">
+        <n-ellipsis>{{ nowTime }}</n-ellipsis>
 
-          <n-select
-            style="width: 9rem"
-            size="small"
-            :options="levelOptions"
-            :value="selectedLevel"
-            @update:value="$emit('levelChanged', $event)"
-            placeholder="选择高度层"
-          />
-        </div>
-
-        <n-scrollbar
-          x-scrollable
-          id="weatherChart"
-          class="route-weather-chart"
+        <n-select
+          style="width: 10rem"
+          size="small"
+          :options="levelOptions"
+          :value="selectedLevel"
+          @update:value="$emit('levelChanged', $event)"
+          placeholder="选择高度层"
+          :disabled="!hasSelectedRoute"
         />
-      </div>
+      </n-space>
 
-      <div v-else class="empty-wrap">
-        <n-empty description="请先选择航线以查看气象信息" style="margin-top: 3rem;" />
-      </div>
-    </div>
+      <n-scrollbar
+        x-scrollable
+        id="weatherChart"
+        class="route-weather-chart"
+      />
+    </n-flex>
   </div>
 </template>
 
 <script setup lang="ts">
 import {
+  NFlex,
+  NSpace,
   NButton,
   NSelect,
   NScrollbar,
-  NEmpty,
+  NEllipsis,
 } from 'naive-ui'
 import { ArrowBackOutline, ArrowForwardOutline } from '@vicons/ionicons5'
 
@@ -79,64 +76,26 @@ defineEmits<{
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  display: flex;
-  flex-direction: column;
 }
 
 .route-weather-panel {
   height: 100%;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 4px;
-}
-
-.weather-content-wrap {
-  height: 100%;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  flex: 1;
 }
 
 .routePtSelector {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 8px;
+  width: 100%;
   font-weight: bold;
   color: #63e2b7;
-  flex-shrink: 0;
-}
-
-.pt-label {
-  font-size: 13px;
-}
-
-.weather-meta-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 8px 8px;
-  flex-shrink: 0;
-}
-
-.time-label {
-  font-size: 12px;
-  color: var(--n-text-color-2, #aaa);
 }
 
 .route-weather-chart {
   flex: 1;
-  min-height: 220px;
+  min-height: 0;
   width: 100%;
-  height: 100%;
 }
 
-.empty-wrap {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  height: 100%;
+.routePtSelector:hover {
+  background: rgb(24 24 28);
 }
 </style>

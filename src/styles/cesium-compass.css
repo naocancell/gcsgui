@@ -1,5 +1,10 @@
 /*重写比例尺、罗盘、缩放控件样式 */
 
+/* 保留 FPS 数值，但隐藏 Cesium 按需渲染模式的英文状态提示。 */
+.cesium-performanceDisplay-throttled {
+    display: none !important;
+}
+
 /*比例尺背景*/
 .distance-legend {
     display: none !important;

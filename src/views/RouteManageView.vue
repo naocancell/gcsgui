@@ -393,7 +393,7 @@ onBeforeUnmount(() => {
 
             <!-- 气象信息面板 -->
             <RouteWeatherPanel
-              v-show="activeTab === 'weather'"
+              v-show="activeTab === 'weather' && hasSelectedRoute"
               :has-selected-route="hasSelectedRoute"
               :route-pt-number="routePtNumber"
               :total-points="selectedRoute.points ? selectedRoute.points.length : 0"
