@@ -9,7 +9,7 @@ use super::crypto::{decrypt_data, encrypt_data};
 use super::storage;
 
 // 障碍物服务的基础地址
-const API_BASE: &str = "http://127.0.0.1:8890";
+const API_BASE: &str = "http://172.10.0.183:8890";
 // 本地缓存目录名，机场障碍物都放在这里
 const CACHE_DIRECTORY: &str = "obstacles-cache";
 // 本地缓存加密密钥，和加密模块保持一致。

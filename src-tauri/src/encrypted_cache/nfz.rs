@@ -7,7 +7,7 @@ use super::crypto::{decrypt_data, encrypt_data};
 use super::storage;
 /// 禁飞区 API 地址
 const API_URL: &str =
-    "http://127.0.0.1:8888/api/no-fly-zones";
+    "http://172.10.0.183:8888/api/no-fly-zones";
 // AES-256-GCM 加密密钥，32 字节 暂时使用固定密钥，后续改为动态生成
 const AES_KEY: &[u8; 32] =
     b"0123456789abcdef0123456789abcdef";
