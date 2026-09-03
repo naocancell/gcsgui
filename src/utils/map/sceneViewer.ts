@@ -83,10 +83,12 @@ function createImageryProviderViewModels(
       iconUrl: buildModuleUrl('Widgets/Images/ImageryProviders/bingAerial.png'),
       category: '影像底图',
       creationFunction: () => [
-        ...baseLayers,
-        getTDTProvider(TDTLayerType.Img, TDTProjectionType.WebMercator),
-        getTDTProvider(TDTLayerType.Cia, TDTProjectionType.WebMercator),
-      ],
+          localImageryProvider,
+          createWorldImageryAsync({
+            style: IonWorldImageryStyle.AERIAL,
+          }),
+           getTDTProvider(TDTLayerType.Cia, TDTProjectionType.WebMercator),
+        ] as unknown as ImageryProvider[],
     }),
     new ProviderViewModel({
       name: 'Google 影像',
