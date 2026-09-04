@@ -71,6 +71,10 @@ import { useViewSettingsStore } from '@/store/viewSettingsStore'
 
 const viewerDivRef = ref<HTMLDivElement>()
 let viewer: Viewer
+let onlineReloadInFlight = false
+let onlineReloadGeneration = 0
+let onlineReloadTimer: ReturnType<typeof setTimeout> | undefined
+let terrainLoadGeneration = 0
 window.CESIUM_BASE_URL = import.meta.env.DEV ? '/Cesium/' : './Cesium/'
 Ion.defaultAccessToken =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI3YjU4MjJlMS0wMWE4LTRhOWQtYjQ1OC04MTgzMzFhMzQ5ZjAiLCJpZCI6MTE1ODUxLCJpYXQiOjE2NjkyMDM1MzN9.8ajEuv3VKYg8wvFiQlUWWY6Ng6JfY4PuVgRyStL1B-E'
@@ -117,21 +121,74 @@ function waitForLocalFirstFrame(): Promise<void> {
   })
 }
 
-async function loadOnlineTerrain() {
+async function loadOnlineTerrain(timeoutMs = 2000) {
   if (!viewer || viewer.isDestroyed() || !navigator.onLine) return
 
+  const generation = ++terrainLoadGeneration
+  let timeoutTimer: ReturnType<typeof setTimeout> | undefined
   try {
     const terrainPromise = createWorldTerrainAsync()
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('在线地形请求超时')), 2000),
-    )
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutTimer = setTimeout(
+        () => reject(new Error('在线地形请求超时')),
+        timeoutMs,
+      )
+    })
     const terrainProvider = await Promise.race([terrainPromise, timeoutPromise])
-    if (viewer.isDestroyed()) return
+    if (
+      generation !== terrainLoadGeneration ||
+      !viewer ||
+      viewer.isDestroyed() ||
+      !navigator.onLine
+    ) {
+      return
+    }
     viewer.terrainProvider = terrainProvider
     viewer.scene.requestRender()
   } catch (error) {
     console.warn('在线地形加载跳过，使用默认椭球:', error)
+  } finally {
+    if (timeoutTimer) clearTimeout(timeoutTimer)
   }
+}
+
+/** 网络恢复后重建当前底图 Provider，并重新创建在线地形 Provider。 */
+async function reloadOnlineResources() {
+  if (!viewer || viewer.isDestroyed() || !navigator.onLine) return
+  if (onlineReloadInFlight) return
+
+  onlineReloadInFlight = true
+  const generation = ++onlineReloadGeneration
+  try {
+    const baseLayerPicker = viewer.baseLayerPicker?.viewModel
+    const selectedImagery = baseLayerPicker?.selectedImagery
+
+    if (baseLayerPicker && selectedImagery) {
+      // 先清空再恢复选择，强制 Cesium 丢弃断网时失效的影像 Provider。
+      const mutablePicker = baseLayerPicker as unknown as {
+        selectedImagery: typeof selectedImagery | undefined
+      }
+      mutablePicker.selectedImagery = undefined
+      mutablePicker.selectedImagery = selectedImagery
+      viewer.scene.requestRender()
+    }
+
+    // 网络刚恢复时资源服务可能尚未完全可用，给地形请求更宽松的超时时间。
+    await loadOnlineTerrain(10000)
+  } catch (error) {
+    console.warn('网络恢复后重载影像或地形失败:', error)
+  } finally {
+    if (generation === onlineReloadGeneration) onlineReloadInFlight = false
+  }
+}
+
+function handleOnline() {
+  // 合并短时间内连续触发的 online 事件，并给系统网络栈一点恢复时间。
+  if (onlineReloadTimer) clearTimeout(onlineReloadTimer)
+  onlineReloadTimer = setTimeout(() => {
+    onlineReloadTimer = undefined
+    void reloadOnlineResources()
+  }, 300)
 }
 
 onMounted(async () => {
@@ -165,6 +222,10 @@ onMounted(async () => {
     window.viewer = viewer
     setGraticuleVisible(viewer, viewSettingsStore.showCoordinates)
     window.measureViewer = new MeasureViewer(viewer)
+    window.addEventListener('online', handleOnline)
+
+    // 先让本地底图完成首帧，再在后台请求在线资源，断网启动时也能尽快看到地球。
+    await waitForLocalFirstFrame()
 
     // 标记点图层立即完成初始化
     const markerLayer = new CustomDataSource('Marker')
@@ -219,6 +280,14 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('online', handleOnline)
+  if (onlineReloadTimer) {
+    clearTimeout(onlineReloadTimer)
+    onlineReloadTimer = undefined
+  }
+  onlineReloadGeneration += 1
+  terrainLoadGeneration += 1
+  onlineReloadInFlight = false
   if (modelWarmupTimer) {
     clearTimeout(modelWarmupTimer)
   }
