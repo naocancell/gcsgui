@@ -188,11 +188,13 @@ const obstacleLoadingOptions = computed(() =>
 )
 
 function handleObstacleSelect(key: string) {
+  //隐藏展示障碍物
   if (key === 'showObstacle') {
     const v = toggleObstaclesVisible()
     if (v === null) message.warning('请先加载障碍物')
     else obstacleVisible.value = v
-  } else if (key === 'selectAirports') {
+  } //选择机场加载障碍物
+  else if (key === 'selectAirports') {
     showAirportModal.value = true
   }
 }

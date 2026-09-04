@@ -146,7 +146,7 @@ async fn cache_exists(app: &AppHandle, airport_name: &str) -> Result<bool, Strin
 // 创建统一的 HTTP 客户端，统一控制超时时间，避免远端服务卡住。
 async fn http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(5))
         .build()
         .map_err(|error| format!("创建障碍物 HTTP 客户端失败: {error}"))
 }

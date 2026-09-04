@@ -67,6 +67,9 @@ const draft = reactive<DraftPoint>({
   height: null,
 })
 
+// 地图点击后先显示一个不带名称的草稿图标，确认添加后再替换为正式标记点
+const draftEntityId = 'marker-point-draft'
+let draftEntity: Entity | undefined
 let pickHandler: ScreenSpaceEventHandler | undefined
 let moveTimer: ReturnType<typeof setTimeout> | undefined
 let terrainRequestId = 0
@@ -153,11 +156,23 @@ function startDragging(event: PointerEvent) {
 }
 
 function resetDraft() {
+  removeDraftEntity()
+  terrainRequestId += 1
+  terrainLoading.value = false
   draft.name = ''
   draft.longitude = null
   draft.latitude = null
   draft.height = null
   picked.value = false
+}
+
+function removeDraftEntity() {
+  const viewer = getViewer()
+  if (draftEntity && viewer) {
+    viewer.dataSources.getByName('Marker')[0]?.entities.remove(draftEntity)
+    viewer.scene.requestRender()
+  }
+  draftEntity = undefined
 }
 
 function setCursor(crosshair: boolean) {
@@ -217,7 +232,10 @@ async function sampleHeight(
   }
 }
 
-async function updateDraftFromCartesian(cartesian: Cartesian3) {
+async function updateDraftFromCartesian(
+  cartesian: Cartesian3,
+  showPreview = false,
+) {
   const cartographic = Cartographic.fromCartesian(cartesian)
   const longitude = CesiumMath.toDegrees(cartographic.longitude)
   const latitude = CesiumMath.toDegrees(cartographic.latitude)
@@ -228,7 +246,45 @@ async function updateDraftFromCartesian(cartesian: Cartesian3) {
   draft.longitude = Number(longitude.toFixed(8))
   draft.latitude = Number(latitude.toFixed(8))
   draft.height = fallbackHeight
+  if (showPreview) updateDraftEntity()
   await sampleHeight(longitude, latitude, fallbackHeight)
+  if (showPreview) updateDraftEntity()
+}
+
+function updateDraftEntity() {
+  const viewer = getViewer()
+  if (
+    !viewer ||
+    draft.longitude === null ||
+    draft.latitude === null ||
+    !Number.isFinite(draft.longitude) ||
+    !Number.isFinite(draft.latitude)
+  ) {
+    removeDraftEntity()
+    return
+  }
+
+  const position = Cartesian3.fromDegrees(
+    draft.longitude,
+    draft.latitude,
+    Number.isFinite(draft.height) ? Number(draft.height) : 0,
+  )
+  if (!draftEntity) {
+    draftEntity = createMarkerEntity(
+      {
+        id: 'draft',
+        name: '',
+        longitude: draft.longitude,
+        latitude: draft.latitude,
+        height: Number.isFinite(draft.height) ? Number(draft.height) : 0,
+      },
+      { entityId: draftEntityId, showLabel: false },
+    )
+    getMarkerLayer(viewer).entities.add(draftEntity)
+  } else {
+    draftEntity.position = position
+  }
+  viewer.scene.requestRender()
 }
 
 function handleMouseMove(event: ScreenSpaceEventHandler.MotionEvent) {
@@ -249,7 +305,8 @@ function handleMapClick(event: ScreenSpaceEventHandler.PositionedEvent) {
 
   picked.value = true
   stopPicking()
-  void updateDraftFromCartesian(cartesian)
+  // 先用点击位置立即显示图标，精细地形高度返回后再校正它的高度。
+  void updateDraftFromCartesian(cartesian, true)
 }
 
 function startPicking() {
@@ -278,35 +335,41 @@ function stopPicking() {
   }
 }
 
-function createMarkerEntity(point: Omit<MarkerPoint, 'entity'>) {
+function createMarkerEntity(
+  point: Omit<MarkerPoint, 'entity'>,
+  options: { entityId?: string; showLabel?: boolean } = {},
+) {
   const position = Cartesian3.fromDegrees(
     point.longitude,
     point.latitude,
     point.height,
   )
+  const showLabel = options.showLabel ?? true
   return markRaw(
     new Entity({
-      id: `marker-point-${point.id}`,
-      name: point.name,
+      id: options.entityId ?? `marker-point-${point.id}`,
+      name: showLabel ? point.name : undefined,
       position,
       billboard: {
-        image: '/images/marker.svg',
+        image: getMapAssetsFile('marker.svg'),
         width: 32,
         height: 32,
         heightReference: HeightReference.NONE,
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
       },
-      label: {
-        text: point.name,
-        font: 'bold 14px sans-serif',
-        fillColor: Color.WHITE,
-        outlineColor: Color.BLACK,
-        outlineWidth: 3,
-        style: LabelStyle.FILL_AND_OUTLINE,
-        pixelOffset: new Cartesian2(22, -8),
-        verticalOrigin: VerticalOrigin.BOTTOM,
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-      },
+      label: showLabel
+        ? {
+            text: point.name,
+            font: 'bold 14px sans-serif',
+            fillColor: Color.WHITE,
+            outlineColor: Color.BLACK,
+            outlineWidth: 3,
+            style: LabelStyle.FILL_AND_OUTLINE,
+            pixelOffset: new Cartesian2(22, -8),
+            verticalOrigin: VerticalOrigin.BOTTOM,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          }
+        : undefined,
       properties: {
         markerPointId: point.id,
       },
@@ -364,6 +427,7 @@ async function addPoint() {
       height,
     }
     const entity = createMarkerEntity(pointData)
+    removeDraftEntity()
     getMarkerLayer(viewer).entities.add(entity)
     points.value.push({ ...pointData, entity })
     activePointId.value = pointData.id
@@ -604,11 +668,17 @@ function handleCoordinateChange() {
     draft.latitude < -90 ||
     draft.latitude > 90
   ) {
+    terrainRequestId += 1
+    terrainLoading.value = false
     draft.height = null
+    removeDraftEntity()
     return
   }
   picked.value = false
-  void sampleHeight(draft.longitude, draft.latitude)
+  updateDraftEntity()
+  void sampleHeight(draft.longitude, draft.latitude).then(() => {
+    updateDraftEntity()
+  })
 }
 
 function open() {
@@ -620,6 +690,7 @@ function open() {
 
 function close() {
   stopPicking()
+  resetDraft()
   showPanel.value = false
 }
 
@@ -635,6 +706,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopPicking()
+  resetDraft()
   stopDragging()
   window.removeEventListener('resize', handleWindowResize)
 })
