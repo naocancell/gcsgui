@@ -37,6 +37,7 @@ import {
 import { useDataImporter } from '@/composables/useDataImporter'
 import { useAircraftCompanion } from '@/composables/useAircraftCompanion'
 import { useSimulatedFence } from '@/composables/useSimulatedFence'
+import { useSimulatedGuidance } from '@/composables/useSimulatedGuidance'
 import { useCommsSettings } from '@/composables/useCommsSettings'
 import { useTerrainWarningProfile } from '@/composables/useTerrainWarningProfile'
 import { useToolbarTelemetrySync } from '@/composables/useToolbarTelemetrySync'
@@ -49,6 +50,7 @@ import CommsConfigModal from './toolbar/CommsConfigModal.vue'
 import WsConfigModal from './toolbar/WsConfigModal.vue'
 import TerrainWarningPanel from './toolbar/TerrainWarningPanel.vue'
 import SimulatedFencePanel from './toolbar/SimulatedFencePanel.vue'
+import GuidancePanel from './toolbar/GuidancePanel.vue'
 import AirportObstacleModal from './toolbar/AirportObstacleModal.vue'
 
 // 引入其他已有弹窗组件
@@ -93,7 +95,26 @@ const {
   toggleMockFlight,
 } = useSimulatedFence()
 
-// 4. 通信设置
+// 4. 模拟飞机直线导引与盘旋导引
+const {
+  guidanceMode,
+  showGuidanceModal,
+  guidanceStart,
+  guidanceTarget,
+  guidanceCenter,
+  guidanceAltitude,
+  guidanceRadius,
+  guidanceLaps,
+  guidancePicking,
+  guidanceActive,
+  guidanceMenuOptions,
+  pickGuidancePoint,
+  applyGuidance,
+  cancelGuidance,
+  handleGuidanceMenu,
+} = useSimulatedGuidance()
+
+// 5. 通信设置
 const {
   showUdpModal,
   interfaceOptions,
@@ -105,7 +126,7 @@ const {
   removeCommunicationLink,
 } = useCommsSettings()
 
-// 5. 地形剖面与高度预警
+// 6. 地形剖面与高度预警
 const {
   terrainWarningTargetLabel,
   terrainWarningDistance,
@@ -126,7 +147,7 @@ const {
   toggleSelectedPlaneTerrainWarning,
 } = useTerrainWarningProfile()
 
-// 6. 遥测同步与碰撞检测
+// 7. 遥测同步与碰撞检测
 const {
   altitudeWarningResult,
   showDetection,
@@ -136,7 +157,7 @@ const {
   closeWS,
 } = useToolbarTelemetrySync(emit, collisionDetection)
 
-// 7. 通视分析
+// 8. 通视分析
 const {
   showLosAnalyseModal,
   losAnalyzeOptions,
@@ -144,7 +165,7 @@ const {
   isRouteVisiable,
 } = useToolbarLosAnalyse(message)
 
-// 8. 视图设置与禁飞区
+// 9. 视图设置与禁飞区
 const {
   viewSettingsLoading,
   viewSettingsOptions,
@@ -157,7 +178,7 @@ const {
   hideNFZ,
 } = useToolbarViewLayers(message)
 
-// 9. 机场障碍物
+// 10. 机场障碍物
 const { toggleObstaclesVisible, destroy: destroyObstacles } = useMarkObstacle()
 const obstacleVisible = ref(false)
 const obstacleLoadingOptions = computed(() =>
@@ -180,7 +201,7 @@ function refreshPage() {
   window.location.reload()
 }
 
-// 10. 航线绘制与测量标绘
+// 11. 航线绘制与测量标绘
 function handleEditSelect(key: string) {
   if (routeStore.routeActionMode === 'losPointPicking') return
   if (key === 'createLine') {
@@ -274,6 +295,8 @@ onBeforeUnmount(() => {
     :show-n-f-z="showNFZ"
     :nfz-loading="nfzLoading"
     :simulated-fence-visible="simulatedFenceVisible"
+    :guidance-menu-options="guidanceMenuOptions"
+    :guidance-active="guidanceActive"
     :terrain-warning-active="terrainWarningActive"
     :companion-mode="companionMode"
     :obstacle-loading-options="obstacleLoadingOptions"
@@ -292,6 +315,7 @@ onBeforeUnmount(() => {
     @toggle-simulated-fence="toggleSimulatedFence"
     @open-udp-settings="openUdpSettings"
     @toggle-mock-flight="toggleMockFlight"
+    @select-guidance="handleGuidanceMenu"
     @toggle-terrain-warning="toggleSelectedPlaneTerrainWarning"
     @toggle-companion-mode="activeCompanionMode"
     @select-obstacle="handleObstacleSelect"
@@ -358,6 +382,22 @@ onBeforeUnmount(() => {
   />
 
   <SimulatedFencePanel :visible="simulatedFenceVisible" :results="simulatedFenceResults" :fence="simulatedFence" />
+
+  <GuidancePanel
+    v-model:show="showGuidanceModal"
+    v-model:altitude="guidanceAltitude"
+    v-model:radius="guidanceRadius"
+    v-model:laps="guidanceLaps"
+    :mode="guidanceMode"
+    :start="guidanceStart"
+    :target="guidanceTarget"
+    :center="guidanceCenter"
+    :picking="guidancePicking"
+    @pick="pickGuidancePoint"
+    @apply="applyGuidance"
+    @cancel="cancelGuidance"
+    @close="cancelGuidance"
+  />
 
   <AirportObstacleModal
     v-model:show="showAirportModal"

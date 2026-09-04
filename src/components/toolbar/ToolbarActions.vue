@@ -143,6 +143,28 @@
         <span>模拟飞行</span>
       </n-tooltip>
 
+      <!-- 模拟飞机导引 -->
+      <n-dropdown
+        :options="guidanceMenuOptions"
+        @select="$emit('selectGuidance', $event)"
+      >
+        <n-tooltip placement="bottom" trigger="hover">
+          <template #trigger>
+            <n-button
+              tertiary
+              circle
+              :type="guidanceActive ? 'success' : 'warning'"
+              aria-label="模拟飞机导引"
+            >
+              <template #icon>
+                <n-icon><NavigateOutline /></n-icon>
+              </template>
+            </n-button>
+          </template>
+          <span>模拟飞机导引</span>
+        </n-tooltip>
+      </n-dropdown>
+
       <!-- 高度预警 -->
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
@@ -323,6 +345,7 @@ import {
   PulseOutline,
   LocationOutline,
   RadioOutline,
+  NavigateOutline,
 } from '@vicons/ionicons5'
 import { RulerAlt } from '@vicons/carbon'
 import { DrawPolygon } from '@vicons/fa'
@@ -336,6 +359,8 @@ defineProps<{
   showNFZ: boolean
   nfzLoading: boolean
   simulatedFenceVisible: boolean
+  guidanceMenuOptions: any[]
+  guidanceActive: boolean
   terrainWarningActive: boolean
   companionMode: boolean
   obstacleLoadingOptions: any[]
@@ -357,6 +382,8 @@ const emit = defineEmits<{
   (e: 'toggleSimulatedFence'): void
   (e: 'openUdpSettings'): void
   (e: 'toggleMockFlight'): void
+  // 事件名，参数类型 ：返回值类型
+  (e: 'selectGuidance', key: string | number): void
   (e: 'toggleTerrainWarning'): void
   (e: 'toggleCompanionMode'): void
   (e: 'selectObstacle', key: string): void

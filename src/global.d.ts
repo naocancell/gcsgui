@@ -5,7 +5,6 @@
  * @LastEditTime: 2024-04-10 15:47:36
  * @Description:
  */
-// import * as Cesium from 'cesium'
 import type { Cesium, Viewer } from 'cesium'
 
 // 扩展全局变量
@@ -18,5 +17,6 @@ declare global {
     CESIUM_BASE_URL: string
     viewer: Viewer
     measureViewer: any
+    guidancePointPicking?: boolean
   }
 }

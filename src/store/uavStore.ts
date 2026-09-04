@@ -21,6 +21,10 @@ import {
   type Fp95AvionicsDevice,
 } from '@/utils/plane/fp95AvionicsControl'
 import { isValidTransponderTarget } from '@/utils/plane/planeAdapter'
+import {
+  guidancePosition,
+  type SimulatedGuidance,
+} from '@/utils/map/simulatedGuidance'
 import type { RxHealthSnapshot } from '@/types/linkHealth'
 import {
   createDefaultLinkDrafts,
@@ -84,7 +88,7 @@ export const useUavStore = defineStore('uav', () => {
   let healthUnlisten: UnlistenFn | null = null
   let healthListenPromise: Promise<void> | null = null
   let healthListenerGeneration = 0
-// 检查当前通信链路列表中，是否存在一个“启用状态 + 协议是 FP95”的链路
+  // 检查当前通信链路列表中，是否存在一个“启用状态 + 协议是 FP95”的链路
   function needsFp95Listening() {
     // some() 是 JavaScript 数组方法  是否有满足条件的链路
     return links.value.some((link) => link.enabled && link.protocol === 'FP95')
@@ -197,8 +201,8 @@ export const useUavStore = defineStore('uav', () => {
       if (fp981cListenPromise === pending) fp981cListenPromise = null
     }
   }
-//让当前窗口安全地订阅 Rust 后端发送的无人机健康状态数据，并保证不会重复监听、不会并发启动
-//后端发来的最新健康数据，原封不动地赋值给前端的响应式变量 rxHealth。
+  //让当前窗口安全地订阅 Rust 后端发送的无人机健康状态数据，并保证不会重复监听、不会并发启动
+  //后端发来的最新健康数据，原封不动地赋值给前端的响应式变量 rxHealth。
   async function startHealthListening(lifecycleGeneration: number) {
     // 健康监听已经存在，就不要再次启动，直接退出这个函数
     if (healthUnlisten) return
@@ -829,6 +833,34 @@ export const useUavStore = defineStore('uav', () => {
 
   const isMock = ref(false)
   let mockUavTimer: ReturnType<typeof setInterval> | null = null
+  const simulatedGuidance = new Map<string, SimulatedGuidance>()
+  const simulatedGuidancePaused = new Set<string>()
+
+  function setSimulatedGuidance(key: string, guidance: SimulatedGuidance) {
+    if (!isMock.value || !uavInfoMap.value.has(key)) return false
+    simulatedGuidancePaused.delete(key)
+    simulatedGuidance.set(key, guidance)
+    return true
+  }
+
+  function pauseSimulatedPlane(key: string) {
+    if (!isMock.value || !uavInfoMap.value.has(key)) return false
+    simulatedGuidancePaused.add(key)
+    return true
+  }
+
+  function resumeSimulatedPlane(key: string) {
+    simulatedGuidancePaused.delete(key)
+  }
+
+  function clearSimulatedGuidance(key?: string) {
+    if (key) simulatedGuidance.delete(key)
+    else simulatedGuidance.clear()
+  }
+
+  function getSimulatedGuidance(key: string) {
+    return simulatedGuidance.get(key) ?? null
+  }
 
   function toggleMockUavInfoService() {
     if (isMock.value) stopMockUavInfoService()
@@ -879,26 +911,73 @@ export const useUavStore = defineStore('uav', () => {
         nextPoint: 3,
         distanceNext: 8000,
       },
+      {
+        uavSeries: '981C',
+        uavId: 3,
+        longitude: 116.3912757,
+        latitude: 39.906217,
+        altitude: 500,
+        relativeAltitude: 500,
+        groundSpeed: 200,
+        groundSpeedDirection: 45,
+        verticalSpeed: -0.2,
+        airspeed: 200,
+        trueAirspeed: 200,
+        pitchAngle: 0,
+        rollAngle: 0,
+        headingAngle: 43.7,
+        currentRouteId: 2,
+        nextRouteId: 2,
+        nextPoint: 3,
+        distanceNext: 8000,
+      },
     ]
 
     updateUavInfoList(mockUavList)
 
     mockUavTimer = setInterval(() => {
-      mockUavList[0].longitude += 0.00008
-      mockUavList[0].latitude += 0.00002
-      mockUavList[0].groundSpeedDirection = 90
-      mockUavList[0].distanceNext = Math.max(
-        0,
-        mockUavList[0].distanceNext - 25,
-      )
+      const now = Date.now()
+      mockUavList.forEach((item, index) => {
+        const key = `${item.uavSeries}:${item.uavId}`
+        const guidance = simulatedGuidance.get(key)
+        if (guidance) {
+          const previousAltitude = item.altitude
+          const position = guidancePosition(guidance, now)
+          if (position) {
+            item.longitude = position.lon
+            item.latitude = position.lat
+            item.headingAngle = position.heading
+            item.groundSpeedDirection = position.heading
+            item.altitude = position.altitude
+            // Keep the terrain clearance offset while changing the MSL altitude.
+            item.relativeAltitude += position.altitude - previousAltitude
+            item.verticalSpeed = position.verticalSpeed
+          }
+          return
+        }
 
-      mockUavList[1].longitude += 0.000015
-      mockUavList[1].latitude += 0.000015
-      mockUavList[1].groundSpeedDirection = 45
-      mockUavList[1].distanceNext = Math.max(
-        0,
-        mockUavList[1].distanceNext - 30,
-      )
+        if (simulatedGuidancePaused.has(key)) return
+
+        if (index === 0) {
+          item.longitude += 0.00008
+          item.latitude += 0.00002
+          item.groundSpeedDirection = 76
+          item.headingAngle = 76
+          item.distanceNext = Math.max(0, item.distanceNext - 25)
+        } else if (index === 1) {
+          item.longitude += 0.000015
+          item.latitude += 0.000015
+          item.groundSpeedDirection = 45
+          item.headingAngle = 45
+          item.distanceNext = Math.max(0, item.distanceNext - 30)
+        } else if (index === 2) {
+          item.longitude += 0.000015
+          item.latitude += 0.000015
+          item.groundSpeedDirection = 38
+          item.headingAngle = 38
+          item.distanceNext = Math.max(0, item.distanceNext - 30)
+        }
+      })
 
       updateUavInfoList(mockUavList.map((item) => ({ ...item })))
     }, 20)
@@ -911,6 +990,8 @@ export const useUavStore = defineStore('uav', () => {
       mockUavTimer = null
     }
     isMock.value = false
+    simulatedGuidance.clear()
+    simulatedGuidancePaused.clear()
     if (uavWatchdog) {
       clearTimeout(uavWatchdog)
       uavWatchdog = null
@@ -966,6 +1047,11 @@ export const useUavStore = defineStore('uav', () => {
     queryWeightParams,
     isMock,
     toggleMockUavInfoService,
+    setSimulatedGuidance,
+    pauseSimulatedPlane,
+    resumeSimulatedPlane,
+    clearSimulatedGuidance,
+    getSimulatedGuidance,
     syncProtocolListeners,
     startListening,
     stopListening,
