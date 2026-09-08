@@ -206,5 +206,6 @@ fn protocol_rank(protocol: ProtocolType) -> u8 {
         ProtocolType::FP95 => 0,
         ProtocolType::FP981C => 1,
         ProtocolType::UAVInfo => 2,
+        ProtocolType::ServoTurntable => 3,
     }
 }

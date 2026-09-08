@@ -37,6 +37,7 @@
             @update:value="$emit('updateLinkKind', link, $event)"
           />
           <n-button
+            v-if="link.name !== '伺服转台' && link.protocol !== 'ServoTurntable'"
             quaternary
             type="error"
             size="small"
@@ -44,6 +45,9 @@
           >
             删除
           </n-button>
+          <n-tag v-else size="small" type="info" :bordered="false">
+            固定链路
+          </n-tag>
         </div>
 
         <n-form

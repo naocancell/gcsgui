@@ -1,4 +1,4 @@
-export type LinkProtocol = 'FP95' | 'FP981C' | 'UAVInfo'
+export type LinkProtocol = 'FP95' | 'FP981C' | 'UAVInfo' | 'ServoTurntable'
 export type LinkHealthState = 'healthy' | 'suspect' | 'down' | 'recovering'
 export type AircraftConnectivity =
   | 'online'

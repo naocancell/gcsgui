@@ -5,3 +5,4 @@ pub mod fp981c;
 pub mod route_info;
 pub mod uav_info;
 pub mod uplink;
+pub mod servo_turntable;

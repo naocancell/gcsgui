@@ -12,6 +12,8 @@ pub enum ProtocolType {
     UAVInfo,
     /// 256 字节帧，有固定帧头帧尾
     FP95,
+    /// 伺服天线转台转发，32 字节帧，EB90 包头，单播发送
+    ServoTurntable,
 }
 
 /// 传输层产出的原始数据，不含任何协议信息

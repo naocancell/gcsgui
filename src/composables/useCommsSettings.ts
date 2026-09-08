@@ -29,6 +29,7 @@ export const udpProtocolOptions = [
   { label: 'FP981C', value: 'FP981C' },
   { label: 'FP95', value: 'FP95' },
   { label: 'UAVInfo', value: 'UAVInfo' },
+  { label: '伺服转台', value: 'ServoTurntable' },
 ]
 
 export function useCommsSettings() {

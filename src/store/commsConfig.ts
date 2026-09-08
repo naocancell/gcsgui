@@ -1,4 +1,4 @@
-export type ProtocolType = 'FP981C' | 'FP95' | 'UAVInfo'
+export type ProtocolType = 'FP981C' | 'FP95' | 'UAVInfo' | 'ServoTurntable'
 export type LinkKind = 'udp-unicast' | 'udp-multicast' | 'serial'
 
 export interface LinkDraft {
@@ -102,11 +102,22 @@ export function createDefaultLinkDrafts(): LinkDraft[] {
       name: '副链路',
       enabled: false,
     },
+    {
+      ...createLinkDraft('udp-unicast', 5),
+      name: '伺服转台',
+      protocol: 'ServoTurntable',
+      enabled: false,
+      autoConnect: true,
+      ip: '192.168.1.100',
+      localPort: 6001,
+      targetPort: 6000,
+      interfaceIp: '0.0.0.0',
+    },
   ]
 }
 
 function protocolForLink(kind: LinkKind, protocol: ProtocolType): ProtocolType {
-  return kind === 'serial' && protocol === 'UAVInfo' ? 'FP981C' : protocol
+  return kind === 'serial' && (protocol === 'UAVInfo' || protocol === 'ServoTurntable') ? 'FP981C' : protocol
 }
 //整理Udp 串口配置中的数据 并返回
 export function fromCommsConfig(config: PersistedCommsConfig): LinkDraft[] {
@@ -128,6 +139,22 @@ export function fromCommsConfig(config: PersistedCommsConfig): LinkDraft[] {
       baudRate: 115200,
     }
   })
+
+  // 保证固定的“伺服转台”链路始终存在
+  const hasServo = udpLinks.some((l) => l.protocol === 'ServoTurntable' || l.name === '伺服转台')
+  if (!hasServo) {
+    udpLinks.push({
+      ...createLinkDraft('udp-unicast', 5),
+      name: '伺服转台',
+      protocol: 'ServoTurntable',
+      enabled: false,
+      autoConnect: true,
+      ip: '192.168.1.100',
+      localPort: 6001,
+      targetPort: 6000,
+      interfaceIp: '0.0.0.0',
+    })
+  }
 
   const serialLinks = (config.serial ?? []).map((item, index) => ({
     id: makeId(`serial-${index}`),

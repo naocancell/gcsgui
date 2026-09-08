@@ -25,6 +25,7 @@ pub(crate) fn parse_protocol(protocol: &str) -> Result<comms::ProtocolType, Stri
         "FP981C" => Ok(comms::ProtocolType::FP981C),
         "UAVInfo" => Ok(comms::ProtocolType::UAVInfo),
         "FP95" => Ok(comms::ProtocolType::FP95),
+        "ServoTurntable" => Ok(comms::ProtocolType::ServoTurntable),
         _ => Err(format!("未知的协议类型: {}", protocol)),
     }
 }

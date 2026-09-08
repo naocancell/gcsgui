@@ -107,6 +107,10 @@ impl RouterCore {
                 app_state,
                 response_coordinator,
             ),
+            ProtocolType::ServoTurntable => {
+                // 伺服转台链路为下行单播转发链路，忽略接收缓冲区中的数据
+                buffer.data.clear();
+            }
         }
 
         if buffer.data.len() > 4096 {
@@ -418,11 +422,47 @@ fn process_fp95_frame(
             if let ParsedSubFrame::Frame80(frame80) = &parsed {
                 response_coordinator.deliver(uav_id, frame80.injection_response);
             }
+            if let ParsedSubFrame::Frame83(ref frame83) = parsed {
+                forward_to_servo_turntable(app_state, frame83);
+            }
             app_state.merge_fp95(uav_id, parsed, received_at);
         }
         Err(_err) => {
             app_state.metrics.inc_parse_err();
         }
+    }
+}
+
+/// 将 FP95 0x83 位置帧中的空间三维坐标打包并异步单播转发给活动的伺服转台链路
+fn forward_to_servo_turntable(
+    app_state: &AppState,
+    frame83: &crate::protocol::fp95::FP95Frame83,
+) {
+    let servo_transports: Vec<_> = app_state
+        .active_links
+        .iter()
+        .filter(|entry| entry.value().protocol == ProtocolType::ServoTurntable)
+        .map(|entry| entry.value().transport.clone())
+        .collect();
+
+    if servo_transports.is_empty() {
+        return;
+    }
+
+    let payload = crate::protocol::servo_turntable::pack_servo_frame(
+        frame83.longitude,
+        frame83.latitude,
+        frame83.altitude,
+        frame83.pressure_altitude,
+        frame83.relative_altitude,
+    );
+
+    for transport in servo_transports {
+        tokio::spawn(async move {
+            if let Err(e) = transport.send(&payload).await {
+                log::warn!("伺服转台 UDP 坐标转发失败: {}", e);
+            }
+        });
     }
 }
 
