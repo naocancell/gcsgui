@@ -21,7 +21,8 @@
     "release:deploytest": "pnpm release-version deploytest",
     "publish-version": "node scripts/publish-version.mjs",
     "i18n:generate": "node scripts/generate-i18n-keys.mjs",
-    "i18n:cleanup": "node scripts/cleanup-unused-i18n.mjs"
+    "i18n:cleanup": "node scripts/cleanup-unused-i18n.mjs",
+    "tile-server": "node scripts/tile-proxy-server.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",

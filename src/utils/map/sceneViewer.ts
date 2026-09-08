@@ -64,8 +64,29 @@ function createImageryProviderViewModels(
   localImageryProvider?: ImageryProvider,
 ): ProviderViewModel[] {
   const baseLayers = localImageryProvider ? [localImageryProvider] : []
+  const tileProxyUrl =
+    (import.meta.env.VITE_TILE_PROXY_URL as string) || 'http://192.168.2.104:8088'
 
   return [
+    new ProviderViewModel({
+      name: '局域网/离线缓存影像',
+      tooltip: `通过局域网代理服务 (${tileProxyUrl}) 加载与自动缓存天地图影像及注记`,
+      iconUrl: buildModuleUrl('Widgets/Images/ImageryProviders/openStreetMap.png'),
+      category: '影像底图',
+      creationFunction: () => [
+        ...baseLayers,
+        new UrlTemplateImageryProvider({
+          url: `${tileProxyUrl}/tiles/img/{z}/{x}/{y}.jpg`,
+          minimumLevel: 0,
+          maximumLevel: 18,
+        }),
+        new UrlTemplateImageryProvider({
+          url: `${tileProxyUrl}/tiles/cia/{z}/{x}/{y}.png`,
+          minimumLevel: 0,
+          maximumLevel: 18,
+        }),
+      ],
+    }),
     new ProviderViewModel({
       name: '天地图影像',
       tooltip: '天地图卫星影像与中文注记',
