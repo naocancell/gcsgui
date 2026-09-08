@@ -30,15 +30,18 @@
         <button
           type="button"
           class="location-btn"
+          :class="{ 'is-locating': locating }"
+          :disabled="locating"
           aria-label="回到当前位置"
-          @click="flyToInitialLocation"
+          @click="locateAndShowMyLocation"
         >
           <n-icon size="18">
-            <LocateOutline />
+            <RefreshOutline v-if="locating" class="spin-icon" />
+            <LocateOutline v-else />
           </n-icon>
         </button>
       </template>
-      回到当前位置
+      {{ locating ? '正在定位…' : '回到当前位置' }}
     </n-tooltip>
   </div>
 </template>
@@ -54,8 +57,18 @@ import {
   Cartesian3,
   Rectangle,
 } from 'cesium'
-import { NIcon, NTooltip } from 'naive-ui'
-import { LocateOutline, GlobeOutline } from '@vicons/ionicons5'
+import { NIcon, NTooltip, useMessage } from 'naive-ui'
+import { LocateOutline, GlobeOutline, RefreshOutline } from '@vicons/ionicons5'
+import {
+  flyToMyLocation,
+  clearMyLocationMarker,
+  showMyLocationMarker,
+} from '@/utils/map/myLocationMarker'
+import {
+  SOURCE_LABEL,
+  formatLonLat,
+  resolveMyLocation,
+} from '@/utils/map/myLocation'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import {
   initViewer,
@@ -80,26 +93,40 @@ Ion.defaultAccessToken =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI3YjU4MjJlMS0wMWE4LTRhOWQtYjQ1OC04MTgzMzFhMzQ5ZjAiLCJpZCI6MTE1ODUxLCJpYXQiOjE2NjkyMDM1MzN9.8ajEuv3VKYg8wvFiQlUWWY6Ng6JfY4PuVgRyStL1B-E'
 const viewerReady = ref(false)
 const viewSettingsStore = useViewSettingsStore()
+const message = useMessage()
 
-// 存储软件启动时获取到的初始定位信息
-const initialLocation = ref<{
-  longitude: number
-  latitude: number
-  height: number
-}>({
-  longitude: 107.4191777,
-  latitude: 37.855152,
-  height: 5000,
-})
+// 定位中状态，避免重复点击触发并发定位
+const locating = ref(false)
 
-// 飞往初始定位点
-const flyToInitialLocation = () => {
-  if (!viewer || !initialLocation.value) return
-  const { longitude, latitude, height } = initialLocation.value
-  viewer.camera.flyTo({
-    destination: Cartesian3.fromDegrees(longitude, latitude, height),
-    duration: 1.5,
-  })
+/**
+ * 点击“回到当前位置”：重新定位 → 地图上打点标记 → 飞行到该点。
+ * 定位手段按 IP 定位 → 上次缓存 → 默认点 依次降级（已删除系统定位）。
+ */
+const locateAndShowMyLocation = async () => {
+  if (!viewer || viewer.isDestroyed()) return
+  if (locating.value) return
+
+  locating.value = true
+  try {
+    const location = await resolveMyLocation()
+    showMyLocationMarker(viewer, location)
+    flyToMyLocation(viewer, location)
+
+    const where =
+      location.address || formatLonLat(location.longitude, location.latitude)
+    if (location.source === 'fallback') {
+      message.warning(
+        `定位失败，已回到默认位置（${where}）。请检查网络连接。`,
+      )
+    } else {
+      message.success(`${SOURCE_LABEL[location.source]}：${where}`)
+    }
+  } catch (error: any) {
+    console.error('定位失败:', error)
+    message.error(`定位失败：${error?.message ?? error}`)
+  } finally {
+    locating.value = false
+  }
 }
 
 // 飞往完整地球范围，避免复用定位按钮的局部视角。
@@ -245,35 +272,12 @@ onMounted(async () => {
       })
     }, 2000)
 
-    // 2. 原生系统地理定位（带 1.5s 快速超时，避免长期阻塞卡顿）
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          if (!viewer || viewer.isDestroyed()) return
-          const lon = position.coords.longitude
-          const lat = position.coords.latitude
-          const alt = 1000
-          initialLocation.value = { longitude: lon, latitude: lat, height: alt }
-          viewer.camera.flyTo({
-            destination: Cartesian3.fromDegrees(lon, lat, alt),
-            duration: 2,
-          })
-        },
-        () => {
-          // 定位失败或超时保持中国全景或默认中心
-          initialLocation.value = {
-            longitude: 107.4191777,
-            latitude: 37.855152,
-            height: 5000,
-          }
-        },
-        {
-          enableHighAccuracy: false,
-          timeout: 1500,
-          maximumAge: 60000,
-        },
-      )
-    }
+    // 2. 启动时后台解析“我的位置”做缓存预热，不自动飞行，
+    //    避免 IP 城市级定位把视角拉到粗精度位置。
+    void resolveMyLocation()
+      .catch((error) => {
+        console.warn('启动时定位失败:', error)
+      })
   } catch (err: any) {
     console.error('SceneViewer onMounted 异常:', err)
   }
@@ -293,6 +297,7 @@ onUnmounted(() => {
   }
   clearAll(viewer) //清除监听
   if (viewer) {
+    clearMyLocationMarker(viewer)
     clearAdministrativeBoundaries(viewer)
     clearGraticule(viewer)
     viewSettingsStore.showProvince = false
@@ -346,6 +351,25 @@ onUnmounted(() => {
 
 .location-btn:active {
   background: rgba(100, 100, 100, 0.9);
+}
+
+.location-btn:disabled {
+  cursor: progress;
+  opacity: 0.85;
+}
+
+.spin-icon {
+  animation: my-location-spin 1s linear infinite;
+}
+
+@keyframes my-location-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media screen and (max-width: 700px), screen and (max-height: 420px) {
