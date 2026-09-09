@@ -1,4 +1,4 @@
-use gcs_macros::FPPacketParser;
+use gcs_macros::{FPBitFlags, FPPacketParser};
 use serde::Serialize;
 
 /// 94帧子帧1传输层原始结构。
@@ -112,9 +112,124 @@ impl From<FP95Frame94Sub1Raw> for FP95Frame94Sub1 {
     }
 }
 
+/// 防除冰状态信息1（表2 状态信息表1），对应字节7的Bit0~Bit6。
+#[derive(FPBitFlags, Debug, Clone, Serialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FP95DeiceStatus1 {
+    /// D0: 控制器输出电流超过设定值，持续超过1秒（1为异常，0为正常）
+    pub over_current: bool,
+    /// D1: 电压超出最大值，持续200ms（1为异常，0为正常）
+    pub over_voltage: bool,
+    /// D2: 电压低于最小值，持续200ms（1为异常，0为正常）
+    pub under_voltage: bool,
+    /// D3: 2s内未收到飞管计算机信号（1为异常，0为正常）
+    pub comm_error: bool,
+    /// D4: 控制盒温度超过正常范围（-40~85℃）（1为异常，0为正常）
+    pub temp_error: bool,
+    /// D5: 上位机发送的目标功率超过范围（1为超出，0为未超出）
+    pub target_power_overflow: bool,
+    /// D6: 20s内未达到目标功率（1为异常，0为正常）
+    pub target_power_timeout: bool,
+}
+
+/// 94帧子帧2（防除冰控制器透传数据）传输层原始结构，长度固定为24字节。
+///
+/// 前14字节为防除冰控制器完整报文，后10字节为预留备用。
+#[derive(FPPacketParser, Debug, Clone, Serialize)]
+#[frame(id = 0x94, payload_size = 24)]
+pub struct FP95Frame94Sub2Raw {
+    pub sync_code: [u8; 2],
+    pub target_power: u16,
+    pub current_power: u16,
+    pub work_mode: u8,
+    #[bitflags(raw_type = "u8")]
+    pub status1: FP95DeiceStatus1,
+    pub status2: u8,
+    #[scale(raw_type = "u8", factor = "1.0", offset = "-45.0")]
+    pub controller_temp: f32,
+    #[scale(raw_type = "u8", factor = "0.2")]
+    pub voltage: f32,
+    #[scale(raw_type = "u8", factor = "0.2")]
+    pub current: f32,
+    pub frame_count: u8,
+    pub checksum: u8,
+    pub reserved: [u8; 10],
+}
+
+/// 94帧子帧2业务消费结构，包含工程量转换、模式语义说明与零和校验验证。
+#[derive(Debug, Default, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FP95Frame94Sub2 {
+    pub sync_code: [u8; 2],
+    pub sync_valid: bool,
+    pub target_power: u16,
+    pub current_power: u16,
+    pub work_mode: u8,
+    pub work_mode_desc: String,
+    pub status1: FP95DeiceStatus1,
+    pub raw_status1: u8,
+    pub status2: u8,
+    pub controller_temp: f32,
+    pub voltage: f32,
+    pub current: f32,
+    pub frame_count: u8,
+    pub checksum: u8,
+    pub checksum_valid: bool,
+    pub raw_bytes: [u8; 14],
+    pub reserved: [u8; 10],
+}
+
+impl FP95Frame94Sub2 {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, String> {
+        if data.len() < 24 {
+            return Err(format!("94帧子帧2长度不足: 期望24字节，实际{}字节", data.len()));
+        }
+        let raw = FP95Frame94Sub2Raw::from_bytes(data)?;
+        let raw_bytes: [u8; 14] = data[..14]
+            .try_into()
+            .map_err(|_| "提取防除冰14字节失败".to_string())?;
+
+        // 协议规定：“同步码”+“帧内容”+“校验码” = 0 MOD 256
+        let sum: u32 = raw_bytes.iter().map(|&b| b as u32).sum();
+        let checksum_valid = (sum % 256) == 0;
+        let sync_valid = raw.sync_code == [0xEB, 0x90];
+
+        let work_mode_desc = match raw.work_mode {
+            0x00 => "关闭模式".to_string(),
+            0x01 => "指令调节模式".to_string(),
+            0x02 => "恒功率模式".to_string(),
+            0x03 => "恒温模式".to_string(),
+            other => format!("未知模式(0x{:02X})", other),
+        };
+
+        let raw_status1 = data[7];
+
+        Ok(Self {
+            sync_code: raw.sync_code,
+            sync_valid,
+            target_power: raw.target_power,
+            current_power: raw.current_power,
+            work_mode: raw.work_mode,
+            work_mode_desc,
+            status1: raw.status1,
+            raw_status1,
+            status2: raw.status2,
+            controller_temp: raw.controller_temp,
+            voltage: raw.voltage,
+            current: raw.current,
+            frame_count: raw.frame_count,
+            checksum: raw.checksum,
+            checksum_valid,
+            raw_bytes,
+            reserved: raw.reserved,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub enum FP95Frame94 {
     Sub1(FP95Frame94Sub1),
+    Sub2(FP95Frame94Sub2),
 }
 
 impl FP95Frame94 {
@@ -125,7 +240,90 @@ impl FP95Frame94 {
 
         match subframe_id {
             1 => Ok(Self::Sub1(FP95Frame94Sub1::from_bytes(payload)?)),
+            2 => Ok(Self::Sub2(FP95Frame94Sub2::from_bytes(payload)?)),
             other => Err(format!("未知94子帧编号: {}", other)),
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fp95_frame94_sub2_parsing() {
+        // 构造14字节防除冰报文：
+        // 0..2: 0xEB, 0x90 (同步码)
+        // 2..4: 目标功率 2000W -> 0x07D0 (小端: 0xD0, 0x07)
+        // 4..6: 当前功率 1950W -> 0x079E (小端: 0x9E, 0x07)
+        // 6: 工作模式 0x02 (恒功率模式)
+        // 7: 状态信息1: D0(过流)=1, D4(温度异常)=1 -> 0x01 | 0x10 = 0x11
+        // 8: 状态信息2: 0x00
+        // 9: 控制盒温度: 50 -> 50 - 45 = 5℃
+        // 10: 电压: 140 -> 140 * 0.2 = 28.0V
+        // 11: 电流: 24 -> 24 * 0.2 = 4.8A
+        // 12: 帧计数: 42
+        // 13: 校验和: 计算使得前14字节和对256取模为0
+        let mut deice_14 = [
+            0xEB, 0x90,
+            0xD0, 0x07,
+            0x9E, 0x07,
+            0x02,
+            0x11,
+            0x00,
+            50,
+            140,
+            24,
+            42,
+            0x00, // 暂填0
+        ];
+        let sum_13: u32 = deice_14[..13].iter().map(|&b| b as u32).sum();
+        let checksum = ((256 - (sum_13 % 256)) % 256) as u8;
+        deice_14[13] = checksum;
+
+        // 验证累加和模256为0
+        let total_sum: u32 = deice_14.iter().map(|&b| b as u32).sum();
+        assert_eq!(total_sum % 256, 0);
+
+        // 组装24字节有效载荷（前14字节防除冰，后10字节预留0）
+        let mut payload_24 = [0u8; 24];
+        payload_24[..14].copy_from_slice(&deice_14);
+
+        let sub2 = FP95Frame94Sub2::from_bytes(&payload_24).expect("解析子帧2应当成功");
+        assert!(sub2.sync_valid);
+        assert!(sub2.checksum_valid);
+        assert_eq!(sub2.target_power, 2000);
+        assert_eq!(sub2.current_power, 1950);
+        assert_eq!(sub2.work_mode, 0x02);
+        assert_eq!(sub2.work_mode_desc, "恒功率模式");
+        assert!(sub2.status1.over_current);
+        assert!(!sub2.status1.over_voltage);
+        assert!(!sub2.status1.under_voltage);
+        assert!(!sub2.status1.comm_error);
+        assert!(sub2.status1.temp_error);
+        assert!(!sub2.status1.target_power_overflow);
+        assert!(!sub2.status1.target_power_timeout);
+        assert_eq!(sub2.raw_status1, 0x11);
+        assert_eq!(sub2.status2, 0x00);
+        assert!((sub2.controller_temp - 5.0).abs() < 1e-4);
+        assert!((sub2.voltage - 28.0).abs() < 1e-4);
+        assert!((sub2.current - 4.8).abs() < 1e-4);
+        assert_eq!(sub2.frame_count, 42);
+        assert_eq!(sub2.raw_bytes, deice_14);
+
+        // 测试包含子帧编号的整包路由 (1字节子帧号 + 24字节payload = 25字节)
+        let mut frame_data = [0u8; 25];
+        frame_data[0] = 2; // 子帧编号 2
+        frame_data[1..].copy_from_slice(&payload_24);
+
+        let parsed = FP95Frame94::from_bytes(&frame_data).expect("FP95Frame94应当成功路由到子帧2");
+        match parsed {
+            FP95Frame94::Sub2(res) => {
+                assert_eq!(res.target_power, 2000);
+                assert_eq!(res.current_power, 1950);
+            }
+            _ => panic!("应当解析为Sub2变体"),
+        }
+    }
+}
+
