@@ -222,12 +222,12 @@
                         <div class="left-btn-group">
                             <button
                                 class="action-btn query-btn"
-                                :disabled="!uavStore.fp95Aggregate || uavStore.transponderOperationPending"
+                                :disabled="uavStore.transponderOperationPending"
                                 @click="handleQueryLeftSwitches"
                             >{{ uavStore.transponderOperationPending ? '处理中…' : '查询状态' }}</button>
                             <button
                                 class="action-btn bind-btn"
-                                :disabled="!uavStore.fp95Aggregate || uavStore.transponderOperationPending"
+                                :disabled="uavStore.transponderOperationPending"
                                 @click="handleBindLeftSwitches"
                             >{{ uavStore.transponderOperationPending ? '处理中…' : '装订状态' }}</button>
                         </div>
@@ -358,12 +358,12 @@
                             <div class="right-btn-group">
                                 <button
                                     class="action-btn query-btn"
-                                    :disabled="!uavStore.fp95Aggregate || uavStore.transponderOperationPending"
+                                    :disabled="uavStore.transponderOperationPending"
                                     @click="handleQueryRightParams"
                                 >{{ uavStore.transponderOperationPending ? '处理中…' : '查询参数' }}</button>
                                 <button
                                     class="action-btn bind-btn"
-                                    :disabled="!uavStore.fp95Aggregate || uavStore.transponderOperationPending"
+                                    :disabled="uavStore.transponderOperationPending"
                                     @click="handleBindRightParams"
                                 >{{ uavStore.transponderOperationPending ? '处理中…' : '装订参数' }}</button>
                             </div>
@@ -423,12 +423,12 @@
                         >重心校验</button>
                         <button
                             class="action-btn query-btn"
-                            :disabled="!uavStore.fp95Aggregate || uavStore.transponderOperationPending"
+                            :disabled="uavStore.transponderOperationPending"
                             @click="handleQueryWeight"
                         >{{ uavStore.transponderOperationPending ? '处理中…' : '查询重量' }}</button>
                         <button
                             class="action-btn bind-btn"
-                            :disabled="!uavStore.fp95Aggregate || uavStore.transponderOperationPending"
+                            :disabled="uavStore.transponderOperationPending"
                             @click="handleBindWeight"
                         >{{ uavStore.transponderOperationPending ? '处理中…' : '装订重量' }}</button>
                     </div>
@@ -444,13 +444,13 @@
                 <div class="row switch-row">
                     <span>PAYLOAD POWER / 任务载荷电源</span>
                     <div class="switch-control">
-                        <span class="switch-current" :class="{ enabled: hasFp95SwitchTelemetry && fp95Switches.payloadPower }">
+                        <span class="switch-current" :class="{ enabled: fp95Switches.payloadPower }">
                             {{ formatSwitchState(fp95Switches.payloadPower) }}
                         </span>
                         <n-switch
                             :value="fp95Switches.payloadPower"
                             :loading="payloadSwitchPending"
-                            :disabled="!hasFp95SwitchTelemetry || payloadSwitchPending"
+                            :disabled="payloadSwitchPending"
                             size="small"
                             @update:value="handlePayloadSwitch"
                         >
@@ -463,13 +463,13 @@
                 <div class="row switch-row">
                     <span>TRANSPONDER / 应答机</span>
                     <div class="switch-control">
-                        <span class="switch-current" :class="{ enabled: hasFp95SwitchTelemetry && fp95Switches.transponder }">
+                        <span class="switch-current" :class="{ enabled: fp95Switches.transponder }">
                             {{ formatSwitchState(fp95Switches.transponder) }}
                         </span>
                         <n-switch
                             :value="fp95Switches.transponder"
                             :loading="transponderSwitchPending"
-                            :disabled="!hasFp95SwitchTelemetry || transponderSwitchPending"
+                            :disabled="transponderSwitchPending"
                             size="small"
                             @update:value="handleTransponderSwitch"
                         >
@@ -559,9 +559,6 @@ let transponderConfirmationTimer: ReturnType<typeof setTimeout> | null = null
 const SWITCH_CONFIRMATION_TIMEOUT = 2000
 
 function formatSwitchState(enabled: boolean) {
-    if (!hasFp95SwitchTelemetry.value) {
-        return '暂无遥测'
-    }
     return `当前：${enabled ? '开' : '关'}`
 }
 
@@ -592,12 +589,9 @@ function clearTransponderPending() {
 
 async function handlePayloadSwitch(enabled: boolean) {
     const aggregate = uavStore.fp95Aggregate
-    if (!aggregate?.frame84) {
-        message.error('暂无 FP95 航电开关遥测')
-        return
-    }
+    const aircraftId = aggregate?.uavId ?? uavStore.currentFp95AircraftId() ?? 0
     payloadPendingTarget.value = {
-        aircraftId: aggregate.uavId,
+        aircraftId,
         target: enabled
     }
     payloadConfirmationTimer = setTimeout(() => {
@@ -615,12 +609,9 @@ async function handlePayloadSwitch(enabled: boolean) {
 
 async function handleTransponderSwitch(enabled: boolean) {
     const aggregate = uavStore.fp95Aggregate
-    if (!aggregate?.frame84) {
-        message.error('暂无 FP95 航电开关遥测')
-        return
-    }
+    const aircraftId = aggregate?.uavId ?? uavStore.currentFp95AircraftId() ?? 0
     transponderPendingTarget.value = {
-        aircraftId: aggregate.uavId,
+        aircraftId,
         target: enabled
     }
     transponderConfirmationTimer = setTimeout(() => {

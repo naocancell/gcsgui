@@ -537,6 +537,20 @@ export const useUavStore = defineStore('uav', () => {
       const res = await invoke<string>('save_comms_config', { config })
       await syncProtocolListeners()
       await emit('comms-config-changed')
+      // 保存配置并启动链路后，同步上行配置上下文（设置机号）
+      const aircraftId = currentFp95AircraftId() ?? 0
+      try {
+        await invoke('configure_uplink', {
+          context: {
+            destination: 0x02,
+            source: 0x01,
+            aircraftId,
+            dataSource: 0xaa,
+          },
+        })
+      } catch (err) {
+        console.warn('同步上行上下文失败:', err)
+      }
       console.log('保存配置成功:', res)
       return res
     } catch (err) {
@@ -670,12 +684,10 @@ export const useUavStore = defineStore('uav', () => {
     enabled: boolean,
   ) {
     const aggregate = fp95Aggregate.value
-    if (!aggregate?.frame84) {
-      throw new Error('暂无 FP95 航电开关遥测')
-    }
+    const aircraftId = aggregate?.uavId ?? currentFp95AircraftId() ?? 0
 
     await invoke('submit_flight_switch_command', {
-      aircraftId: aggregate.uavId,
+      aircraftId,
       command: getFp95FlightSwitchCommand(device, enabled),
     })
   }
@@ -737,11 +749,8 @@ export const useUavStore = defineStore('uav', () => {
   const transponderOperationPending = ref(false)
 
   function currentFp95AircraftId() {
-    const aircraftId = fp95Aggregate.value?.uavId
-    if (aircraftId === undefined) {
-      throw new Error('暂无 FP95 飞机遥测')
-    }
-    return aircraftId
+    // return fp95Aggregate.value?.uavId ?? 255
+    return 255
   }
 
   async function runTransponderOperation<T>(

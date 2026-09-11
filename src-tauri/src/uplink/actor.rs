@@ -263,16 +263,20 @@ impl UplinkCore {
     }
 
     pub(crate) fn tick(&mut self, sink: &dyn UplinkFrameSink) {
-        let Some(context) = self
-            .active_flight_switch
-            .map(|active| active.context)
-            .or(self.frame_context)
-        else {
-            return;
-        };
         if !sink.has_targets() {
             return;
         }
+        let fallback_context = UplinkFrameContext {
+            destination: 0x02,
+            source: 0x01,
+            aircraft_id: 0,
+            data_source: 0xAA,
+        };
+        let context = self
+            .active_flight_switch
+            .map(|active| active.context)
+            .or(self.frame_context)
+            .unwrap_or(fallback_context);
 
         let flight_switch_active = self.active_flight_switch.is_some();
         let payload = if flight_switch_active {
