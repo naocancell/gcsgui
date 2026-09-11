@@ -421,8 +421,18 @@ fn process_fp95_frame(
             app_state.metrics.inc_ok();
             if let ParsedSubFrame::Frame80(frame80) = &parsed {
                 response_coordinator.deliver(uav_id, frame80.injection_response);
+                maybe_emit_pod_ack(uav_id, &frame80.injection_response);
             }
             if let ParsedSubFrame::Frame83(ref frame83) = parsed {
+                log::trace!(
+                    "[FP95] 收到0x83位置帧 - 飞机ID: {}, 经度: {:.7}°, 纬度: {:.7}°, 高度(绝对): {:.2}m, 气压高: {:.2}m, 相对高: {:.2}m",
+                    uav_id,
+                    frame83.longitude,
+                    frame83.latitude,
+                    frame83.altitude,
+                    frame83.pressure_altitude,
+                    frame83.relative_altitude
+                );
                 forward_to_servo_turntable(app_state, frame83);
             }
             app_state.merge_fp95(uav_id, parsed, received_at);
@@ -430,6 +440,28 @@ fn process_fp95_frame(
         Err(_err) => {
             app_state.metrics.inc_parse_err();
         }
+    }
+}
+
+/// 吊舱控制指令装订回执：主事件码 0x28（吊舱控制指令装订），
+/// 子状态 0x01（吊舱控制指令装订已响应），见规范 5.3 节。
+const POD_ACK_MAIN_EVENT: u8 = 0x28;
+const POD_ACK_SUB_STATE: u8 = 0x01;
+
+/// 检测 0x80 注入回报帧中的吊舱装订回执，通过 Tauri 事件
+/// `pod-command-acked`（载荷为飞机 ID）通知前端显示装订确认状态。
+fn maybe_emit_pod_ack(uav_id: u8, injection_response: &[u8; 16]) {
+    if injection_response[0] != POD_ACK_MAIN_EVENT || injection_response[1] != POD_ACK_SUB_STATE {
+        return;
+    }
+    let Some(app_handle) = crate::APP_HANDLE.get() else {
+        return;
+    };
+    use tauri::Emitter;
+    if let Err(error) = app_handle.emit("pod-command-acked", uav_id) {
+        log::warn!("发送吊舱装订回执事件失败: {error}");
+    } else {
+        log::info!("[FP95] 吊舱控制指令装订已响应（0x28/0x01），飞机 {uav_id}");
     }
 }
 
@@ -490,4 +522,3 @@ fn accept_decision(decision: RxDecision, app_state: &AppState) -> bool {
         }
     }
 }
-

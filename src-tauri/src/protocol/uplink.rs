@@ -39,6 +39,8 @@ pub enum FlightSwitchCommand {
     PayloadOff,
     TransponderOn,
     TransponderOff,
+    /// VMC（视频管理计算机）通道切换指令，控制码范围 0xC0 ~ 0xCD。
+    Vmc(u8),
 }
 
 impl FlightSwitchCommand {
@@ -48,6 +50,7 @@ impl FlightSwitchCommand {
             Self::PayloadOff => 0x53,
             Self::TransponderOn => 0xD8,
             Self::TransponderOff => 0xD9,
+            Self::Vmc(code) => code,
         }
     }
 }

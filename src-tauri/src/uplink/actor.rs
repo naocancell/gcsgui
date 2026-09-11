@@ -21,6 +21,9 @@ pub enum CommandSendPolicy {
     Once,
     RepeatCycles { cycles: u16 },
     UntilCleared,
+    /// 周期节流持续发送：每 `interval_ticks` × 20ms 发送一帧指令，
+    /// 间隔期回落到周期常发帧，直到被清除。
+    UntilClearedPeriodic { interval_ticks: u8 },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -28,24 +31,33 @@ struct ActiveCommand {
     command: NoAckCommand,
     policy: CommandSendPolicy,
     remaining_cycles: Option<u16>,
+    /// 相邻两帧指令之间的最小 tick 间隔（1 = 每 tick 都发，行为同原版）。
+    interval_ticks: u8,
+    /// 距下一次发送指令帧还需等待的 tick 数（0 = 本 tick 就发）。
+    wait_ticks: u8,
 }
 
 impl ActiveCommand {
     fn new(command: NoAckCommand, policy: CommandSendPolicy) -> Result<Self, UplinkCommandError> {
-        let remaining_cycles = match policy {
-            CommandSendPolicy::Once => Some(1),
+        let (remaining_cycles, interval_ticks) = match policy {
+            CommandSendPolicy::Once => (Some(1), 1),
             CommandSendPolicy::RepeatCycles { cycles: 0 } => {
                 return Err(UplinkCommandError::InvalidPolicy {
                     message: "重复发送周期数必须大于 0".to_string(),
                 })
             }
-            CommandSendPolicy::RepeatCycles { cycles } => Some(cycles),
-            CommandSendPolicy::UntilCleared => None,
+            CommandSendPolicy::RepeatCycles { cycles } => (Some(cycles), 1),
+            CommandSendPolicy::UntilCleared => (None, 1),
+            CommandSendPolicy::UntilClearedPeriodic { interval_ticks } => {
+                (None, interval_ticks.max(1))
+            }
         };
         Ok(Self {
             command,
             policy,
             remaining_cycles,
+            interval_ticks,
+            wait_ticks: 0,
         })
     }
 
@@ -279,12 +291,18 @@ impl UplinkCore {
             .unwrap_or(fallback_context);
 
         let flight_switch_active = self.active_flight_switch.is_some();
+        // wait_ticks > 0 时本 tick 发周期常发帧，指令仍占用槽位；用户松开由 clear_command_if 清空。
+        let command_ready = self
+            .active_command
+            .is_some_and(|active| active.wait_ticks == 0);
         let payload = if flight_switch_active {
             UplinkPayload::Periodic(self.periodic)
-        } else {
+        } else if command_ready {
             self.active_command
                 .map(|active| UplinkPayload::Command(active.command))
                 .unwrap_or(UplinkPayload::Periodic(self.periodic))
+        } else {
+            UplinkPayload::Periodic(self.periodic)
         };
         let mut control = self.control;
         if let Some(active) = self.active_flight_switch {
@@ -301,13 +319,19 @@ impl UplinkCore {
 
         self.sequence = self.sequence.wrapping_add(1);
         self.enqueued_frames += 1;
-        if !flight_switch_active
-            && self
-                .active_command
-                .as_mut()
-                .is_some_and(ActiveCommand::mark_dispatched)
-        {
-            self.active_command = None;
+        if !flight_switch_active {
+            if let Some(active) = self.active_command.as_mut() {
+                if active.wait_ticks > 0 {
+                    // 节流等待期：本 tick 发送的是周期常发帧，指令保持占用
+                    active.wait_ticks -= 1;
+                } else {
+                    // 指令帧已发出：进入下一次节流等待并结算剩余周期
+                    active.wait_ticks = active.interval_ticks.saturating_sub(1);
+                    if active.mark_dispatched() {
+                        self.active_command = None;
+                    }
+                }
+            }
         }
         if self
             .active_flight_switch
@@ -541,6 +565,152 @@ pub(crate) fn start_actor(sink: Arc<dyn UplinkFrameSink>) -> UplinkHandle {
     let (handle, task) = build_actor(sink);
     tauri::async_runtime::spawn(task);
     handle
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::uplink::PERIODIC_FUNCTION_CODE;
+    use std::sync::Mutex;
+
+    struct RecordingSink {
+        frames: Mutex<Vec<[u8; 32]>>,
+    }
+
+    impl RecordingSink {
+        fn new() -> Self {
+            Self {
+                frames: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn codes(&self) -> Vec<u8> {
+            self.frames
+                .lock()
+                .expect("recording sink")
+                .iter()
+                .map(|frame| frame[13])
+                .collect()
+        }
+
+        fn last(&self) -> [u8; 32] {
+            *self
+                .frames
+                .lock()
+                .expect("recording sink")
+                .last()
+                .expect("no frames")
+        }
+    }
+
+    impl UplinkFrameSink for RecordingSink {
+        fn has_targets(&self) -> bool {
+            true
+        }
+
+        fn try_dispatch(&self, frame: [u8; 32]) -> Result<(), ()> {
+            self.frames.lock().expect("recording sink").push(frame);
+            Ok(())
+        }
+    }
+
+    fn configured_core() -> UplinkCore {
+        let mut core = UplinkCore::new();
+        core.configure(UplinkFrameContext {
+            destination: 0x02,
+            source: 0x01,
+            aircraft_id: 1,
+            data_source: 0xAA,
+        })
+        .expect("configure uplink");
+        core
+    }
+
+    fn pod_inject_command() -> NoAckCommand {
+        let mut payload = [0u8; 15];
+        payload[0] = 0x01;
+        payload[1] = 0x19;
+        payload[2..4].copy_from_slice(&(-9000i16).to_le_bytes());
+        NoAckCommand {
+            function_code: 0x70,
+            payload,
+        }
+    }
+
+    #[test]
+    fn repeat_cycles_occupies_five_ticks_then_returns_to_periodic() {
+        let mut core = configured_core();
+        let sink = RecordingSink::new();
+        core.submit_command(
+            pod_inject_command(),
+            CommandSendPolicy::RepeatCycles { cycles: 5 },
+        )
+        .unwrap();
+
+        for _ in 0..6 {
+            core.tick(&sink);
+        }
+
+        assert_eq!(
+            sink.codes(),
+            vec![0x70, 0x70, 0x70, 0x70, 0x70, PERIODIC_FUNCTION_CODE]
+        );
+        assert!(!core.status().has_active_command);
+    }
+
+    #[test]
+    fn until_cleared_periodic_injects_at_10hz_until_clear() {
+        let mut core = configured_core();
+        let sink = RecordingSink::new();
+        core.submit_command(
+            pod_inject_command(),
+            CommandSendPolicy::UntilClearedPeriodic { interval_ticks: 5 },
+        )
+        .unwrap();
+
+        for _ in 0..6 {
+            core.tick(&sink);
+        }
+        assert_eq!(
+            sink.codes(),
+            vec![
+                0x70,
+                PERIODIC_FUNCTION_CODE,
+                PERIODIC_FUNCTION_CODE,
+                PERIODIC_FUNCTION_CODE,
+                PERIODIC_FUNCTION_CODE,
+                0x70,
+            ]
+        );
+        assert!(core.status().has_active_command);
+        assert_eq!(core.status().active_function_code, Some(0x70));
+
+        assert!(core.clear_command_if(0x70));
+        core.tick(&sink);
+        assert_eq!(sink.codes().last().copied(), Some(PERIODIC_FUNCTION_CODE));
+        assert!(!core.status().has_active_command);
+    }
+
+    #[test]
+    fn pod_inject_frame_keeps_switch_cmd_and_reserved_zeros() {
+        let mut core = configured_core();
+        let sink = RecordingSink::new();
+        core.submit_command(
+            pod_inject_command(),
+            CommandSendPolicy::Once,
+        )
+        .unwrap();
+        core.tick(&sink);
+
+        let frame = sink.last();
+        assert_eq!(&frame[0..2], &[0xEB, 0x90]);
+        assert_eq!(frame[13], 0x70);
+        assert_eq!(frame[14], 0x01);
+        assert_eq!(frame[15], 0x19);
+        assert_eq!(&frame[16..18], &(-9000i16).to_le_bytes());
+        assert_eq!(&frame[18..20], &[0, 0]);
+        assert!(frame[20..29].iter().all(|&byte| byte == 0));
+    }
 }
 
 

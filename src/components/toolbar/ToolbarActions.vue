@@ -239,6 +239,18 @@
         <span>航电信息</span>
       </n-tooltip>
 
+      <!-- 吊舱控制 -->
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
+          <n-button tertiary type="warning" @click="$emit('showPod')">
+            <template #icon>
+              <n-icon><VideocamOutline /></n-icon>
+            </template>
+          </n-button>
+        </template>
+        <span>吊舱控制</span>
+      </n-tooltip>
+
       <!-- 航线通视分析 -->
       <n-dropdown :options="losAnalyzeOptions" @select="$emit('selectLosAnalyse', $event)">
         <n-button tertiary type="warning">
@@ -346,6 +358,7 @@ import {
   LocationOutline,
   RadioOutline,
   NavigateOutline,
+  VideocamOutline,
 } from '@vicons/ionicons5'
 import { RulerAlt } from '@vicons/carbon'
 import { DrawPolygon } from '@vicons/fa'
@@ -389,6 +402,7 @@ const emit = defineEmits<{
   (e: 'selectObstacle', key: string): void
   (e: 'showLinkHealth'): void
   (e: 'showTelemetry'): void
+  (e: 'showPod'): void
   (e: 'selectLosAnalyse', key: string): void
   (e: 'selectViewSettings', key: string | number): void
   (e: 'refreshPage'): void

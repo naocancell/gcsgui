@@ -45,6 +45,8 @@ pub fn run() {
                 .show(|_| {});
         }))
         .setup(|app| {
+            let _ = APP_HANDLE.set(app.handle().clone());
+
             let app_state = state::AppState::new();
             app.manage(app_state.clone());
 
@@ -149,6 +151,9 @@ pub fn run() {
             query_weight_params,
             clear_uplink_command,
             get_uplink_status,
+            send_pod_command,
+            stop_pod_command,
+            submit_vmc_command,
             fetch_and_cache_nfz,
             load_cached_nfz,
             list_obstacle_airports,

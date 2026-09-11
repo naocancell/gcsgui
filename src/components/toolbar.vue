@@ -32,6 +32,7 @@ import {
   restoreLinkHealthWindow,
   openOrRestoreLinkHealthWindow,
 } from '@/utils/linkHealthWindow'
+import { openOrRestorePodWindow } from '@/utils/podWindow'
 
 // 引入拆解的 Composables
 import { useDataImporter } from '@/composables/useDataImporter'
@@ -323,6 +324,7 @@ onBeforeUnmount(() => {
     @select-obstacle="handleObstacleSelect"
     @show-link-health="openOrRestoreLinkHealthWindow"
     @show-telemetry="openOrRestoreTelemetryWindow"
+    @show-pod="openOrRestorePodWindow"
     @select-los-analyse="handleLosAnalyseSelect"
     @select-view-settings="handleViewSettingsSelect"
     @refresh-page="refreshPage"

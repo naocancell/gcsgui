@@ -12,13 +12,13 @@ describe('EMPIRICAL CHALLENGER: Router & Views Adversarial Suite', () => {
   })
 
   describe('1. 路由表完备性与防御性验证 (Route Table & Definitions)', () => {
-    it('路由配置必须为严格的4个标准路径，无未定义或冗余路由', () => {
+    it('路由配置必须为严格的5个标准路径，无未定义或冗余路由', () => {
       const paths = routes.map((r) => r.path)
       const names = routes.map((r) => r.name)
 
-      expect(paths).toEqual(['/', '/routeManage', '/telemetry', '/linkHealth'])
-      expect(names).toEqual(['Home', 'RouteManage', 'Telemetry', 'LinkHealth'])
-      expect(routes).toHaveLength(4)
+      expect(paths).toEqual(['/', '/routeManage', '/telemetry', '/pod', '/linkHealth'])
+      expect(names).toEqual(['Home', 'RouteManage', 'Telemetry', 'Pod', 'LinkHealth'])
+      expect(routes).toHaveLength(5)
 
       // 绝不允许包含 /test、/RouteOptions 等未规范路由
       expect(paths).not.toContain('/test')
@@ -32,6 +32,7 @@ describe('EMPIRICAL CHALLENGER: Router & Views Adversarial Suite', () => {
         '主页 - GCS 地面站',
         '航线管理 - GCS 地面站',
         '无人机航电系统 - UAV AVIONICS',
+        '光电吊舱控制 - POD CONTROL',
         '链路状态信息 - LINK HEALTH',
       ])
     })
@@ -77,6 +78,10 @@ describe('EMPIRICAL CHALLENGER: Router & Views Adversarial Suite', () => {
       const telemetryResolved = router.resolve({ name: 'Telemetry' })
       expect(telemetryResolved.path).toBe('/telemetry')
       expect(telemetryResolved.name).toBe('Telemetry')
+
+      const podResolved = router.resolve({ name: 'Pod' })
+      expect(podResolved.path).toBe('/pod')
+      expect(podResolved.name).toBe('Pod')
 
       const linkHealthResolved = router.resolve({ name: 'LinkHealth' })
       expect(linkHealthResolved.path).toBe('/linkHealth')

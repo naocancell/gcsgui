@@ -7,25 +7,27 @@ describe('路由系统与视图层规范化测试 (Router & View Layer)', () => 
     setActivePinia(createPinia())
   })
 
-  it('应该包含规范化的4个标准顶级路由且不包含冗余/test路由', () => {
+  it('应该包含规范化的5个标准顶级路由且不包含冗余/test路由', () => {
     const paths = routes.map((r) => r.path)
     const names = routes.map((r) => r.name)
 
-    // 验证包含正确的4个核心路由
+    // 验证包含正确的5个核心路由
     expect(paths).toContain('/')
     expect(paths).toContain('/routeManage')
     expect(paths).toContain('/telemetry')
+    expect(paths).toContain('/pod')
     expect(paths).toContain('/linkHealth')
 
     expect(names).toContain('Home')
     expect(names).toContain('RouteManage')
     expect(names).toContain('Telemetry')
+    expect(names).toContain('Pod')
     expect(names).toContain('LinkHealth')
 
     // 验证废弃的调试路由/test已被彻底移除
     expect(paths).not.toContain('/test')
     expect(names).not.toContain('Test')
-    expect(routes.length).toBe(4)
+    expect(routes.length).toBe(5)
   })
 
   it('每个路由应该配置了正确的元信息和组件加载器', () => {
@@ -46,6 +48,12 @@ describe('路由系统与视图层规范化测试 (Router & View Layer)', () => 
     expect(telemetryRoute?.name).toBe('Telemetry')
     expect(telemetryRoute?.meta?.title).toBe('无人机航电系统 - UAV AVIONICS')
     expect(typeof telemetryRoute?.component).toBe('function')
+
+    const podRoute = routes.find((r) => r.path === '/pod')
+    expect(podRoute).toBeDefined()
+    expect(podRoute?.name).toBe('Pod')
+    expect(podRoute?.meta?.title).toBe('光电吊舱控制 - POD CONTROL')
+    expect(typeof podRoute?.component).toBe('function')
 
     const linkHealthRoute = routes.find((r) => r.path === '/linkHealth')
     expect(linkHealthRoute).toBeDefined()

@@ -34,6 +34,14 @@ export const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/pod',
+    name: 'Pod',
+    component: () => import('@/views/PodView.vue'),
+    meta: {
+      title: '光电吊舱控制 - POD CONTROL',
+    },
+  },
+  {
     path: '/linkHealth',
     name: 'LinkHealth',
     component: () => import('@/views/LinkHealthView.vue'),
