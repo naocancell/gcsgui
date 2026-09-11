@@ -17,3 +17,4 @@ serde.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
 log.workspace = true
+socket2.workspace = true

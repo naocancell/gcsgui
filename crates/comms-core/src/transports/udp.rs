@@ -35,12 +35,31 @@ impl UdpLink {
             .await
             .map_err(CommsError::Io)?;
 
-        // 加入组播支持
+        let iface = config.interface_ip.unwrap_or(Ipv4Addr::UNSPECIFIED);
+
+        // 加入组播支持（入站接收）
         if let Some(multicast_ip) = config.multicast_ip {
-            let iface = config.interface_ip.unwrap_or(Ipv4Addr::UNSPECIFIED);
             socket
                 .join_multicast_v4(multicast_ip, iface)
                 .map_err(CommsError::Io)?;
+        }
+
+        // 组播出站网卡绑定：当目标为组播或启用了组播，且指定了有效物理网卡时，
+        // 显式设置出站接口（IP_MULTICAST_IF），避免 Windows 在无默认网关时报 10065 (WSAEHOSTUNREACH)
+        let is_multicast_target = match config.target_addr.ip() {
+            std::net::IpAddr::V4(ipv4) => ipv4.is_multicast(),
+            std::net::IpAddr::V6(ipv6) => ipv6.is_multicast(),
+        };
+        if (config.multicast_ip.is_some() || is_multicast_target) && !iface.is_unspecified() {
+            let sock_ref = socket2::SockRef::from(&socket);
+            sock_ref
+                .set_multicast_if_v4(&iface)
+                .map_err(CommsError::Io)?;
+            log::info!(
+                "UDP链路 [{}] 已绑定组播出站网卡接口: {}",
+                config.name,
+                iface
+            );
         }
 
         let socket = Arc::new(socket);

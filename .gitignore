@@ -35,3 +35,4 @@ tools/
 output/
 .superpowers/
 tile-cache/
+.workbuddy/

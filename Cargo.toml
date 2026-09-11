@@ -27,6 +27,7 @@ tokio-serial = "5.5.0"
 serialport = "4.10.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 get_if_addrs = "0.5"
+socket2 = "0.6"
 
 # 序列化与工具
 serde = { version = "1.0.229", features = ["derive"] }
