@@ -1,4 +1,5 @@
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
+import { LogicalSize } from '@tauri-apps/api/dpi'
 import { isTauri } from '@/utils/homeWindowData'
 
 export interface RestorablePodWindow {
@@ -18,12 +19,12 @@ export interface PreventableCloseEvent {
 export const podWindowOptions = {
   url: 'index.html#/pod',
   title: '光电吊舱控制 - POD CONTROL',
-  width: 800,
-  height: 900,
-  minWidth: 800,
-  minHeight: 640,
+  width: 1120,
+  height: 800,
+  minWidth: 980,
+  minHeight: 620,
   resizable: true,
-  maximizable: false,
+  maximizable: true,
   decorations: false,
   center: true,
   focus: true,
@@ -41,6 +42,13 @@ export async function openOrRestorePodWindow() {
 
   const existingWindow = await WebviewWindow.getByLabel('pod')
   if (existingWindow) {
+    try {
+      await existingWindow.setSize(
+        new LogicalSize(podWindowOptions.width, podWindowOptions.height),
+      )
+    } catch {
+      // 忽略不支持平台
+    }
     await existingWindow.unminimize()
     await existingWindow.show()
     await existingWindow.setFocus()

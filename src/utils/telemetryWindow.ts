@@ -1,4 +1,5 @@
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
+import { LogicalSize } from '@tauri-apps/api/dpi'
 import { isTauri } from '@/utils/homeWindowData'
 
 export interface RestorableTelemetryWindow {
@@ -18,12 +19,12 @@ export interface PreventableCloseEvent {
 export const telemetryWindowOptions = {
   url: 'index.html#/telemetry',
   title: '无人机航电系统 - UAV AVIONICS',
-  width: 820,
+  width: 920,
   height: 820,
-  minWidth: 820,
-  minHeight: 820,
-  resizable: false,
-  maximizable: false,
+  minWidth: 860,
+  minHeight: 650,
+  resizable: true,
+  maximizable: true,
   decorations: false,
   center: true,
   focus: true,
@@ -41,6 +42,16 @@ export async function openOrRestoreTelemetryWindow() {
 
   const existingWindow = await WebviewWindow.getByLabel('telemetry')
   if (existingWindow) {
+    try {
+      await existingWindow.setSize(
+        new LogicalSize(
+          telemetryWindowOptions.width,
+          telemetryWindowOptions.height,
+        ),
+      )
+    } catch {
+      // 忽略不支持平台
+    }
     await existingWindow.unminimize()
     await existingWindow.show()
     await existingWindow.setFocus()
@@ -49,7 +60,9 @@ export async function openOrRestoreTelemetryWindow() {
   }
 }
 
-export async function restoreTelemetryWindow(window: RestorableTelemetryWindow | null) {
+export async function restoreTelemetryWindow(
+  window: RestorableTelemetryWindow | null,
+) {
   if (window) {
     await window.unminimize()
     await window.show()
