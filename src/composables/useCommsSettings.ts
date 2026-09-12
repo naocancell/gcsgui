@@ -73,6 +73,7 @@ export function useCommsSettings() {
     try {
       await uavStore.saveCommsConfig()
       message.success('配置已保存并成功应用热重载！')
+      showUdpModal.value = false
     } catch (err) {
       message.error('保存配置失败: ' + err)
     }
