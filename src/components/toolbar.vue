@@ -118,10 +118,16 @@ const {
 // 5. 通信设置
 const {
   showUdpModal,
+  tileProxyUrlInput,
+  tileTesting,
+  tileTestResult,
+  defaultTileProxyUrl,
   interfaceOptions,
   portOptions,
   openUdpSettings,
   handleSaveConfig,
+  handleTestTileConnection,
+  handleResetTileUrl,
   addCommunicationLink,
   updateCommunicationLinkKind,
   removeCommunicationLink,
@@ -357,6 +363,10 @@ onBeforeUnmount(() => {
 
   <CommsConfigModal
     v-model:show="showUdpModal"
+    v-model:tile-proxy-url="tileProxyUrlInput"
+    :tile-testing="tileTesting"
+    :tile-test-result="tileTestResult"
+    :default-tile-proxy-url="defaultTileProxyUrl"
     :links="uavStore.links"
     :interface-options="interfaceOptions"
     :port-options="portOptions"
@@ -364,6 +374,8 @@ onBeforeUnmount(() => {
     @update-link-kind="updateCommunicationLinkKind"
     @remove-link="removeCommunicationLink"
     @save-config="handleSaveConfig"
+    @test-tile-connection="handleTestTileConnection"
+    @reset-tile-url="handleResetTileUrl"
   />
 
   <TerrainWarningPanel

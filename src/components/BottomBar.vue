@@ -10,11 +10,12 @@ import {
   ScreenSpaceEventType,
 } from 'cesium'
 
-const longitude = ref('noData')
-const latitude = ref('noData')
-const seaLevel = ref('noData')
-const viewHeight = ref('noData')
-const scaleLabel = ref('noData')
+const longitude = ref('—')
+const latitude = ref('—')
+const seaLevel = ref('—')
+const elevationSource = ref<'WGS84' | 'DEM'>('WGS84')
+const viewHeight = ref('—')
+const scaleLabel = ref('—')
 const isDecimal = ref(true)
 const scaleBarRef = ref<HTMLElement>()
 
@@ -38,7 +39,7 @@ const DEFAULT_SCALE_BAR_PIXELS = 72
 
 function formatCoordinate(value: string) {
   const numericValue = Number(value)
-  if (!Number.isFinite(numericValue)) return 'noData'
+  if (!Number.isFinite(numericValue)) return '—'
   if (isDecimal.value) return `${numericValue.toFixed(6)}°`
 
   const sign = numericValue < 0 ? '-' : ''
@@ -47,11 +48,11 @@ function formatCoordinate(value: string) {
   const minutesFloat = (absolute - degrees) * 60
   const minutes = Math.floor(minutesFloat)
   const seconds = (minutesFloat - minutes) * 60
-  return `${sign}${degrees}°${String(minutes).padStart(2, '0')}'${seconds.toFixed(2).padStart(5, '0')}''`
+  return `${sign}${degrees}°${String(minutes).padStart(2, '0')}'${seconds.toFixed(2).padStart(5, '0')}″`
 }
 
-function formatHeight(value: number) {
-  if (!Number.isFinite(value) || value < 0) return 'noData'
+function formatHeight(value: number | undefined) {
+  if (value === undefined || !Number.isFinite(value) || value < 0) return '—'
   return value < 10_000
     ? `${value.toFixed(0)} m`
     : `${(value / 1000).toFixed(1)} km`
@@ -106,13 +107,13 @@ function pickGroundPoint(x: number, y: number) {
 }
 
 function formatScale(distance: number) {
-  if (!Number.isFinite(distance) || distance <= 0) return 'noData'
+  if (!Number.isFinite(distance) || distance <= 0) return '—'
   if (distance >= 1000) {
     const km = distance / 1000
     const decimals = km >= 100 ? 1 : 2
     return `${km.toFixed(decimals)} km`
   }
-  const decimals = distance < 10 ? 2 : distance < 100 ? 1 : 0
+  const decimals = distance < 10 ? 1 : 0
   return `${distance.toFixed(decimals)} m`
 }
 
@@ -129,7 +130,7 @@ function estimateMetersPerPixel(width: number, height: number) {
 
 function updateScale() {
   if (!viewer?.scene?.globe) {
-    scaleLabel.value = 'noData'
+    scaleLabel.value = '—'
     return
   }
 
@@ -140,7 +141,7 @@ function updateScale() {
   const width = viewer.scene.canvas.clientWidth
   const height = viewer.scene.canvas.clientHeight
   if (!width || !height) {
-    scaleLabel.value = 'noData'
+    scaleLabel.value = '—'
     return
   }
 
@@ -175,7 +176,7 @@ function updateScale() {
   metersPerPixel ??= estimateMetersPerPixel(width, height)
   if (!metersPerPixel) {
     smoothedScaleDistance = undefined
-    scaleLabel.value = 'noData'
+    scaleLabel.value = '—'
     return
   }
 
@@ -205,9 +206,11 @@ function updatePosition(screenPosition: any) {
     longitude.value = formatCoordinate(lastLongitude)
     latitude.value = formatCoordinate(lastLatitude)
 
-    const pickedHeight = Number(Cartographic.fromCartesian(position)?.height)
-    if (Number.isFinite(pickedHeight) && pickedHeight >= 0) {
-      seaLevel.value = `${pickedHeight.toFixed(2)} m`
+    const rawHeight = Number(Cartographic.fromCartesian(position)?.height)
+    if (Number.isFinite(rawHeight)) {
+      const displayHeight = Math.max(0, rawHeight)
+      seaLevel.value = `${displayHeight.toFixed(1)} m`
+      elevationSource.value = displayHeight > 0.5 ? 'DEM' : 'WGS84'
     }
 
     void getLevel13TerrainHeight(
@@ -215,12 +218,14 @@ function updatePosition(screenPosition: any) {
       CesiumMath.toDegrees(cartographic.latitude),
     ).then((terrainHeight) => {
       if (requestId !== positionRequestId || terrainHeight === undefined) return
-      seaLevel.value = `${terrainHeight.toFixed(2)} m`
+      const validTerrainHeight = Math.max(0, terrainHeight)
+      seaLevel.value = `${validTerrainHeight.toFixed(1)} m`
+      elevationSource.value = validTerrainHeight > 0.5 ? 'DEM' : 'WGS84'
     })
   } catch {
-    longitude.value = 'noData'
-    latitude.value = 'noData'
-    seaLevel.value = 'noData'
+    longitude.value = '—'
+    latitude.value = '—'
+    seaLevel.value = '—'
   }
 }
 
@@ -287,44 +292,72 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div id="map-footer" role="status" aria-live="polite">
-    <div class="status-content">
-      <span class="status-item coordinate-item">
-        <span class="status-label">经度：</span>
-        <span class="status-value">{{ longitude }}</span>
-      </span>
-      <span class="status-divider" aria-hidden="true"></span>
-      <span class="status-item coordinate-item">
-        <span class="status-label">纬度：</span>
-        <span class="status-value">{{ latitude }}</span>
-      </span>
-      <span class="status-divider" aria-hidden="true"></span>
-      <span class="status-item">
-        <span class="status-label">海拔：</span>
-        <span class="status-value">{{ seaLevel }}</span>
-      </span>
-      <span class="status-divider" aria-hidden="true"></span>
-      <span class="status-item">
-        <span class="status-label">视角：</span>
-        <span class="status-value">{{ viewHeight }}</span>
-      </span>
-      <span class="status-divider" aria-hidden="true"></span>
-      <span class="status-item scale-item">
-        <span class="status-label">比例尺：</span>
-        <span ref="scaleBarRef" class="scale-line" aria-hidden="true"></span>
-        <span class="status-value">{{ scaleLabel }}</span>
-      </span>
-      <button
-        class="format-button"
-        type="button"
-        :title="isDecimal ? '切换为度分秒格式' : '切换为十进制度格式'"
-        :aria-label="isDecimal ? '切换为度分秒格式' : '切换为十进制度格式'"
-        @click="toggleCoordinateFormat"
-      >
-        {{ isDecimal ? 'DD' : 'DMS' }}
-      </button>
+  <footer id="map-footer" role="status" aria-live="polite">
+    <div class="status-inner">
+      <!-- 左段：地理坐标系与经纬度定位 -->
+      <div class="status-section section-coords">
+        <span class="tac-badge" title="全球空间坐标参考基准">
+          <span class="tac-indicator"></span>
+          WGS-84
+        </span>
+
+        <div class="tac-field coord-field" title="当前光标所在经度">
+          <span class="tac-tag">LON</span>
+          <span class="tac-val">{{ longitude }}</span>
+        </div>
+
+        <span class="tac-sep" aria-hidden="true"></span>
+
+        <div class="tac-field coord-field" title="当前光标所在纬度">
+          <span class="tac-tag">LAT</span>
+          <span class="tac-val">{{ latitude }}</span>
+        </div>
+
+        <button
+          class="tac-mode-btn"
+          type="button"
+          :title="isDecimal ? '切换至度分秒格式 (DMS)' : '切换至十进制度格式 (DD)'"
+          :aria-label="isDecimal ? '切换至度分秒格式' : '切换至十进制度格式'"
+          @click="toggleCoordinateFormat"
+        >
+          {{ isDecimal ? 'DD' : 'DMS' }}
+        </button>
+      </div>
+
+      <!-- 中段：测绘高程与视场参数 -->
+      <div class="status-section section-elevation">
+        <div class="tac-field" title="光标处地表高程 (MSL / 椭球高)">
+          <span class="tac-tag">ELEV</span>
+          <span class="tac-val">{{ seaLevel }}</span>
+          <span
+            class="tac-source"
+            :class="elevationSource.toLowerCase()"
+            :title="elevationSource === 'DEM' ? '高程来源于数字高程模型' : '高程来源于 WGS-84 几何椭球参考面'"
+          >
+            {{ elevationSource }}
+          </span>
+        </div>
+
+        <span class="tac-sep" aria-hidden="true"></span>
+
+        <div class="tac-field" title="视点相机高度">
+          <span class="tac-tag">CAM</span>
+          <span class="tac-val">{{ viewHeight }}</span>
+        </div>
+      </div>
+
+      <!-- 右段：精密测绘比例尺 -->
+      <div class="status-section section-scale">
+        <div class="tac-field scale-field" title="地面几何比例尺">
+          <span class="tac-tag">SCALE</span>
+          <div class="tac-ruler-wrap">
+            <span ref="scaleBarRef" class="tac-ruler" aria-hidden="true"></span>
+          </div>
+          <span class="tac-val scale-val">{{ scaleLabel }}</span>
+        </div>
+      </div>
     </div>
-  </div>
+  </footer>
 </template>
 
 <style scoped>
@@ -333,168 +366,218 @@ onUnmounted(() => {
   right: 0;
   bottom: 0;
   left: 0;
-  z-index: 3;
-  min-height: 38px;
+  z-index: 10;
+  height: 36px;
+  min-height: 36px;
   padding: 0 16px;
-  color: rgba(240, 246, 250, 0.94);
-  font:
-    12px 'Segoe UI',
-    'Microsoft YaHei',
-    sans-serif;
-  background: rgba(12, 21, 29, 0.84);
-  border-top: 1px solid rgba(137, 205, 225, 0.4);
-  box-shadow: 0 -4px 20px rgba(3, 10, 16, 0.18);
-  backdrop-filter: blur(10px);
+  color: #cbd5e1;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 12px;
+  background: #090d13;
+  border-top: 1px solid #1e2838;
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.05);
   box-sizing: border-box;
   pointer-events: none;
+  user-select: none;
 }
 
-.status-content {
+.status-inner {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-height: 38px;
-  width: min(100%, 1240px);
+  justify-content: space-between;
+  height: 100%;
+  width: 100%;
   margin: 0 auto;
-  overflow-x: auto;
-  scrollbar-width: none;
 }
 
-.status-content::-webkit-scrollbar {
-  display: none;
-}
-
-.status-item {
+.status-section {
   display: inline-flex;
-  flex: 0 0 auto;
   align-items: center;
-  gap: 3px;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+
+.section-coords {
+  gap: 10px;
+}
+
+.section-elevation {
+  gap: 14px;
+}
+
+.section-scale {
+  justify-content: flex-end;
+}
+
+/* 战术标识徽标 */
+.tac-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  color: #94a3b8;
+  background: #111722;
+  border: 1px solid #233146;
+  border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.tac-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 5px rgba(16, 185, 129, 0.7);
+}
+
+/* 字段与标签 */
+.tac-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   white-space: nowrap;
 }
 
-.coordinate-item {
-  gap: 1px;
+.coord-field {
+  min-width: 136px;
 }
 
-.status-label {
-  color: rgba(224, 237, 244, 0.96);
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: 0;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+.tac-tag {
+  color: #94a3b8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
 }
 
-.status-value {
-  min-width: 0;
+.tac-val {
   color: #ffffff;
-  font-size: 12px;
-  font-weight: 650;
-  font-family: 'Cascadia Mono', 'Consolas', monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
-  text-align: left;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+  letter-spacing: 0.2px;
 }
 
-.coordinate-item .status-value {
-  width: 116px;
-  min-width: 116px;
-  text-align: left;
+.scale-val {
+  min-width: 60px;
 }
 
-.scale-item .status-value {
-  width: 68px;
-  min-width: 68px;
+/* 高程数据源指示 */
+.tac-source {
+  padding: 1px 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.1;
+  border-radius: 2px;
+  letter-spacing: 0.3px;
 }
 
-.status-divider {
+.tac-source.dem {
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.14);
+  border: 1px solid rgba(16, 185, 129, 0.32);
+}
+
+.tac-source.wgs84 {
+  color: #94a3b8;
+  background: rgba(100, 116, 139, 0.14);
+  border: 1px solid rgba(100, 116, 139, 0.28);
+}
+
+/* 分隔竖线 */
+.tac-sep {
   flex: 0 0 auto;
   width: 1px;
-  height: 19px;
-  margin: 0;
-  background: rgba(190, 218, 230, 0.54);
+  height: 14px;
+  background: #233044;
 }
 
-.scale-item {
-  gap: 5px;
-}
-
-.scale-line {
-  display: inline-block;
-  flex: 0 0 72px;
-  width: 72px;
-  height: 8px;
-  border-right: 2px solid #b9f3ff;
-  border-bottom: 2px solid #b9f3ff;
-  border-left: 2px solid #b9f3ff;
-  filter: drop-shadow(0 0 3px rgba(91, 218, 242, 0.72));
-}
-
-.format-button {
+/* 格式切换战术按键 */
+.tac-mode-btn {
   flex: 0 0 auto;
-  width: 32px;
-  height: 24px;
-  margin-left: 16px;
-  padding: 0;
-  color: #b9e8ef;
-  font:
-    600 10px 'Cascadia Mono',
-    'Consolas',
-    monospace;
-  background: rgba(66, 167, 187, 0.14);
-  border: 1px solid rgba(100, 196, 212, 0.46);
+  height: 22px;
+  padding: 0 8px;
+  color: #cbd5e1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  background: #141c27;
+  border: 1px solid #28374d;
   border-radius: 3px;
   cursor: pointer;
   pointer-events: auto;
+  transition: background-color 100ms ease, border-color 100ms ease, color 100ms ease;
 }
 
-.format-button:hover {
-  color: #fff;
-  background: rgba(66, 167, 187, 0.3);
-  border-color: rgba(141, 226, 237, 0.9);
+.tac-mode-btn:hover {
+  color: #ffffff;
+  background: #1e2a3b;
+  border-color: #38bdf8;
 }
 
-@media (max-width: 900px) {
+.tac-mode-btn:active {
+  background: #0f1620;
+  transform: translateY(1px);
+}
+
+/* 精密工程测绘标尺 */
+.tac-ruler-wrap {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 4px;
+}
+
+.tac-ruler {
+  display: inline-block;
+  flex: 0 0 72px;
+  width: 72px;
+  height: 5px;
+  border-right: 2px solid #cbd5e1;
+  border-bottom: 2px solid #cbd5e1;
+  border-left: 2px solid #cbd5e1;
+  position: relative;
+}
+
+.tac-ruler::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 1.5px;
+  height: 4px;
+  background: #94a3b8;
+  transform: translateX(-50%);
+}
+
+/* 响应式收敛 */
+@media (max-width: 1080px) {
   #map-footer {
-    padding: 0 9px;
+    padding: 0 10px;
   }
-  .status-content {
-    gap: 5px;
+  .status-section {
+    gap: 8px;
   }
-  .coordinate-item .status-value {
-    width: 112px;
-    min-width: 112px;
+  .coord-field {
+    min-width: 120px;
   }
-  .scale-line {
-    flex-basis: 72px;
-    width: 72px;
-  }
-}
-
-@media (max-width: 700px) {
-  #map-footer {
-    min-height: 32px;
-  }
-  .status-content {
-    min-height: 32px;
-    justify-content: flex-start;
-  }
-  .status-label {
+  .tac-badge {
     display: none;
   }
-  .status-content {
-    gap: 6px;
+}
+
+@media (max-width: 780px) {
+  .section-elevation {
+    display: none;
   }
-  .coordinate-item .status-value {
-    width: 112px;
-    min-width: 112px;
-  }
-  .scale-line {
+  .tac-ruler {
     flex-basis: 54px;
     width: 54px;
-  }
-  .format-button {
-    margin-left: 8px;
   }
 }
 </style>

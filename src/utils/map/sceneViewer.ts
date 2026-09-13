@@ -34,6 +34,7 @@ import {
   TDTLayerType,
   TDTProjectionType,
 } from './TDTProvider'
+import { getTileProxyUrl } from './tileConfig'
 
 // 防御性保护：防止在时钟 tick 阶段因为生命周期/异步加载导致 _dataSourceDisplay 暂未就绪或已销毁时抛出异常导致红框
 if (typeof Viewer !== 'undefined' && Viewer.prototype && !(Viewer.prototype as any)._safeOnTickPatched) {
@@ -64,28 +65,29 @@ function createImageryProviderViewModels(
   localImageryProvider?: ImageryProvider,
 ): ProviderViewModel[] {
   const baseLayers = localImageryProvider ? [localImageryProvider] : []
-  const tileProxyUrl =
-    (import.meta.env.VITE_TILE_PROXY_URL as string) || 'http://192.168.2.104:8088'
 
   return [
     new ProviderViewModel({
       name: '局域网/离线缓存影像',
-      tooltip: `通过局域网代理服务 (${tileProxyUrl}) 加载与自动缓存天地图影像及注记`,
+      tooltip: '通过局域网代理服务加载与自动缓存天地图影像及注记',
       iconUrl: buildModuleUrl('Widgets/Images/ImageryProviders/openStreetMap.png'),
       category: '影像底图',
-      creationFunction: () => [
-        ...baseLayers,
-        new UrlTemplateImageryProvider({
-          url: `${tileProxyUrl}/tiles/img/{z}/{x}/{y}.jpg`,
-          minimumLevel: 0,
-          maximumLevel: 18,
-        }),
-        new UrlTemplateImageryProvider({
-          url: `${tileProxyUrl}/tiles/cia/{z}/{x}/{y}.png`,
-          minimumLevel: 0,
-          maximumLevel: 18,
-        }),
-      ],
+      creationFunction: () => {
+        const activeUrl = getTileProxyUrl()
+        return [
+          ...baseLayers,
+          new UrlTemplateImageryProvider({
+            url: `${activeUrl}/tiles/img/{z}/{x}/{y}.jpg`,
+            minimumLevel: 0,
+            maximumLevel: 18,
+          }),
+          new UrlTemplateImageryProvider({
+            url: `${activeUrl}/tiles/cia/{z}/{x}/{y}.png`,
+            minimumLevel: 0,
+            maximumLevel: 18,
+          }),
+        ]
+      },
     }),
     new ProviderViewModel({
       name: '天地图影像',
@@ -285,7 +287,37 @@ async function initViewer(container: string | Element): Promise<Viewer> {
   viewer.cesiumWidget.screenSpaceEventHandler.removeInputAction(
     ScreenSpaceEventType.LEFT_CLICK,
   )
+  // 监听瓦片代理服务地址变动并热更新底图
+  if (typeof window !== 'undefined') {
+    window.addEventListener('gcs-tile-proxy-url-changed', () => {
+      refreshTileProxyLayers(viewer)
+    })
+  }
   return viewer
+}
+
+/**
+ * 刷新当前正使用的瓦片代理底图
+ */
+function refreshTileProxyLayers(viewerInstance?: Viewer): void {
+  const targetViewer =
+    viewerInstance ||
+    (typeof window !== 'undefined' ? (window as any).viewer : undefined)
+  if (!targetViewer || !targetViewer.baseLayerPicker) return
+
+  const vm = targetViewer.baseLayerPicker.viewModel
+  if (
+    vm &&
+    vm.selectedImagery &&
+    vm.selectedImagery.name === '局域网/离线缓存影像'
+  ) {
+    const current = vm.selectedImagery
+    vm.selectedImagery = undefined as any
+    vm.selectedImagery = current
+    if (targetViewer.scene) {
+      targetViewer.scene.requestRender()
+    }
+  }
 }
 
 /**
@@ -321,4 +353,4 @@ function showNavigator(viewer: Viewer) {
   options.enableDistanceLegend = true //比例尺组件 true启用，false禁用
   new CesiumNavigation(viewer, options)
 }
-export { initViewer, perfViewer, showNavigator }
+export { initViewer, perfViewer, showNavigator, refreshTileProxyLayers }

@@ -5,6 +5,14 @@ import { ref, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useUavStore } from '@/store/uavStore'
 import type { LinkDraft, LinkKind } from '@/store/commsConfig'
+import {
+  getTileProxyUrl,
+  setTileProxyUrl,
+  resetTileProxyUrl,
+  testTileProxyConnection,
+  DEFAULT_TILE_PROXY_URL,
+  type TileTestResult,
+} from '@/utils/map/tileConfig'
 
 export const baudRateOptions = [
   { label: '9600', value: 9600 },
@@ -37,6 +45,9 @@ export function useCommsSettings() {
   const uavStore = useUavStore()
 
   const showUdpModal = ref(false)
+  const tileProxyUrlInput = ref(getTileProxyUrl())
+  const tileTesting = ref(false)
+  const tileTestResult = ref<TileTestResult | null>(null)
 
   const interfaceOptions = computed(() => {
     const options = [{ label: '0.0.0.0 (默认路由网卡)', value: '0.0.0.0' }]
@@ -60,6 +71,8 @@ export function useCommsSettings() {
 
   async function openUdpSettings() {
     showUdpModal.value = true
+    tileProxyUrlInput.value = getTileProxyUrl()
+    tileTestResult.value = null
     try {
       await uavStore.fetchNetworkInterfaces()
       await uavStore.loadCommsConfig()
@@ -72,11 +85,39 @@ export function useCommsSettings() {
   async function handleSaveConfig() {
     try {
       await uavStore.saveCommsConfig()
+      // 保存瓦片代理服务配置
+      setTileProxyUrl(tileProxyUrlInput.value)
       message.success('配置已保存并成功应用热重载！')
       showUdpModal.value = false
     } catch (err) {
       message.error('保存配置失败: ' + err)
     }
+  }
+
+  async function handleTestTileConnection() {
+    if (!tileProxyUrlInput.value.trim()) {
+      message.warning('请输入瓦片代理服务地址')
+      return
+    }
+    tileTesting.value = true
+    tileTestResult.value = null
+    try {
+      const res = await testTileProxyConnection(tileProxyUrlInput.value)
+      tileTestResult.value = res
+      if (res.ok) {
+        message.success(res.message)
+      } else {
+        message.error(res.message)
+      }
+    } finally {
+      tileTesting.value = false
+    }
+  }
+
+  function handleResetTileUrl() {
+    tileProxyUrlInput.value = resetTileProxyUrl()
+    tileTestResult.value = null
+    message.info('已恢复为默认瓦片服务地址')
   }
 
   function addCommunicationLink() {
@@ -93,6 +134,10 @@ export function useCommsSettings() {
 
   return {
     showUdpModal,
+    tileProxyUrlInput,
+    tileTesting,
+    tileTestResult,
+    defaultTileProxyUrl: DEFAULT_TILE_PROXY_URL,
     interfaceOptions,
     portOptions,
     baudRateOptions,
@@ -101,6 +146,8 @@ export function useCommsSettings() {
     udpProtocolOptions,
     openUdpSettings,
     handleSaveConfig,
+    handleTestTileConnection,
+    handleResetTileUrl,
     addCommunicationLink,
     updateCommunicationLinkKind,
     removeCommunicationLink,
