@@ -3,9 +3,11 @@ import {
   TILE_PROXY_STORAGE_KEY,
   DEFAULT_TILE_PROXY_URL,
   normalizeTileUrl,
+  isValidTileProxyUrl,
   getTileProxyUrl,
   setTileProxyUrl,
   resetTileProxyUrl,
+  applyTileProxyUrlIfChanged,
   testTileProxyConnection,
 } from './tileConfig'
 
@@ -52,6 +54,15 @@ describe('tileConfig', () => {
       'http://192.168.1.100:8088',
     )
     expect(normalizeTileUrl('http://localhost:8088')).toBe('http://localhost:8088')
+  })
+
+  it('缺少 http/https 协议、空串或非 http 协议视为非法', () => {
+    expect(isValidTileProxyUrl('192.168.2.104:8088')).toBe(false)
+    expect(isValidTileProxyUrl('ftp://192.168.2.104:8088')).toBe(false)
+    expect(isValidTileProxyUrl('')).toBe(false)
+    expect(isValidTileProxyUrl('   ')).toBe(false)
+    expect(isValidTileProxyUrl('http://192.168.2.104:8088')).toBe(true)
+    expect(isValidTileProxyUrl('https://tiles.example.com/path/')).toBe(true)
   })
 
   it('未设置 localStorage 时应返回默认值', () => {
@@ -117,5 +128,73 @@ describe('tileConfig', () => {
     const result = await testTileProxyConnection('http://192.168.1.50:8088')
     expect(result.ok).toBe(false)
     expect(result.message).toContain('Network error')
+  })
+
+  it('setTileProxyUrl 拒绝非法 URL，不写入也不分发事件', () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+    const ok = setTileProxyUrl('192.168.2.104:8088')
+    expect(ok).toBe(false)
+    expect(store.get(TILE_PROXY_STORAGE_KEY)).toBeUndefined()
+    expect(dispatchSpy).not.toHaveBeenCalled()
+  })
+
+  it('localStorage 中的空串应回退到默认地址，而不是当成有效缓存', () => {
+    store.set(TILE_PROXY_STORAGE_KEY, '')
+    expect(getTileProxyUrl()).toBe(normalizeTileUrl(DEFAULT_TILE_PROXY_URL))
+  })
+
+  it('applyTileProxyUrlIfChanged 地址未变时不派发事件', () => {
+    setTileProxyUrl('http://192.168.2.200:8088')
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+    const result = applyTileProxyUrlIfChanged('http://192.168.2.200:8088/')
+    expect(result.applied).toBe(false)
+    expect(result.error).toBeUndefined()
+    expect(dispatchSpy).not.toHaveBeenCalled()
+  })
+
+  it('applyTileProxyUrlIfChanged 非法地址返回错误且不写入', () => {
+    const result = applyTileProxyUrlIfChanged('192.168.2.104:8088')
+    expect(result.applied).toBe(false)
+    expect(result.error).toMatch(/http/i)
+    expect(store.get(TILE_PROXY_STORAGE_KEY)).toBeUndefined()
+  })
+
+  it('applyTileProxyUrlIfChanged 合法且变化时才持久化', () => {
+    const result = applyTileProxyUrlIfChanged('http://10.0.0.8:8088/')
+    expect(result.applied).toBe(true)
+    expect(getTileProxyUrl()).toBe('http://10.0.0.8:8088')
+  })
+
+  it('testTileProxyConnection 缺协议不发请求', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const result = await testTileProxyConnection('192.168.1.50:8088')
+    expect(result.ok).toBe(false)
+    expect(result.message).toMatch(/http/i)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('testTileProxyConnection 非 JSON 的 200 响应视为失败', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError('Unexpected token < in JSON')
+      },
+    } as any)
+
+    const result = await testTileProxyConnection('http://192.168.1.50:8088')
+    expect(result.ok).toBe(false)
+    expect(result.message).toMatch(/JSON|解析/i)
+  })
+
+  it('超时文案使用传入的 timeoutMs，而不是写死 3 秒', async () => {
+    const abortError = new Error('aborted')
+    abortError.name = 'AbortError'
+    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(abortError)
+
+    const result = await testTileProxyConnection('http://192.168.1.50:8088', 1500)
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('1.5')
+    expect(result.message).not.toContain('3秒')
   })
 })

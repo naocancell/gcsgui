@@ -7,9 +7,10 @@ import { useUavStore } from '@/store/uavStore'
 import type { LinkDraft, LinkKind } from '@/store/commsConfig'
 import {
   getTileProxyUrl,
-  setTileProxyUrl,
-  resetTileProxyUrl,
+  applyTileProxyUrlIfChanged,
   testTileProxyConnection,
+  isValidTileProxyUrl,
+  normalizeTileUrl,
   DEFAULT_TILE_PROXY_URL,
   type TileTestResult,
 } from '@/utils/map/tileConfig'
@@ -83,10 +84,13 @@ export function useCommsSettings() {
   }
 
   async function handleSaveConfig() {
+    if (!isValidTileProxyUrl(tileProxyUrlInput.value)) {
+      message.error('瓦片服务地址须以 http:// 或 https:// 开头')
+      return
+    }
     try {
       await uavStore.saveCommsConfig()
-      // 保存瓦片代理服务配置
-      setTileProxyUrl(tileProxyUrlInput.value)
+      applyTileProxyUrlIfChanged(tileProxyUrlInput.value)
       message.success('配置已保存并成功应用热重载！')
       showUdpModal.value = false
     } catch (err) {
@@ -95,8 +99,8 @@ export function useCommsSettings() {
   }
 
   async function handleTestTileConnection() {
-    if (!tileProxyUrlInput.value.trim()) {
-      message.warning('请输入瓦片代理服务地址')
+    if (!isValidTileProxyUrl(tileProxyUrlInput.value)) {
+      message.warning('瓦片服务地址须以 http:// 或 https:// 开头')
       return
     }
     tileTesting.value = true
@@ -115,9 +119,9 @@ export function useCommsSettings() {
   }
 
   function handleResetTileUrl() {
-    tileProxyUrlInput.value = resetTileProxyUrl()
+    tileProxyUrlInput.value = normalizeTileUrl(DEFAULT_TILE_PROXY_URL)
     tileTestResult.value = null
-    message.info('已恢复为默认瓦片服务地址')
+    message.info('已恢复为默认瓦片服务地址，点击保存配置后生效')
   }
 
   function addCommunicationLink() {

@@ -19,6 +19,20 @@ export function normalizeTileUrl(url: string): string {
 }
 
 /**
+ * 瓦片代理地址必须是 http(s) 绝对 URL，避免相对路径打到 GCS 自身 origin。
+ */
+export function isValidTileProxyUrl(url: string): boolean {
+  const normalized = normalizeTileUrl(url)
+  if (!normalized) return false
+  try {
+    const parsed = new URL(normalized)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+/**
  * 获取当前生效的瓦片代理服务地址
  */
 export function getTileProxyUrl(): string {
@@ -34,7 +48,8 @@ export function getTileProxyUrl(): string {
 /**
  * 设置并持久化瓦片代理服务地址
  */
-export function setTileProxyUrl(url: string): void {
+export function setTileProxyUrl(url: string): boolean {
+  if (!isValidTileProxyUrl(url)) return false
   const normalized = normalizeTileUrl(url)
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem(TILE_PROXY_STORAGE_KEY, normalized)
@@ -46,6 +61,30 @@ export function setTileProxyUrl(url: string): void {
       }),
     )
   }
+  return true
+}
+
+export interface ApplyTileProxyUrlResult {
+  applied: boolean
+  error?: string
+}
+
+/**
+ * 仅在规范化后的地址相对当前生效值发生变化时才持久化并热更新。
+ */
+export function applyTileProxyUrlIfChanged(url: string): ApplyTileProxyUrlResult {
+  const normalized = normalizeTileUrl(url)
+  if (!isValidTileProxyUrl(normalized)) {
+    return {
+      applied: false,
+      error: '瓦片服务地址须以 http:// 或 https:// 开头',
+    }
+  }
+  if (normalized === getTileProxyUrl()) {
+    return { applied: false }
+  }
+  setTileProxyUrl(normalized)
+  return { applied: true }
 }
 
 /**
@@ -90,6 +129,9 @@ export async function testTileProxyConnection(
   if (!targetUrl) {
     return { ok: false, message: '瓦片服务地址不能为空' }
   }
+  if (!isValidTileProxyUrl(targetUrl)) {
+    return { ok: false, message: '瓦片服务地址须以 http:// 或 https:// 开头' }
+  }
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -109,7 +151,17 @@ export async function testTileProxyConnection(
       }
     }
 
-    const data = await res.json()
+    let data: {
+      status?: string
+      hitCount?: number
+      missCount?: number
+      cacheRoot?: string
+    }
+    try {
+      data = await res.json()
+    } catch {
+      return { ok: false, message: '服务响应不是有效的 JSON' }
+    }
     return {
       ok: true,
       message: '连接成功，瓦片服务正在运行中',
@@ -123,7 +175,11 @@ export async function testTileProxyConnection(
   } catch (err: any) {
     clearTimeout(timer)
     if (err.name === 'AbortError') {
-      return { ok: false, message: '连接超时（3秒内未收到响应），请检查 IP 与网络' }
+      const seconds = timeoutMs / 1000
+      return {
+        ok: false,
+        message: `连接超时（${seconds}秒内未收到响应），请检查 IP 与网络`,
+      }
     }
     return {
       ok: false,

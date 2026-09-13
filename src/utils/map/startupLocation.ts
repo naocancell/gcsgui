@@ -16,6 +16,7 @@ import {
 } from 'cesium'
 import type { Viewer } from 'cesium'
 import { getMapAssetsFile } from '@/utils/getAssets'
+import { setStartupLocationPicking } from '@/utils/map/mapPicking'
 
 export const STARTUP_LOCATION_STORAGE_KEY = 'GCS_STARTUP_LOCATION'
 export const STARTUP_LOCATION_CHANGED_EVENT = 'gcs-startup-location-changed'
@@ -256,6 +257,8 @@ export function startPickingStartupLocation(
     return () => {}
   }
 
+  setStartupLocationPicking(true)
+
   const canvas = viewer.scene.canvas
   const originalCursor = canvas.style.cursor
   canvas.style.cursor = 'crosshair'
@@ -263,6 +266,7 @@ export function startPickingStartupLocation(
   const handler = new ScreenSpaceEventHandler(canvas)
 
   const cleanup = () => {
+    setStartupLocationPicking(false)
     if (!handler.isDestroyed()) {
       handler.destroy()
     }

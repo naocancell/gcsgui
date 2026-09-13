@@ -419,7 +419,7 @@ onMounted(() => {
   handler.setInputAction(
     (movement: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
       
-      if (window.guidancePointPicking) return
+      if (window.guidancePointPicking || window.startupLocationPicking) return
       //picked包含图元信息primitive 也就是飞机
       const picked = viewer.scene.pick(movement.position)
       if (

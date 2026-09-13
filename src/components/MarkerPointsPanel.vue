@@ -25,6 +25,7 @@ import {
 } from 'vue'
 import { useMessage } from 'naive-ui'
 import { getMapAssetsFile } from '@/utils/getAssets'
+import { isExclusiveMapPicking } from '@/utils/map/mapPicking'
 import { CloseOutline } from '@vicons/ionicons5'
 
 type MarkerPoint = {
@@ -297,6 +298,7 @@ function handleMouseMove(event: ScreenSpaceEventHandler.MotionEvent) {
 }
 
 function handleMapClick(event: ScreenSpaceEventHandler.PositionedEvent) {
+  if (isExclusiveMapPicking()) return
   const cartesian = pickGroundPoint(event.position)
   if (!cartesian) {
     message.warning('无法获取该位置的地面坐标')

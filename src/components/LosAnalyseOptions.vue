@@ -16,6 +16,7 @@ import type {
   RouteLosAnalyseParams,
 } from '@/types/routeLineOfSight'
 import { cartesian2ToCartesian3 } from '@/utils/map/coordinate'
+import { isExclusiveMapPicking } from '@/utils/map/mapPicking'
 
 type ViewPointIndex = 0 | 1
 
@@ -172,6 +173,7 @@ function startMapPointPick(viewPointIndex: ViewPointIndex) {
 
     pointPickHandler.setInputAction(
       (event: ScreenSpaceEventHandler.PositionedEvent) => {
+        if (isExclusiveMapPicking()) return
         const position = cartesian2ToCartesian3(viewer, event.position)
         if (!position) {
           message.warning('未选中有效的地图位置，请重新选择')

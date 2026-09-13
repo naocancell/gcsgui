@@ -1,5 +1,4 @@
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
-import { LogicalSize } from '@tauri-apps/api/dpi'
 import { isTauri } from '@/utils/homeWindowData'
 
 export interface RestorablePodWindow {
@@ -42,13 +41,6 @@ export async function openOrRestorePodWindow() {
 
   const existingWindow = await WebviewWindow.getByLabel('pod')
   if (existingWindow) {
-    try {
-      await existingWindow.setSize(
-        new LogicalSize(podWindowOptions.width, podWindowOptions.height),
-      )
-    } catch {
-      // 忽略不支持平台
-    }
     await existingWindow.unminimize()
     await existingWindow.show()
     await existingWindow.setFocus()

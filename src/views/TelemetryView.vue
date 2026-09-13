@@ -2,14 +2,16 @@
   <div class="telemetry-page-wrapper">
     <UavTelemetryPanel
       :standalone="true"
+      :maximized="maximized"
       @minimize="handleWindowMinimize"
+      @maximize="handleWindowMaximize"
       @close="handleWindowClose"
     />
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount } from 'vue'
+import { onMounted, onBeforeUnmount, ref } from 'vue'
 import UavTelemetryPanel from '@/components/UavTelemetryPanel.vue'
 import { useUavStore } from '@/store/uavStore'
 import { useStaticStore } from '@/store/staticStore'
@@ -29,11 +31,21 @@ let networkHandlerOnline: (() => void) | null = null
 let networkHandlerOffline: (() => void) | null = null
 let configChangedUnlisten: UnlistenFn | null = null
 let closeRequestedUnlisten: UnlistenFn | null = null
-//获取当前窗口
+let resizedUnlisten: UnlistenFn | null = null
 const telemetryWindow = getCurrentWindow()
-//最小
+const maximized = ref(false)
+
+async function syncMaximized() {
+  maximized.value = await telemetryWindow.isMaximized()
+}
+
 async function handleWindowMinimize() {
   await telemetryWindow.minimize()
+}
+
+async function handleWindowMaximize() {
+  await telemetryWindow.toggleMaximize()
+  await syncMaximized()
 }
 //关闭
 async function handleWindowClose() {
@@ -43,9 +55,12 @@ async function handleWindowClose() {
 onMounted(async () => {
    //窗口关闭监听 执行回调
   closeRequestedUnlisten = await telemetryWindow.onCloseRequested(async (event) => {
-    // ts中自定义函数  阻止关闭 隐藏窗口到后台
     await preserveTelemetryWindowOnClose(event, telemetryWindow)
   })
+  resizedUnlisten = await telemetryWindow.onResized(() => {
+    void syncMaximized()
+  })
+  await syncMaximized()
 
    // navigator：浏览器环境信息对象 检查离线状态
   if (!window.navigator.onLine) {
@@ -83,6 +98,7 @@ onBeforeUnmount(() => {
   if (networkHandlerOffline) window.removeEventListener('offline', networkHandlerOffline)
   if (configChangedUnlisten) configChangedUnlisten()
   if (closeRequestedUnlisten) closeRequestedUnlisten()
+  if (resizedUnlisten) resizedUnlisten()
 })
 </script>
 

@@ -1,5 +1,4 @@
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
-import { LogicalSize } from '@tauri-apps/api/dpi'
 import { isTauri } from '@/utils/homeWindowData'
 
 export interface RestorableTelemetryWindow {
@@ -42,16 +41,6 @@ export async function openOrRestoreTelemetryWindow() {
 
   const existingWindow = await WebviewWindow.getByLabel('telemetry')
   if (existingWindow) {
-    try {
-      await existingWindow.setSize(
-        new LogicalSize(
-          telemetryWindowOptions.width,
-          telemetryWindowOptions.height,
-        ),
-      )
-    } catch {
-      // 忽略不支持平台
-    }
     await existingWindow.unminimize()
     await existingWindow.show()
     await existingWindow.setFocus()

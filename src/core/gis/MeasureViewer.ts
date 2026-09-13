@@ -4,6 +4,7 @@ import { markRaw } from 'vue'
 import { useStaticStore } from '@/store/staticStore'
 import { useLayerStore } from '@/store/layerManagerStore'
 import { ByDirectionAndLen } from '@/utils/map/geocomputation'
+import { isExclusiveMapPicking } from '@/utils/map/mapPicking'
 import type { Airline } from '@/types/entityoptions'
 
 export interface GraphicStyle {
@@ -172,6 +173,7 @@ export class MeasureViewer {
 
     // 绑定鼠标左击事件
     this.handler.setInputAction((e: any) => {
+      if (isExclusiveMapPicking()) return
       let position = this.viewer.scene.pickPosition(e.position)
       if (!position) {
         const ellipsoid = this.viewer.scene.globe.ellipsoid
@@ -1231,6 +1233,7 @@ export class MeasureViewer {
 
     // 鼠标左键--确定选中点
     this.handler.setInputAction((event: any) => {
+      if (isExclusiveMapPicking()) return
       const ray = this.viewer.camera.getPickRay(event.position)
       if (!ray) return
       const earthPosition = this.viewer.scene.globe.pick(ray, this.viewer.scene)
@@ -1714,6 +1717,7 @@ export class MeasureViewer {
 
   public leftClickEvent(): void {
     this.handler?.setInputAction((e: any) => {
+      if (isExclusiveMapPicking()) return
       let position = this.viewer.scene.pickPosition(e.position)
       if (!position) {
         const ellipsoid = this.viewer.scene.globe.ellipsoid
@@ -1857,6 +1861,7 @@ export class MeasureViewer {
     }
 
     this.handler?.setInputAction((event: any) => {
+      if (isExclusiveMapPicking()) return
       const earthPosition = pickPoint(event.position)
       if (!earthPosition) return
 
@@ -1962,6 +1967,7 @@ export class MeasureViewer {
     }
 
     this.handler?.setInputAction((event: any) => {
+      if (isExclusiveMapPicking()) return
       if (aPolygon) return
 
       const cartesian = pickPoint(event.position)
@@ -2107,6 +2113,7 @@ export class MeasureViewer {
     }
 
     this.handler?.setInputAction((event: any) => {
+      if (isExclusiveMapPicking()) return
       if (centerPoint === null) {
         centerPoint = pickPoint(event.position) || null
       }

@@ -287,13 +287,25 @@ async function initViewer(container: string | Element): Promise<Viewer> {
   viewer.cesiumWidget.screenSpaceEventHandler.removeInputAction(
     ScreenSpaceEventType.LEFT_CLICK,
   )
-  // 监听瓦片代理服务地址变动并热更新底图
-  if (typeof window !== 'undefined') {
-    window.addEventListener('gcs-tile-proxy-url-changed', () => {
-      refreshTileProxyLayers(viewer)
-    })
-  }
+  bindTileProxyUrlListener(viewer)
   return viewer
+}
+
+let unbindTileProxyUrl: (() => void) | undefined
+
+function bindTileProxyUrlListener(viewer: Viewer) {
+  unbindTileProxyUrlListener()
+  if (typeof window === 'undefined') return
+  const onChange = () => refreshTileProxyLayers(viewer)
+  window.addEventListener('gcs-tile-proxy-url-changed', onChange)
+  unbindTileProxyUrl = () => {
+    window.removeEventListener('gcs-tile-proxy-url-changed', onChange)
+  }
+}
+
+export function unbindTileProxyUrlListener() {
+  unbindTileProxyUrl?.()
+  unbindTileProxyUrl = undefined
 }
 
 /**
@@ -303,7 +315,14 @@ function refreshTileProxyLayers(viewerInstance?: Viewer): void {
   const targetViewer =
     viewerInstance ||
     (typeof window !== 'undefined' ? (window as any).viewer : undefined)
-  if (!targetViewer || !targetViewer.baseLayerPicker) return
+  if (
+    !targetViewer ||
+    (typeof targetViewer.isDestroyed === 'function' &&
+      targetViewer.isDestroyed()) ||
+    !targetViewer.baseLayerPicker
+  ) {
+    return
+  }
 
   const vm = targetViewer.baseLayerPicker.viewModel
   if (

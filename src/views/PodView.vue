@@ -2,14 +2,16 @@
   <div class="pod-page-wrapper">
     <PodControlPanel
       :standalone="true"
+      :maximized="maximized"
       @minimize="handleWindowMinimize"
+      @maximize="handleWindowMaximize"
       @close="handleWindowClose"
     />
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount } from 'vue'
+import { onMounted, onBeforeUnmount, ref } from 'vue'
 import PodControlPanel from '@/components/PodControlPanel.vue'
 import { useUavStore } from '@/store/uavStore'
 import { usePodStore } from '@/store/podStore'
@@ -31,11 +33,21 @@ let networkHandlerOnline: (() => void) | null = null
 let networkHandlerOffline: (() => void) | null = null
 let configChangedUnlisten: UnlistenFn | null = null
 let closeRequestedUnlisten: UnlistenFn | null = null
-// 获取当前窗口
+let resizedUnlisten: UnlistenFn | null = null
 const podWindow = getCurrentWindow()
-// 最小化
+const maximized = ref(false)
+
+async function syncMaximized() {
+  maximized.value = await podWindow.isMaximized()
+}
+
 async function handleWindowMinimize() {
   await podWindow.minimize()
+}
+
+async function handleWindowMaximize() {
+  await podWindow.toggleMaximize()
+  await syncMaximized()
 }
 // 关闭（隐藏保留）
 async function handleWindowClose() {
@@ -49,6 +61,10 @@ onMounted(async () => {
     await podStore.stopAll()
     await preservePodWindowOnClose(event, podWindow)
   })
+  resizedUnlisten = await podWindow.onResized(() => {
+    void syncMaximized()
+  })
+  await syncMaximized()
 
   // 网络状态监测
   if (!window.navigator.onLine) {
@@ -89,6 +105,7 @@ onBeforeUnmount(() => {
   if (networkHandlerOffline) window.removeEventListener('offline', networkHandlerOffline)
   if (configChangedUnlisten) configChangedUnlisten()
   if (closeRequestedUnlisten) closeRequestedUnlisten()
+  if (resizedUnlisten) resizedUnlisten()
   podStore.dispose()
 })
 </script>

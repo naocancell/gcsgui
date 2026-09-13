@@ -4,6 +4,7 @@
     <div
       class="panel-header"
       :data-tauri-drag-region="props.standalone ? '' : undefined"
+      @dblclick="onHeaderDblClick"
     >
       <div
         class="title"
@@ -31,7 +32,12 @@
           <span class="status-dot"></span>
           <span>{{ ackFresh ? 'ACK' : '装订回执' }}</span>
         </div>
-        <div v-if="props.standalone" class="window-controls" @mousedown.stop>
+        <div
+          v-if="props.standalone"
+          class="window-controls"
+          @mousedown.stop
+          @dblclick.stop
+        >
           <button
             class="window-control"
             type="button"
@@ -41,6 +47,21 @@
           >
             <svg aria-hidden="true" viewBox="0 0 12 12">
               <path d="M2 8.5h8" />
+            </svg>
+          </button>
+          <button
+            class="window-control"
+            type="button"
+            :aria-label="props.maximized ? '还原吊舱控制窗口' : '最大化吊舱控制窗口'"
+            :title="props.maximized ? '还原' : '最大化'"
+            @click="emit('maximize')"
+          >
+            <svg v-if="!props.maximized" aria-hidden="true" viewBox="0 0 12 12">
+              <rect x="2.5" y="2.5" width="7" height="7" />
+            </svg>
+            <svg v-else aria-hidden="true" viewBox="0 0 12 12">
+              <rect x="3.5" y="2" width="6" height="6" />
+              <rect x="2" y="3.5" width="6" height="6" />
             </svg>
           </button>
           <button
@@ -622,12 +643,18 @@ import {
 
 const props = defineProps<{
   standalone?: boolean
+  maximized?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'minimize'): void
+  (e: 'maximize'): void
   (e: 'close'): void
 }>()
+
+function onHeaderDblClick() {
+  if (props.standalone) emit('maximize')
+}
 
 const uavStore = useUavStore()
 const podStore = usePodStore()

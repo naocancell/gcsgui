@@ -12,7 +12,12 @@ import {
 } from '@/utils/map/SpatialAnalysis'
 import { useMarkObstacle } from '@/hooks/useMarkObstacle'
 import { useLoadPlane } from '@/hooks/useLoadPlane'
-import { initViewer, perfViewer } from '@/utils/map/sceneViewer'
+import {
+  initViewer,
+  perfViewer,
+  refreshTileProxyLayers,
+  unbindTileProxyUrlListener,
+} from '@/utils/map/sceneViewer'
 
 // Mock DOM & Window environment for Node testing
 const createdElements = new Map<string, any>()
@@ -291,6 +296,38 @@ describe('Milestone 5: Performance & Memory Lifecycle Optimization', () => {
       expect(viewer.scene.globe.tileCacheSize).toBe(100)
       expect(viewer.scene.moon.show).toBe(false)
       expect(viewer.scene.sun.show).toBe(false)
+    })
+
+    it('does not refresh tile layers when viewer is destroyed', () => {
+      const selectedImagery = { name: '局域网/离线缓存影像' }
+      const viewer: any = {
+        isDestroyed: () => true,
+        baseLayerPicker: {
+          viewModel: { selectedImagery },
+        },
+        scene: { requestRender: vi.fn() },
+      }
+      refreshTileProxyLayers(viewer)
+      expect(viewer.baseLayerPicker.viewModel.selectedImagery).toBe(
+        selectedImagery,
+      )
+      expect(viewer.scene.requestRender).not.toHaveBeenCalled()
+    })
+
+    it('unbindTileProxyUrlListener removes the hot-reload listener', async () => {
+      mockWindow.addEventListener.mockClear()
+      mockWindow.removeEventListener.mockClear()
+      const container = mockDocument.createElement('div')
+      await initViewer(container)
+      expect(mockWindow.addEventListener).toHaveBeenCalledWith(
+        'gcs-tile-proxy-url-changed',
+        expect.any(Function),
+      )
+      unbindTileProxyUrlListener()
+      expect(mockWindow.removeEventListener).toHaveBeenCalledWith(
+        'gcs-tile-proxy-url-changed',
+        expect.any(Function),
+      )
     })
 
     it('preserves requestRenderMode = true in useLoadPlane and calls requestRender', () => {

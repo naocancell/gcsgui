@@ -128,6 +128,7 @@ import {
   initViewer,
   perfViewer,
   showNavigator,
+  unbindTileProxyUrlListener,
 } from '@/utils/map/sceneViewer.ts'
 import MeasureViewer from '@/core/gis/MeasureViewer'
 import { useLoadPlane } from '@/hooks/useLoadPlane'
@@ -467,7 +468,6 @@ onMounted(async () => {
         console.warn('启动时定位失败:', error)
       })
 
-    // 3. 检查是否存在已持久化的启动定位点，若存在则绘制标记并平滑飞抵
     const savedStartup = getStartupLocation()
     if (savedStartup) {
       currentStartupLoc.value = savedStartup
@@ -478,7 +478,6 @@ onMounted(async () => {
       }, 500)
     }
 
-    // 4. 监听地图上对启动点标记图标的右键与左键点击管理
     const canvas = viewer.scene.canvas
     canvas.addEventListener('contextmenu', handleCanvasContextMenu)
 
@@ -532,6 +531,7 @@ function handleStartupLocationEvent(e: Event) {
 
 onUnmounted(() => {
   cancelPickLocation()
+  unbindTileProxyUrlListener()
   if (viewer && viewer.scene && viewer.scene.canvas) {
     viewer.scene.canvas.removeEventListener('contextmenu', handleCanvasContextMenu)
   }

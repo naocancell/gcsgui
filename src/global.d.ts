@@ -18,5 +18,6 @@ declare global {
     viewer: Viewer
     measureViewer: any
     guidancePointPicking?: boolean
+    startupLocationPicking?: boolean
   }
 }

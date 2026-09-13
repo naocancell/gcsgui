@@ -4,16 +4,18 @@ import {
   Cartesian2,
   Cartographic,
   EllipsoidGeodesic,
+  EllipsoidTerrainProvider,
   Math as CesiumMath,
   sampleTerrain,
   ScreenSpaceEventHandler,
   ScreenSpaceEventType,
 } from 'cesium'
+import { resolveElevationSample } from '@/utils/map/elevationDisplay'
 
 const longitude = ref('—')
 const latitude = ref('—')
 const seaLevel = ref('—')
-const elevationSource = ref<'WGS84' | 'DEM'>('WGS84')
+const elevationSource = ref<'WGS84' | 'DEM' | ''>('')
 const viewHeight = ref('—')
 const scaleLabel = ref('—')
 const isDecimal = ref(true)
@@ -188,6 +190,26 @@ function updateScale() {
   scaleLabel.value = formatScale(smoothedScaleDistance)
 }
 
+function isEllipsoidTerrain() {
+  return (
+    !viewer?.terrainProvider ||
+    viewer.terrainProvider instanceof EllipsoidTerrainProvider
+  )
+}
+
+function applyElevation(sample: ReturnType<typeof resolveElevationSample>) {
+  if (!sample) return
+  seaLevel.value = sample.text
+  elevationSource.value = sample.source
+}
+
+function clearCursorPosition() {
+  longitude.value = '—'
+  latitude.value = '—'
+  seaLevel.value = '—'
+  elevationSource.value = ''
+}
+
 function updatePosition(screenPosition: any) {
   lastPositionUpdate = Date.now()
   const requestId = ++positionRequestId
@@ -207,25 +229,32 @@ function updatePosition(screenPosition: any) {
     latitude.value = formatCoordinate(lastLatitude)
 
     const rawHeight = Number(Cartographic.fromCartesian(position)?.height)
-    if (Number.isFinite(rawHeight)) {
-      const displayHeight = Math.max(0, rawHeight)
-      seaLevel.value = `${displayHeight.toFixed(1)} m`
-      elevationSource.value = displayHeight > 0.5 ? 'DEM' : 'WGS84'
-    }
+    const terrainIsEllipsoid = isEllipsoidTerrain()
+    applyElevation(
+      resolveElevationSample({
+        height: rawHeight,
+        terrainIsEllipsoid,
+        terrainSampleOk: false,
+      }),
+    )
+
+    if (terrainIsEllipsoid) return
 
     void getLevel13TerrainHeight(
       CesiumMath.toDegrees(cartographic.longitude),
       CesiumMath.toDegrees(cartographic.latitude),
     ).then((terrainHeight) => {
-      if (requestId !== positionRequestId || terrainHeight === undefined) return
-      const validTerrainHeight = Math.max(0, terrainHeight)
-      seaLevel.value = `${validTerrainHeight.toFixed(1)} m`
-      elevationSource.value = validTerrainHeight > 0.5 ? 'DEM' : 'WGS84'
+      if (requestId !== positionRequestId) return
+      applyElevation(
+        resolveElevationSample({
+          height: terrainHeight,
+          terrainIsEllipsoid: false,
+          terrainSampleOk: terrainHeight !== undefined,
+        }),
+      )
     })
   } catch {
-    longitude.value = '—'
-    latitude.value = '—'
-    seaLevel.value = '—'
+    clearCursorPosition()
   }
 }
 
@@ -294,7 +323,6 @@ onUnmounted(() => {
 <template>
   <footer id="map-footer" role="status" aria-live="polite">
     <div class="status-inner">
-      <!-- 左段：地理坐标系与经纬度定位 -->
       <div class="status-section section-coords">
         <span class="tac-badge" title="全球空间坐标参考基准">
           <span class="tac-indicator"></span>
@@ -324,12 +352,12 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <!-- 中段：测绘高程与视场参数 -->
       <div class="status-section section-elevation">
         <div class="tac-field" title="光标处地表高程 (MSL / 椭球高)">
           <span class="tac-tag">ELEV</span>
           <span class="tac-val">{{ seaLevel }}</span>
           <span
+            v-if="elevationSource"
             class="tac-source"
             :class="elevationSource.toLowerCase()"
             :title="elevationSource === 'DEM' ? '高程来源于数字高程模型' : '高程来源于 WGS-84 几何椭球参考面'"
@@ -346,7 +374,6 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- 右段：精密测绘比例尺 -->
       <div class="status-section section-scale">
         <div class="tac-field scale-field" title="地面几何比例尺">
           <span class="tac-tag">SCALE</span>
@@ -378,7 +405,6 @@ onUnmounted(() => {
   box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.05);
   box-sizing: border-box;
   pointer-events: none;
-  user-select: none;
 }
 
 .status-inner {
@@ -409,7 +435,6 @@ onUnmounted(() => {
   justify-content: flex-end;
 }
 
-/* 战术标识徽标 */
 .tac-badge {
   display: inline-flex;
   align-items: center;
@@ -460,6 +485,8 @@ onUnmounted(() => {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.2px;
+  pointer-events: auto;
+  user-select: text;
 }
 
 .scale-val {
@@ -497,7 +524,6 @@ onUnmounted(() => {
   background: #233044;
 }
 
-/* 格式切换战术按键 */
 .tac-mode-btn {
   flex: 0 0 auto;
   height: 22px;
@@ -526,7 +552,6 @@ onUnmounted(() => {
   transform: translateY(1px);
 }
 
-/* 精密工程测绘标尺 */
 .tac-ruler-wrap {
   display: inline-flex;
   align-items: center;
