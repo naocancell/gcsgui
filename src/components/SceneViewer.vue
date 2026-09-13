@@ -43,22 +43,64 @@
       </template>
       {{ locating ? '正在定位…' : '回到当前位置' }}
     </n-tooltip>
+
+    <!-- 启动基准定位点 -->
+    <n-tooltip placement="left" trigger="hover">
+      <template #trigger>
+        <button
+          type="button"
+          class="location-btn"
+          :class="{
+            'is-picking': isPickingStartup,
+            'has-target': Boolean(currentStartupLoc),
+          }"
+          aria-label="启动定位点"
+          @click="handleStartupBtnClick"
+          @contextmenu.prevent="handleStartupContextMenu"
+        >
+          <n-icon size="18">
+            <PinOutline />
+          </n-icon>
+        </button>
+      </template>
+      {{ startupTooltipText }}
+    </n-tooltip>
   </div>
+
+  <!-- 启动点右键管理菜单 -->
+  <n-dropdown
+    placement="bottom-start"
+    trigger="manual"
+    :x="dropdownX"
+    :y="dropdownY"
+    :options="startupDropdownOptions"
+    :show="showStartupDropdown"
+    :on-clickoutside="() => (showStartupDropdown = false)"
+    @select="handleStartupDropdownSelect"
+  />
 </template>
 
 <script setup lang="ts">
 import PlaneInfo from './PlaneInfo.vue'
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, computed, nextTick } from 'vue'
 import {
   Viewer,
   Ion,
   CustomDataSource,
   createWorldTerrainAsync,
+  Cartesian2,
   Cartesian3,
   Rectangle,
+  ScreenSpaceEventHandler,
+  ScreenSpaceEventType,
 } from 'cesium'
-import { NIcon, NTooltip, useMessage } from 'naive-ui'
-import { LocateOutline, GlobeOutline, RefreshOutline } from '@vicons/ionicons5'
+import { NIcon, NTooltip, NDropdown, useMessage } from 'naive-ui'
+import {
+  LocateOutline,
+  GlobeOutline,
+  RefreshOutline,
+  PinOutline,
+} from '@vicons/ionicons5'
 import {
   flyToMyLocation,
   clearMyLocationMarker,
@@ -69,6 +111,18 @@ import {
   formatLonLat,
   resolveMyLocation,
 } from '@/utils/map/myLocation'
+import {
+  getStartupLocation,
+  setStartupLocation,
+  clearStartupLocation,
+  showStartupLocationMarker,
+  clearStartupLocationMarker,
+  flyToStartupLocation,
+  startPickingStartupLocation,
+  formatStartupLocationLabel,
+  STARTUP_LOCATION_CHANGED_EVENT,
+  type StartupLocation,
+} from '@/utils/map/startupLocation'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import {
   initViewer,
@@ -127,6 +181,140 @@ const locateAndShowMyLocation = async () => {
   } finally {
     locating.value = false
   }
+}
+
+// 启动定位点状态
+const currentStartupLoc = ref<StartupLocation | null>(getStartupLocation())
+const isPickingStartup = ref(false)
+let stopPickingFn: (() => void) | null = null
+
+// 右键管理菜单状态
+const showStartupDropdown = ref(false)
+const dropdownX = ref(0)
+const dropdownY = ref(0)
+
+const startupTooltipText = computed(() => {
+  if (isPickingStartup.value) return '选点中…（按 ESC 取消）'
+  if (currentStartupLoc.value) return '回到启动点位（右键管理）'
+  return '设置启动点位'
+})
+
+const startupDropdownOptions = computed(() => {
+  if (!currentStartupLoc.value) {
+    return [{ label: '设置启动点位', key: 'pick' }]
+  }
+  return [
+    { label: '飞往启动点', key: 'fly' },
+    { label: '重新选点', key: 'repick' },
+    { label: '清除启动点', key: 'clear' },
+  ]
+})
+
+function openStartupMenu(clientX: number, clientY: number) {
+  showStartupDropdown.value = false
+  nextTick(() => {
+    dropdownX.value = clientX
+    dropdownY.value = clientY
+    showStartupDropdown.value = true
+  })
+}
+
+function handleStartupBtnClick(e: MouseEvent) {
+  if (isPickingStartup.value) {
+    cancelPickLocation()
+    return
+  }
+  if (currentStartupLoc.value) {
+    // 已设置启动点时，左键点击直接在按钮位置弹出菜单（包含飞往、重选、清除）
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    openStartupMenu(rect.left - 10, rect.bottom + 4)
+  } else {
+    startPickLocation()
+  }
+}
+
+function handleStartupContextMenu(e: MouseEvent) {
+  e.preventDefault()
+  if (isPickingStartup.value) {
+    cancelPickLocation()
+    return
+  }
+  openStartupMenu(e.clientX, e.clientY)
+}
+
+function handleStartupDropdownSelect(key: string) {
+  showStartupDropdown.value = false
+  if (key === 'fly') {
+    handleFlyToStartup()
+  } else if (key === 'pick' || key === 'repick') {
+    startPickLocation()
+  } else if (key === 'clear') {
+    handleClearStartupLocation()
+  }
+}
+
+function startPickLocation() {
+  if (!viewer || viewer.isDestroyed()) {
+    message.warning('地图尚未初始化')
+    return
+  }
+  if (isPickingStartup.value) {
+    cancelPickLocation()
+    return
+  }
+
+  isPickingStartup.value = true
+  message.info('请在地图上单击选取启动点位，按 Esc 或右键取消')
+
+  stopPickingFn = startPickingStartupLocation(viewer, {
+    onPicked: (coord) => {
+      isPickingStartup.value = false
+      stopPickingFn = null
+      const loc: StartupLocation = {
+        longitude: coord.longitude,
+        latitude: coord.latitude,
+        height: coord.height,
+        name: '启动基准点',
+      }
+      setStartupLocation(loc)
+      currentStartupLoc.value = loc
+      showStartupLocationMarker(viewer, loc)
+      flyToStartupLocation(viewer, loc, 1.8)
+      message.success('已保存启动定位点')
+    },
+    onCancel: () => {
+      isPickingStartup.value = false
+      stopPickingFn = null
+      message.info('已取消选点')
+    },
+  })
+}
+
+function cancelPickLocation() {
+  if (stopPickingFn) {
+    stopPickingFn()
+    stopPickingFn = null
+  }
+  isPickingStartup.value = false
+}
+
+function handleFlyToStartup() {
+  if (!viewer || viewer.isDestroyed()) return
+  if (currentStartupLoc.value) {
+    flyToStartupLocation(viewer, currentStartupLoc.value, 1.8)
+    message.info('正在飞往启动点位')
+  } else {
+    startPickLocation()
+  }
+}
+
+function handleClearStartupLocation() {
+  clearStartupLocation()
+  currentStartupLoc.value = null
+  if (viewer) {
+    clearStartupLocationMarker(viewer)
+  }
+  message.success('已清除启动点位')
 }
 
 // 飞往完整地球范围，避免复用定位按钮的局部视角。
@@ -278,12 +466,83 @@ onMounted(async () => {
       .catch((error) => {
         console.warn('启动时定位失败:', error)
       })
+
+    // 3. 检查是否存在已持久化的启动定位点，若存在则绘制标记并平滑飞抵
+    const savedStartup = getStartupLocation()
+    if (savedStartup) {
+      currentStartupLoc.value = savedStartup
+      showStartupLocationMarker(viewer, savedStartup)
+      setTimeout(() => {
+        if (!viewer || viewer.isDestroyed()) return
+        flyToStartupLocation(viewer, savedStartup, 2.0)
+      }, 500)
+    }
+
+    // 4. 监听地图上对启动点标记图标的右键与左键点击管理
+    const canvas = viewer.scene.canvas
+    canvas.addEventListener('contextmenu', handleCanvasContextMenu)
+
+    markerScreenHandler = new ScreenSpaceEventHandler(canvas)
+    // 左键点击地图图钉标记也直接弹出管理菜单
+    markerScreenHandler.setInputAction((movement: { position: Cartesian2 }) => {
+      if (isPickingStartup.value || !viewer || viewer.isDestroyed()) return
+      const picked = viewer.scene.pick(movement.position)
+      if (picked && picked.id && picked.id.id === 'startup-location-marker') {
+        const canvasRect = viewer.scene.canvas.getBoundingClientRect()
+        openStartupMenu(
+          canvasRect.left + movement.position.x,
+          canvasRect.top + movement.position.y,
+        )
+      }
+    }, ScreenSpaceEventType.LEFT_CLICK)
+
+    window.addEventListener(
+      STARTUP_LOCATION_CHANGED_EVENT,
+      handleStartupLocationEvent,
+    )
   } catch (err: any) {
     console.error('SceneViewer onMounted 异常:', err)
   }
 })
 
+let markerScreenHandler: ScreenSpaceEventHandler | undefined
+
+function handleCanvasContextMenu(e: MouseEvent) {
+  if (isPickingStartup.value) {
+    e.preventDefault()
+    return
+  }
+  if (!viewer || viewer.isDestroyed()) return
+  const canvasRect = viewer.scene.canvas.getBoundingClientRect()
+  const windowPosition = new Cartesian2(
+    e.clientX - canvasRect.left,
+    e.clientY - canvasRect.top,
+  )
+  const picked = viewer.scene.pick(windowPosition)
+  if (picked && picked.id && picked.id.id === 'startup-location-marker') {
+    e.preventDefault()
+    openStartupMenu(e.clientX, e.clientY)
+  }
+}
+
+function handleStartupLocationEvent(e: Event) {
+  const customEvent = e as CustomEvent<StartupLocation | null>
+  currentStartupLoc.value = customEvent.detail
+}
+
 onUnmounted(() => {
+  cancelPickLocation()
+  if (viewer && viewer.scene && viewer.scene.canvas) {
+    viewer.scene.canvas.removeEventListener('contextmenu', handleCanvasContextMenu)
+  }
+  if (markerScreenHandler && !markerScreenHandler.isDestroyed()) {
+    markerScreenHandler.destroy()
+    markerScreenHandler = undefined
+  }
+  window.removeEventListener(
+    STARTUP_LOCATION_CHANGED_EVENT,
+    handleStartupLocationEvent,
+  )
   window.removeEventListener('online', handleOnline)
   if (onlineReloadTimer) {
     clearTimeout(onlineReloadTimer)
@@ -297,6 +556,7 @@ onUnmounted(() => {
   }
   clearAll(viewer) //清除监听
   if (viewer) {
+    clearStartupLocationMarker(viewer)
     clearMyLocationMarker(viewer)
     clearAdministrativeBoundaries(viewer)
     clearGraticule(viewer)
@@ -370,6 +630,17 @@ onUnmounted(() => {
   to {
     transform: rotate(360deg);
   }
+}
+
+.location-btn.has-target {
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.75);
+}
+
+.location-btn.is-picking {
+  color: #38bdf8;
+  background: rgba(14, 165, 233, 0.28);
+  border-color: #38bdf8;
 }
 
 @media screen and (max-width: 700px), screen and (max-height: 420px) {
