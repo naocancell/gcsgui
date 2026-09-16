@@ -10,6 +10,7 @@ import {
   normalizeFP981C,
   normalizeTransponder,
 } from '@/utils/plane/planeAdapter'
+import { altitudeAligner } from '@/utils/plane/altitudeAligner'
 
 export function useLoadPlane() {
   //获取飞机的状态管理store
@@ -88,9 +89,10 @@ export function useLoadPlane() {
     )
   }
   //飞机模型矩阵
-  const buildMatrix = (p: PlaneState) => {
-    // 经纬高转换成 Cesium 世界坐标
-    const position = Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt)
+  const buildMatrix = (p: PlaneState, viewer?: Cesium.Viewer) => {
+    // 经纬高转换成 Cesium 世界坐标，通过高程自校准器进行地面基准自对齐与防钻地保护
+    const renderHeight = altitudeAligner.getRenderHeight(p, viewer)
+    const position = Cesium.Cartesian3.fromDegrees(p.lon, p.lat, renderHeight)
     // Cesium 使用弧度，所以角度需要转弧度
     const hpr = new Cesium.HeadingPitchRoll(
       Cesium.Math.toRadians(p.heading),
@@ -116,10 +118,11 @@ export function useLoadPlane() {
       tailPositions.set(key, tail)
     }
 
+    const renderHeight = altitudeAligner.getRenderHeight(plane, viewer)
     const rawPos = Cesium.Cartesian3.fromDegrees(
       plane.lon,
       plane.lat,
-      plane.alt,
+      renderHeight,
     )
 
     // 黄色实际轨迹抬高 0.5 米，避免与绿色计划航线共面闪烁
@@ -216,6 +219,9 @@ export function useLoadPlane() {
     // 负责连航线一起移除
     removeTrail(viewer, key)
 
+    // 清理该飞机高程校准记录
+    altitudeAligner.reset(key)
+
     // 清理该飞机缓存
     planeMap.delete(key)
     loadingSet.delete(key)
@@ -251,7 +257,7 @@ export function useLoadPlane() {
         // 飞机对应的 glTF 模型位置
         url: config.url,
         // 初始模型矩阵
-        modelMatrix: buildMatrix(plane),
+        modelMatrix: buildMatrix(plane, viewer),
         // 模型缩放比例
         scale: config.scale,
         minimumPixelSize: config.minimumPixelSize,
@@ -382,7 +388,7 @@ export function useLoadPlane() {
       planeMap.forEach((model, key) => {
         const target = targetMap.get(key)
         if (target) {
-          model.modelMatrix = buildMatrix(target)
+          model.modelMatrix = buildMatrix(target, viewer)
         }
       })
 
@@ -411,6 +417,9 @@ export function useLoadPlane() {
       clearInterval(intervalId)
       intervalId = null
     }
+
+    // 清空所有飞机高程校准记录
+    altitudeAligner.reset()
 
     // 从 Cesium 场景中移除所有飞机模型
     planeMap.forEach((model) => {
