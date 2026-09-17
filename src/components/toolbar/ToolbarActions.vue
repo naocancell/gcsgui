@@ -1,5 +1,10 @@
 <template>
-  <n-space class="panel-toolbar989834y34" :class="{ open: !barIsOpen }">
+  <n-space
+    class="panel-toolbar989834y34"
+    :class="{ open: !barIsOpen }"
+    title="按住鼠标中键可拖拽主窗口到其他屏幕；单击中键可直接切换屏幕"
+    @mousedown="handleToolbarMouseDown"
+  >
     <n-row justify-content="space-between">
       <!-- 图层管理 -->
       <n-tooltip placement="bottom" trigger="hover">
@@ -251,6 +256,18 @@
         <span>吊舱控制</span>
       </n-tooltip>
 
+      <!-- 防除冰系统 -->
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
+          <n-button tertiary type="warning" @click="$emit('showDeice')">
+            <template #icon>
+              <n-icon><SnowOutline /></n-icon>
+            </template>
+          </n-button>
+        </template>
+        <span>防除冰系统</span>
+      </n-tooltip>
+
       <!-- 航线通视分析 -->
       <n-dropdown :options="losAnalyzeOptions" @select="$emit('selectLosAnalyse', $event)">
         <n-button tertiary type="warning">
@@ -327,7 +344,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onBeforeUnmount } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
+import { isTauri } from '@/utils/homeWindowData'
 import {
   NSpace,
   NRow,
@@ -359,6 +378,7 @@ import {
   RadioOutline,
   NavigateOutline,
   VideocamOutline,
+  SnowOutline,
 } from '@vicons/ionicons5'
 import { RulerAlt } from '@vicons/carbon'
 import { DrawPolygon } from '@vicons/fa'
@@ -403,6 +423,7 @@ const emit = defineEmits<{
   (e: 'showLinkHealth'): void
   (e: 'showTelemetry'): void
   (e: 'showPod'): void
+  (e: 'showDeice'): void
   (e: 'selectLosAnalyse', key: string): void
   (e: 'selectViewSettings', key: string | number): void
   (e: 'refreshPage'): void
@@ -415,6 +436,137 @@ const barIsOpen = ref(true)
 function handleRefresh() {
   emit('refreshPage')
 }
+
+// ==================== 鼠标中键拖拽窗口与跨屏切换逻辑 ====================
+let isDragging = false
+let wasFullscreen = false
+let startScreenX = 0
+let startScreenY = 0
+let lastScreenX = 0
+let lastScreenY = 0
+let hasMoved = false
+let rafId: number | null = null
+let accumulatedDx = 0
+let accumulatedDy = 0
+
+function flushMove() {
+  if (accumulatedDx !== 0 || accumulatedDy !== 0) {
+    const dx = accumulatedDx
+    const dy = accumulatedDy
+    accumulatedDx = 0
+    accumulatedDy = 0
+    invoke('move_window_by', { deltaX: dx, deltaY: dy }).catch((err) => {
+      console.warn('移动窗口失败:', err)
+    })
+  }
+  rafId = null
+}
+
+async function handleToolbarMouseDown(e: MouseEvent) {
+  // 仅在 Tauri 桌面端且按下鼠标中键 (button === 1) 时响应
+  if (e.button !== 1 || !isTauri()) return
+
+  // 阻止浏览器默认的中键平移滚动行为
+  e.preventDefault()
+  e.stopPropagation()
+
+  isDragging = true
+  hasMoved = false
+  startScreenX = e.screenX
+  startScreenY = e.screenY
+  lastScreenX = e.screenX
+  lastScreenY = e.screenY
+  accumulatedDx = 0
+  accumulatedDy = 0
+
+  document.body.style.cursor = 'grabbing'
+  document.body.style.userSelect = 'none'
+
+  try {
+    wasFullscreen = await invoke<boolean>('start_window_drag')
+  } catch (err) {
+    console.error('准备窗口拖拽失败:', err)
+  }
+
+  window.addEventListener('mousemove', onGlobalMouseMove)
+  window.addEventListener('mouseup', onGlobalMouseUp)
+  window.addEventListener('blur', onGlobalBlur)
+}
+
+function onGlobalMouseMove(e: MouseEvent) {
+  if (!isDragging) return
+  e.preventDefault()
+
+  const dScreenX = e.screenX - startScreenX
+  const dScreenY = e.screenY - startScreenY
+  if (!hasMoved && Math.hypot(dScreenX, dScreenY) > 5) {
+    hasMoved = true
+  }
+
+  // 计算物理像素增量
+  const scale = window.devicePixelRatio || 1
+  const stepX = Math.round((e.screenX - lastScreenX) * scale)
+  const stepY = Math.round((e.screenY - lastScreenY) * scale)
+
+  lastScreenX = e.screenX
+  lastScreenY = e.screenY
+
+  accumulatedDx += stepX
+  accumulatedDy += stepY
+
+  if (rafId === null) {
+    rafId = requestAnimationFrame(flushMove)
+  }
+}
+
+async function finishDrag() {
+  if (!isDragging) return
+  isDragging = false
+
+  if (rafId !== null) {
+    cancelAnimationFrame(rafId)
+    flushMove()
+  }
+
+  window.removeEventListener('mousemove', onGlobalMouseMove)
+  window.removeEventListener('mouseup', onGlobalMouseUp)
+  window.removeEventListener('blur', onGlobalBlur)
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+
+  if (hasMoved) {
+    // 拖动发生过：恢复在目标屏幕上的全屏铺满
+    try {
+      await invoke('finish_window_drag', { restoreFullscreen: wasFullscreen })
+    } catch (err) {
+      console.error('恢复窗口全屏失败:', err)
+    }
+  } else {
+    // 仅为中键单击未发生位移：执行快速跨屏瞬移
+    try {
+      await invoke('switch_to_next_monitor')
+    } catch (err) {
+      console.error('切换显示器失败:', err)
+    }
+  }
+}
+
+function onGlobalMouseUp(e: MouseEvent) {
+  if (e.button === 1) {
+    e.preventDefault()
+    finishDrag()
+  }
+}
+
+function onGlobalBlur() {
+  finishDrag()
+}
+
+onBeforeUnmount(() => {
+  if (isDragging) {
+    finishDrag()
+  }
+})
 </script>
 
 <style scoped>
