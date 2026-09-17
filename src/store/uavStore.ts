@@ -7,6 +7,7 @@ import type {
   FP95Aggregate,
   FP95EventPayload,
   FP95Frame94Sub1,
+  FP95Frame94Sub2,
   FP981CAggregate,
   FP981CEventPayload,
   TransponderSwitchConfig,
@@ -563,6 +564,10 @@ export const useUavStore = defineStore('uav', () => {
   const uavInfoMap = shallowRef<Map<string, UAVInfo>>(new Map())
   // fp95 单机聚合数据
   const fp95Aggregate = shallowRef<FP95Aggregate | null>(null)
+  // fp95 94帧子帧2防除冰控制器响应式数据
+  const fp95Deice = computed<FP95Frame94Sub2 | null>(
+    () => fp95Aggregate.value?.frame94?.Sub2 ?? null,
+  )
   const fp981cMap = shallowRef<Map<string, FP981CAggregate>>(new Map())
   // 应答机目标池（key = sAddress，value = { data, lastSeen }）
   const transponderMap = shallowRef<Map<string, FP95Frame94Sub1>>(new Map())
@@ -639,7 +644,20 @@ export const useUavStore = defineStore('uav', () => {
   const FP95_TIMEOUT = 1000
 
   function updateFp95Aggregate(value: FP95EventPayload) {
-    fp95Aggregate.value = value
+    const prevFrame94 = fp95Aggregate.value?.frame94
+    const nextFrame94 = value.frame94
+      ? {
+          ...(prevFrame94 || {}),
+          ...value.frame94,
+          Sub1: value.frame94.Sub1 ?? prevFrame94?.Sub1 ?? null,
+          Sub2: value.frame94.Sub2 ?? prevFrame94?.Sub2 ?? null,
+        }
+      : prevFrame94
+
+    fp95Aggregate.value = {
+      ...value,
+      frame94: nextFrame94,
+    }
     if (fp95Watchdog) clearTimeout(fp95Watchdog)
     fp95Watchdog = setTimeout(() => {
       fp95Aggregate.value = null
@@ -1037,6 +1055,7 @@ export const useUavStore = defineStore('uav', () => {
     uavInfoMap,
     updateFp95Aggregate,
     fp95Aggregate,
+    fp95Deice,
     controlFp95AvionicsSwitch,
     updateFp981cList,
     fp981cMap,

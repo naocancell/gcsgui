@@ -12,13 +12,13 @@ describe('EMPIRICAL CHALLENGER: Router & Views Adversarial Suite', () => {
   })
 
   describe('1. 路由表完备性与防御性验证 (Route Table & Definitions)', () => {
-    it('路由配置必须为严格的5个标准路径，无未定义或冗余路由', () => {
+    it('路由配置必须为严格的6个标准路径，无未定义或冗余路由', () => {
       const paths = routes.map((r) => r.path)
       const names = routes.map((r) => r.name)
 
-      expect(paths).toEqual(['/', '/routeManage', '/telemetry', '/pod', '/linkHealth'])
-      expect(names).toEqual(['Home', 'RouteManage', 'Telemetry', 'Pod', 'LinkHealth'])
-      expect(routes).toHaveLength(5)
+      expect(paths).toEqual(['/', '/routeManage', '/telemetry', '/pod', '/linkHealth', '/deice'])
+      expect(names).toEqual(['Home', 'RouteManage', 'Telemetry', 'Pod', 'LinkHealth', 'Deice'])
+      expect(routes).toHaveLength(6)
 
       // 绝不允许包含 /test、/RouteOptions 等未规范路由
       expect(paths).not.toContain('/test')
@@ -34,6 +34,7 @@ describe('EMPIRICAL CHALLENGER: Router & Views Adversarial Suite', () => {
         '无人机航电系统 - UAV AVIONICS',
         '光电吊舱控制 - POD CONTROL',
         '链路状态信息 - LINK HEALTH',
+        '防除冰系统监控 - DEICE MONITOR',
       ])
     })
 
@@ -86,6 +87,10 @@ describe('EMPIRICAL CHALLENGER: Router & Views Adversarial Suite', () => {
       const linkHealthResolved = router.resolve({ name: 'LinkHealth' })
       expect(linkHealthResolved.path).toBe('/linkHealth')
       expect(linkHealthResolved.name).toBe('LinkHealth')
+
+      const deiceResolved = router.resolve({ name: 'Deice' })
+      expect(deiceResolved.path).toBe('/deice')
+      expect(deiceResolved.name).toBe('Deice')
     })
 
     it('非预期路径应正确解析为未匹配 (matched 数组为空)', () => {
@@ -132,6 +137,12 @@ describe('EMPIRICAL CHALLENGER: Router & Views Adversarial Suite', () => {
       expect(memRouter.currentRoute.value.name).toBe('LinkHealth')
       expect(memRouter.currentRoute.value.meta.title).toBe('链路状态信息 - LINK HEALTH')
 
+      // 导航至 /deice (独立防除冰系统监控窗口)
+      await memRouter.push('/deice')
+      expect(memRouter.currentRoute.value.path).toBe('/deice')
+      expect(memRouter.currentRoute.value.name).toBe('Deice')
+      expect(memRouter.currentRoute.value.meta.title).toBe('防除冰系统监控 - DEICE MONITOR')
+
       // 导航回 Home
       await memRouter.push('/')
       expect(memRouter.currentRoute.value.path).toBe('/')
@@ -148,19 +159,25 @@ describe('EMPIRICAL CHALLENGER: Router & Views Adversarial Suite', () => {
       expect(resolvedWithHash.path).toBe('/linkHealth')
       expect(resolvedWithHash.hash).toBe('#diagnostics')
       expect(resolvedWithHash.name).toBe('LinkHealth')
+
+      const resolvedDeiceHash = router.resolve('/deice#alarms')
+      expect(resolvedDeiceHash.path).toBe('/deice')
+      expect(resolvedDeiceHash.hash).toBe('#alarms')
+      expect(resolvedDeiceHash.name).toBe('Deice')
     })
   })
 
   describe('4. 文件系统与组件引用规范性验证 (File System & Import Integrity)', () => {
     const srcDir = path.resolve(__dirname, '..')
 
-    it('所有 4 个核心视图文件必须存在于 src/views/', () => {
+    it('所有核心视图文件必须存在于 src/views/', () => {
       const viewsDir = path.join(srcDir, 'views')
       const expectedFiles = [
         'HomeView.vue',
         'RouteManageView.vue',
         'TelemetryView.vue',
         'LinkHealthView.vue',
+        'DeiceView.vue',
       ]
 
       for (const file of expectedFiles) {
@@ -175,6 +192,7 @@ describe('EMPIRICAL CHALLENGER: Router & Views Adversarial Suite', () => {
         'RouteManagePage.vue',
         'TelemetryPage.vue',
         'LinkHealthPage.vue',
+        'DeicePage.vue',
       ]
 
       for (const file of aliasFiles) {

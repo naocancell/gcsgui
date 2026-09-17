@@ -80,7 +80,217 @@ describe('uavStore transponder targets', () => {
 
     expect(store.transponderMap.size).toBe(0)
   })
+
+  it('supports concurrent Sub1 (ADS-B) and Sub2 (Deice) without mutual overwriting', () => {
+    const store = useUavStore()
+    const payload = {
+      uavId: 95,
+      frame94Sequence: 1,
+      frame94: {
+        Sub1: {
+          addressType: 'ICAO地址',
+          sAddress: '780525',
+          adsLon: 109.657924,
+          adsLat: 18.582261,
+          adsAlt: 2903.2,
+          adsVl: 154.8,
+          adsVu: 8.5,
+          adsYaw: 24.1,
+          flightNum: [],
+          adsAlt2: 0,
+          adsSpeed: [0, 0, 0] as [number, number, number],
+          adsYaw2: 0,
+        },
+        Sub2: {
+          syncCode: [0xeb, 0x90],
+          syncValid: true,
+          targetPower: 3200,
+          currentPower: 3150,
+          workMode: 2,
+          workModeDesc: '恒功率模式',
+          status1: {
+            overCurrent: false,
+            overVoltage: false,
+            underVoltage: false,
+            commError: false,
+            tempError: false,
+            targetPowerOverflow: false,
+            targetPowerTimeout: false,
+          },
+          rawStatus1: 0,
+          status2: 0,
+          controllerTemp: 25.5,
+          voltage: 28.0,
+          current: 112.5,
+          frameCount: 88,
+          checksum: 0xaa,
+          checksumValid: true,
+          rawBytes: [],
+          reserved: [],
+        },
+      },
+    }
+
+    store.updateFp95Aggregate(payload)
+
+    // 验证 Sub1 与 Sub2 同时可访问
+    expect(store.transponderMap.size).toBe(1)
+    expect(store.transponderMap.get('780525')?.adsAlt).toBe(2903.2)
+    expect(store.fp95Deice).not.toBeNull()
+    expect(store.fp95Deice?.targetPower).toBe(3200)
+    expect(store.fp95Deice?.workModeDesc).toBe('恒功率模式')
+    expect(store.fp95Deice?.controllerTemp).toBe(25.5)
+    expect(store.fp95Aggregate?.frame94?.Sub1).toBeDefined()
+    expect(store.fp95Aggregate?.frame94?.Sub2).toBeDefined()
+  })
+
+  it('supports sequential arrival of Sub1 then Sub2 without overwriting previous subframe', () => {
+    const store = useUavStore()
+
+    // 1. 仅推送 Sub1 (ADS-B)
+    store.updateFp95Aggregate({
+      uavId: 95,
+      frame94Sequence: 10,
+      frame94: {
+        Sub1: {
+          addressType: 'ICAO地址',
+          sAddress: '654321',
+          adsLon: 110.0,
+          adsLat: 20.0,
+          adsAlt: 3000.0,
+          adsVl: 120.0,
+          adsVu: 0.0,
+          adsYaw: 90.0,
+          flightNum: [],
+          adsAlt2: 0,
+          adsSpeed: [0, 0, 0] as [number, number, number],
+          adsYaw2: 0,
+        },
+      },
+    })
+
+    expect(store.transponderMap.get('654321')).toBeDefined()
+    expect(store.fp95Aggregate?.frame94?.Sub1).toBeDefined()
+    expect(store.fp95Deice).toBeNull()
+
+    // 2. 接着独立推送 Sub2 (Deice) 无 Sub1
+    store.updateFp95Aggregate({
+      uavId: 95,
+      frame94: {
+        Sub2: {
+          syncCode: [0xeb, 0x90],
+          syncValid: true,
+          targetPower: 2500,
+          currentPower: 2500,
+          workMode: 3,
+          workModeDesc: '恒温模式',
+          status1: {
+            overCurrent: false,
+            overVoltage: false,
+            underVoltage: false,
+            commError: false,
+            tempError: false,
+            targetPowerOverflow: false,
+            targetPowerTimeout: false,
+          },
+          rawStatus1: 0,
+          status2: 0,
+          controllerTemp: 30.0,
+          voltage: 28.0,
+          current: 89.2,
+          frameCount: 99,
+          checksum: 0x55,
+          checksumValid: true,
+          rawBytes: [],
+          reserved: [],
+        },
+      },
+    })
+
+    // 核心验证：先前的 Sub1 与新来的 Sub2 均被完整保留！
+    expect(store.fp95Aggregate?.frame94?.Sub1).toBeDefined()
+    expect(store.fp95Aggregate?.frame94?.Sub1?.sAddress).toBe('654321')
+    expect(store.fp95Deice).not.toBeNull()
+    expect(store.fp95Deice?.targetPower).toBe(2500)
+    expect(store.fp95Deice?.workModeDesc).toBe('恒温模式')
+
+    // 3. 再次仅推送 Sub1 (ADS-B 更新)，即使显式包含 Sub2: undefined，先前的 Sub2 仍不受影响
+    store.updateFp95Aggregate({
+      uavId: 95,
+      frame94: {
+        Sub1: {
+          addressType: 'ICAO地址',
+          sAddress: '654321',
+          adsLon: 110.5,
+          adsLat: 20.5,
+          adsAlt: 3200.0,
+          adsVl: 130.0,
+          adsVu: 0.0,
+          adsYaw: 95.0,
+          flightNum: [],
+          adsAlt2: 0,
+          adsSpeed: [0, 0, 0] as [number, number, number],
+          adsYaw2: 0,
+        },
+        Sub2: undefined,
+      },
+    })
+
+    expect(store.fp95Aggregate?.frame94?.Sub1?.adsAlt).toBe(3200.0)
+    expect(store.fp95Deice).not.toBeNull()
+    expect(store.fp95Deice?.targetPower).toBe(2500)
+    expect(store.fp95Deice?.workModeDesc).toBe('恒温模式')
+  })
+
+  it('resets fp95Aggregate and fp95Deice to null after FP95_TIMEOUT', () => {
+    vi.useFakeTimers()
+    const store = useUavStore()
+
+    store.updateFp95Aggregate({
+      uavId: 95,
+      frame94: {
+        Sub2: {
+          syncCode: [0xeb, 0x90],
+          syncValid: true,
+          targetPower: 1500,
+          currentPower: 1500,
+          workMode: 1,
+          workModeDesc: '指令调节模式',
+          status1: {
+            overCurrent: false,
+            overVoltage: false,
+            underVoltage: false,
+            commError: false,
+            tempError: false,
+            targetPowerOverflow: false,
+            targetPowerTimeout: false,
+          },
+          rawStatus1: 0,
+          status2: 0,
+          controllerTemp: 20.0,
+          voltage: 28.0,
+          current: 53.5,
+          frameCount: 1,
+          checksum: 0,
+          checksumValid: true,
+          rawBytes: [],
+          reserved: [],
+        },
+      },
+    })
+
+    expect(store.fp95Deice).not.toBeNull()
+
+    // 快进 1001ms 触发超时
+    vi.advanceTimersByTime(1001)
+
+    expect(store.fp95Aggregate).toBeNull()
+    expect(store.fp95Deice).toBeNull()
+
+    vi.useRealTimers()
+  })
 })
+
 
 describe('uavStore simulated guidance', () => {
   beforeEach(() => {

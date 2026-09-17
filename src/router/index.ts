@@ -49,6 +49,14 @@ export const routes: RouteRecordRaw[] = [
       title: '链路状态信息 - LINK HEALTH',
     },
   },
+  {
+    path: '/deice',
+    name: 'Deice',
+    component: () => import('@/views/DeiceView.vue'),
+    meta: {
+      title: '防除冰系统监控 - DEICE MONITOR',
+    },
+  },
 ]
 
 /**

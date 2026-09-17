@@ -18,7 +18,7 @@ pub struct FP95Frame94Sub1Raw {
 }
 
 /// 94帧子帧1业务消费结构，保持现有前端序列化字段兼容。
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FP95Frame94Sub1 {
     pub address_type: String,
@@ -246,6 +246,30 @@ impl FP95Frame94 {
     }
 }
 
+/// 94帧多子帧状态聚合结构，支持各个子帧（ADS-B、防除冰等）长期并存、独立刷新。
+#[derive(Debug, Default, Clone, Serialize, PartialEq)]
+pub struct FP95Frame94Aggregate {
+    #[serde(rename = "Sub1", skip_serializing_if = "Option::is_none")]
+    pub sub1: Option<FP95Frame94Sub1>,
+    #[serde(rename = "Sub2", skip_serializing_if = "Option::is_none")]
+    pub sub2: Option<FP95Frame94Sub2>,
+    // 预留未来扩展：
+    // #[serde(rename = "Sub3", skip_serializing_if = "Option::is_none")]
+    // pub sub3: Option<FP95Frame94Sub3>,
+    // #[serde(rename = "Sub4", skip_serializing_if = "Option::is_none")]
+    // pub sub4: Option<FP95Frame94Sub4>,
+}
+
+impl FP95Frame94Aggregate {
+    pub fn merge(&mut self, sub: FP95Frame94) {
+        match sub {
+            FP95Frame94::Sub1(s1) => self.sub1 = Some(s1),
+            FP95Frame94::Sub2(s2) => self.sub2 = Some(s2),
+        }
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,5 +349,50 @@ mod tests {
             _ => panic!("应当解析为Sub2变体"),
         }
     }
+
+    #[test]
+    fn test_fp95_frame94_aggregate_concurrent() {
+        let mut agg = FP95Frame94Aggregate::default();
+        assert!(agg.sub1.is_none());
+        assert!(agg.sub2.is_none());
+
+        // 1. 合并 Sub1
+        let sub1 = FP95Frame94Sub1 {
+            s_address: "112233".to_string(),
+            ads_alt: 1200.0,
+            ..Default::default()
+        };
+        agg.merge(FP95Frame94::Sub1(sub1.clone()));
+        assert!(agg.sub1.is_some());
+        assert!(agg.sub2.is_none());
+        assert_eq!(agg.sub1.as_ref().unwrap().s_address, "112233");
+
+        // 2. 合并 Sub2（防除冰）
+        let sub2 = FP95Frame94Sub2 {
+            target_power: 3500,
+            work_mode_desc: "恒功率模式".to_string(),
+            ..Default::default()
+        };
+        agg.merge(FP95Frame94::Sub2(sub2.clone()));
+
+        // 验证两者并存
+        assert!(agg.sub1.is_some(), "合并Sub2后Sub1不应被覆盖丢失");
+        assert!(agg.sub2.is_some(), "Sub2应成功写入");
+        assert_eq!(agg.sub1.as_ref().unwrap().s_address, "112233");
+        assert_eq!(agg.sub2.as_ref().unwrap().target_power, 3500);
+
+        // 3. 验证序列化格式包含大写 Sub1 与 Sub2 字段（与前端兼容）
+        let json = serde_json::to_string(&agg).expect("序列化应当成功");
+        assert!(json.contains("\"Sub1\""));
+        assert!(json.contains("\"Sub2\""));
+
+        // 4. 再次合并更新后的 Sub1，验证 Sub2 不受影响
+        let mut updated_sub1 = sub1;
+        updated_sub1.ads_alt = 1500.0;
+        agg.merge(FP95Frame94::Sub1(updated_sub1));
+        assert_eq!(agg.sub1.as_ref().unwrap().ads_alt, 1500.0);
+        assert_eq!(agg.sub2.as_ref().unwrap().target_power, 3500, "再次更新Sub1时Sub2不应受影响");
+    }
 }
+
 

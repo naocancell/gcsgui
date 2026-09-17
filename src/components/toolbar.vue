@@ -33,6 +33,7 @@ import {
   openOrRestoreLinkHealthWindow,
 } from '@/utils/linkHealthWindow'
 import { openOrRestorePodWindow } from '@/utils/podWindow'
+import { openOrRestoreDeiceWindow } from '@/utils/deiceWindow'
 
 // 引入拆解的 Composables
 import { useDataImporter } from '@/composables/useDataImporter'
@@ -331,6 +332,7 @@ onBeforeUnmount(() => {
     @show-link-health="openOrRestoreLinkHealthWindow"
     @show-telemetry="openOrRestoreTelemetryWindow"
     @show-pod="openOrRestorePodWindow"
+    @show-deice="openOrRestoreDeiceWindow"
     @select-los-analyse="handleLosAnalyseSelect"
     @select-view-settings="handleViewSettingsSelect"
     @refresh-page="refreshPage"

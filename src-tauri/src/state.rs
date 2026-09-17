@@ -148,9 +148,15 @@ impl AppState {
             frame94_sequence: 0,
         });
         state.aggregate.uav_id = uav_id;
-        if matches!(&parsed, crate::protocol::fp95::ParsedSubFrame::Frame94(_)) {
+        if matches!(
+            &parsed,
+            crate::protocol::fp95::ParsedSubFrame::Frame94(
+                crate::protocol::fp95::FP95Frame94::Sub1(_)
+            )
+        ) {
             state.frame94_sequence = state.frame94_sequence.wrapping_add(1);
         }
+
         state.aggregate.merge(parsed);
         state.last_seen = received_at;
     }

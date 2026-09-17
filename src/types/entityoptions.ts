@@ -184,7 +184,49 @@ export type FP95Frame94Sub1 = {
     actuatorFaultState: number
   }
 
-  export type FP95Frame94 = { Sub1: FP95Frame94Sub1 }
+  /// 防除冰控制器状态信息1（对应报文字节7 Bit0~Bit6）
+  export interface FP95DeiceStatus1 {
+    overCurrent: boolean
+    overVoltage: boolean
+    underVoltage: boolean
+    commError: boolean
+    tempError: boolean
+    targetPowerOverflow: boolean
+    targetPowerTimeout: boolean
+  }
+
+  /// 94帧子帧2（防除冰控制器透传数据）
+  export interface FP95Frame94Sub2 {
+    syncCode: number[]
+    syncValid: boolean
+    targetPower: number
+    currentPower: number
+    workMode: number
+    workModeDesc: string
+    status1: FP95DeiceStatus1
+    rawStatus1: number
+    status2: number
+    controllerTemp: number
+    voltage: number
+    current: number
+    frameCount: number
+    checksum: number
+    checksumValid: boolean
+    rawBytes: number[]
+    reserved: number[]
+  }
+
+  /// 94帧多子帧聚合容器，支持各个子帧独立并存
+  export interface FP95Frame94Aggregate {
+    Sub1?: FP95Frame94Sub1 | null
+    Sub2?: FP95Frame94Sub2 | null
+    // 预留后续扩展：
+    // Sub3?: unknown | null
+    // Sub4?: unknown | null
+  }
+
+  export type FP95Frame94 = FP95Frame94Aggregate
+
 
   export interface FP95Aggregate {
     uavId: number

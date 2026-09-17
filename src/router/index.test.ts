@@ -7,27 +7,29 @@ describe('路由系统与视图层规范化测试 (Router & View Layer)', () => 
     setActivePinia(createPinia())
   })
 
-  it('应该包含规范化的5个标准顶级路由且不包含冗余/test路由', () => {
+  it('应该包含规范化的6个标准顶级路由且不包含冗余/test路由', () => {
     const paths = routes.map((r) => r.path)
     const names = routes.map((r) => r.name)
 
-    // 验证包含正确的5个核心路由
+    // 验证包含正确的6个核心路由
     expect(paths).toContain('/')
     expect(paths).toContain('/routeManage')
     expect(paths).toContain('/telemetry')
     expect(paths).toContain('/pod')
     expect(paths).toContain('/linkHealth')
+    expect(paths).toContain('/deice')
 
     expect(names).toContain('Home')
     expect(names).toContain('RouteManage')
     expect(names).toContain('Telemetry')
     expect(names).toContain('Pod')
     expect(names).toContain('LinkHealth')
+    expect(names).toContain('Deice')
 
     // 验证废弃的调试路由/test已被彻底移除
     expect(paths).not.toContain('/test')
     expect(names).not.toContain('Test')
-    expect(routes.length).toBe(5)
+    expect(routes.length).toBe(6)
   })
 
   it('每个路由应该配置了正确的元信息和组件加载器', () => {
@@ -60,6 +62,12 @@ describe('路由系统与视图层规范化测试 (Router & View Layer)', () => 
     expect(linkHealthRoute?.name).toBe('LinkHealth')
     expect(linkHealthRoute?.meta?.title).toBe('链路状态信息 - LINK HEALTH')
     expect(typeof linkHealthRoute?.component).toBe('function')
+
+    const deiceRoute = routes.find((r) => r.path === '/deice')
+    expect(deiceRoute).toBeDefined()
+    expect(deiceRoute?.name).toBe('Deice')
+    expect(deiceRoute?.meta?.title).toBe('防除冰系统监控 - DEICE MONITOR')
+    expect(typeof deiceRoute?.component).toBe('function')
   })
 
   it('路由解析 /routeManage 应匹配 RouteManage 而不是被伪拦截重定向到 Home', () => {
@@ -70,7 +78,7 @@ describe('路由系统与视图层规范化测试 (Router & View Layer)', () => 
     expect(resolved.matched[0].name).toBe('RouteManage')
   })
 
-  it('路由解析 /telemetry 和 /linkHealth 能正确匹配对应顶级路由', () => {
+  it('路由解析 /telemetry、/linkHealth 与 /deice 能正确匹配对应顶级路由', () => {
     const resolvedTelemetry = router.resolve('/telemetry')
     expect(resolvedTelemetry.path).toBe('/telemetry')
     expect(resolvedTelemetry.name).toBe('Telemetry')
@@ -78,9 +86,13 @@ describe('路由系统与视图层规范化测试 (Router & View Layer)', () => 
     const resolvedLinkHealth = router.resolve('/linkHealth')
     expect(resolvedLinkHealth.path).toBe('/linkHealth')
     expect(resolvedLinkHealth.name).toBe('LinkHealth')
+
+    const resolvedDeice = router.resolve('/deice')
+    expect(resolvedDeice.path).toBe('/deice')
+    expect(resolvedDeice.name).toBe('Deice')
   })
 
-  it('验证所有 4 个 view 文件在 src/views/ 中存在且路径规范', async () => {
+  it('验证所有核心 view 文件在 src/views/ 中存在且路径规范', async () => {
     const fs = await import('fs')
     const path = await import('path')
 
@@ -89,6 +101,7 @@ describe('路由系统与视图层规范化测试 (Router & View Layer)', () => 
     expect(fs.existsSync(path.join(viewsDir, 'RouteManageView.vue'))).toBe(true)
     expect(fs.existsSync(path.join(viewsDir, 'TelemetryView.vue'))).toBe(true)
     expect(fs.existsSync(path.join(viewsDir, 'LinkHealthView.vue'))).toBe(true)
+    expect(fs.existsSync(path.join(viewsDir, 'DeiceView.vue'))).toBe(true)
 
     // 验证旧目录已被彻底删除
     const oldPagesDir = path.resolve(__dirname, '../components/page')
