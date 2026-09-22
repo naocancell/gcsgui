@@ -16,13 +16,7 @@
           :data-tauri-drag-region="props.standalone ? '' : undefined"
         >
           <span :data-tauri-drag-region="props.standalone ? '' : undefined">
-            DEICE & MISSION PAYLOAD
-          </span>
-          <span
-            class="sub-title"
-            :data-tauri-drag-region="props.standalone ? '' : undefined"
-          >
-            综合防除冰与加热载荷控制系统
+            防除冰与载荷控制系统
           </span>
         </div>
 
@@ -36,9 +30,9 @@
             }"
           >
             <span class="status-dot"></span>
-            <span v-if="!hasData">OFFLINE</span>
-            <span v-else-if="hasAnyAlarm">ALARM</span>
-            <span v-else>ONLINE</span>
+            <span v-if="!hasData">离线</span>
+            <span v-else-if="hasAnyAlarm">告警</span>
+            <span v-else>正常</span>
           </div>
 
           <div
@@ -88,7 +82,7 @@
         </div>
       </div>
 
-      <!-- 航电系统模式软键导航条 (Avionics Sub-System Softkeys) -->
+      <!-- 模式导航条 -->
       <div class="avionics-subnav" @mousedown.stop>
         <div class="subnav-container">
           <button
@@ -97,8 +91,7 @@
             type="button"
             @click="activeTab = 'deice'"
           >
-            <span class="subnav-tag">SYS-01</span>
-            <span class="subnav-title">机翼防除冰状态监控 (0x94)</span>
+            <span class="subnav-title">防除冰监控</span>
             <span
               class="subnav-status"
               :class="{ ok: hasData && !hasAnyAlarm, alarm: hasData && hasAnyAlarm, idle: !hasData }"
@@ -111,8 +104,7 @@
             type="button"
             @click="activeTab = 'payload'"
           >
-            <span class="subnav-tag">SYS-02</span>
-            <span class="subnav-title">加热回路与载荷总线控制 (0xC3~C5)</span>
+            <span class="subnav-title">载荷与加热控制</span>
             <span class="subnav-status ok"></span>
           </button>
         </div>
@@ -130,7 +122,7 @@
           <div class="overview-grid">
             <!-- 运行模式 -->
             <div class="overview-item">
-              <span class="overview-label">工作模式 (WORK MODE)</span>
+              <span class="overview-label">工作模式</span>
               <div class="overview-value-row">
                 <span
                   class="mode-badge"
@@ -162,7 +154,7 @@
                       ? '链路未建立 / 待机'
                       : hasAnyAlarm
                         ? '检测到异常故障告警'
-                        : '所有检测项正常 (HEALTHY)'
+                        : '所有检测项正常'
                   }}
                 </span>
               </div>
@@ -170,7 +162,7 @@
 
             <!-- 帧率与通信链路 -->
             <div class="overview-item text-right">
-              <span class="overview-label">透传子帧 0x94 - Sub2</span>
+              <span class="overview-label">透传子帧 0x94</span>
               <div class="overview-value-row justify-end">
                 <span class="frame-tag">
                   计数: {{ formatInt(deiceData?.frameCount) }}
@@ -179,7 +171,7 @@
                   class="sync-tag"
                   :class="{ valid: deiceData?.syncValid, invalid: hasData && !deiceData?.syncValid }"
                 >
-                  {{ deiceData?.syncValid ? '同步锁相 OK' : (hasData ? '同步异常' : '未同步') }}
+                  {{ deiceData?.syncValid ? '同步锁相正常' : (hasData ? '同步异常' : '未同步') }}
                 </span>
               </div>
             </div>
@@ -190,7 +182,6 @@
         <section class="section-card" @mousedown.stop>
           <div class="section-header-title">
             <span>控制器故障与安全告警矩阵</span>
-            <span class="section-sub">HEALTH & ALARM DIAGNOSTICS (STATUS1)</span>
           </div>
 
           <div class="alarm-grid">
@@ -227,7 +218,6 @@
           <section class="section-card metric-panel">
             <div class="section-header-title">
               <span>功率状态监控</span>
-              <span class="section-sub">POWER MANAGEMENT</span>
             </div>
 
             <div class="power-stats-layout">
@@ -239,7 +229,6 @@
                   </span>
                   <span class="stat-unit">W</span>
                 </div>
-                <div class="stat-footer">Target Power</div>
               </div>
 
               <div class="stat-box secondary">
@@ -250,7 +239,6 @@
                   </span>
                   <span class="stat-unit">W</span>
                 </div>
-                <div class="stat-footer">Current Power</div>
               </div>
             </div>
 
@@ -281,37 +269,34 @@
           <section class="section-card metric-panel">
             <div class="section-header-title">
               <span>电气特性与温度监控</span>
-              <span class="section-sub">ELECTRICAL & TEMPERATURE</span>
             </div>
 
             <div class="electrical-grid">
               <!-- 母线电压 -->
               <div class="stat-box">
-                <span class="stat-label">母线电压 (Voltage)</span>
+                <span class="stat-label">母线电压</span>
                 <div class="stat-value-group">
                   <span class="stat-number">
                     {{ formatFixed(deiceData?.voltage, 1) }}
                   </span>
                   <span class="stat-unit">V</span>
                 </div>
-                <div class="stat-footer">BUS Voltage</div>
               </div>
 
               <!-- 工作电流 -->
               <div class="stat-box">
-                <span class="stat-label">工作电流 (Current)</span>
+                <span class="stat-label">工作电流</span>
                 <div class="stat-value-group">
                   <span class="stat-number">
                     {{ formatFixed(deiceData?.current, 1) }}
                   </span>
                   <span class="stat-unit">A</span>
                 </div>
-                <div class="stat-footer">Load Current</div>
               </div>
 
               <!-- 控制器温度 -->
               <div class="stat-box" :class="{ 'temp-warning': isTempHigh }">
-                <span class="stat-label">控制器温度 (Controller)</span>
+                <span class="stat-label">控制器温度</span>
                 <div class="stat-value-group">
                   <span class="stat-number">
                     {{ formatFixed(deiceData?.controllerTemp, 1) }}
@@ -332,7 +317,6 @@
                   </span>
                   <span class="stat-unit">W</span>
                 </div>
-                <div class="stat-footer">U × I Calculated</div>
               </div>
             </div>
           </section>
@@ -342,12 +326,11 @@
         <section class="section-card" @mousedown.stop>
           <div class="section-header-title">
             <span>协议校验与底层帧诊断</span>
-            <span class="section-sub">FRAME & LINK DIAGNOSTICS</span>
           </div>
 
           <div class="diagnostics-grid">
             <div class="diag-item">
-              <span class="diag-label">帧同步码 (Sync Code)</span>
+              <span class="diag-label">帧同步码</span>
               <div class="diag-val-row">
                 <span class="mono-code">{{ syncCodeText }}</span>
                 <span
@@ -364,7 +347,7 @@
             </div>
 
             <div class="diag-item">
-              <span class="diag-label">累加和校验 (Zero-Sum Check)</span>
+              <span class="diag-label">累加和校验</span>
               <div class="diag-val-row">
                 <span class="mono-code">
                   {{ formatHex(deiceData?.checksum) }}
@@ -377,19 +360,19 @@
                     'pill-invalid': !hasData,
                   }"
                 >
-                  {{ deiceData?.checksumValid ? '校验通过 (Zero-Sum OK)' : (hasData ? '校验和错误' : '待校验') }}
+                  {{ deiceData?.checksumValid ? '校验通过' : (hasData ? '校验和错误' : '待校验') }}
                 </span>
               </div>
             </div>
 
             <div class="diag-item">
-              <span class="diag-label">状态码回读 (Raw Status)</span>
+              <span class="diag-label">状态码回读</span>
               <div class="diag-val-row">
                 <span class="mono-code">
-                  Status1: {{ formatHex(deiceData?.rawStatus1) }}
+                  状态1: {{ formatHex(deiceData?.rawStatus1) }}
                 </span>
                 <span class="mono-code">
-                  Status2: {{ formatHex(deiceData?.status2) }}
+                  状态2: {{ formatHex(deiceData?.status2) }}
                 </span>
               </div>
             </div>
