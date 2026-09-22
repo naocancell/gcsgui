@@ -16,15 +16,36 @@
           :data-tauri-drag-region="props.standalone ? '' : undefined"
         >
           <span :data-tauri-drag-region="props.standalone ? '' : undefined">
-            DEICE MONITOR
+            DEICE & PAYLOAD
           </span>
           <span
             class="sub-title"
             :data-tauri-drag-region="props.standalone ? '' : undefined"
           >
-            防除冰系统监控
+            防除冰与载荷控制系统
           </span>
         </div>
+
+        <!-- 选项卡切换 -->
+        <div class="panel-tabs" @mousedown.stop>
+          <button
+            class="tab-btn"
+            :class="{ active: activeTab === 'deice' }"
+            type="button"
+            @click="activeTab = 'deice'"
+          >
+            防除冰监控 (0x94)
+          </button>
+          <button
+            class="tab-btn"
+            :class="{ active: activeTab === 'payload' }"
+            type="button"
+            @click="activeTab = 'payload'"
+          >
+            载荷与继电器控制 (0xC3~C5)
+          </button>
+        </div>
+
         <div class="header-meta">
           <div
             class="status"
@@ -87,8 +108,13 @@
         </div>
       </div>
 
-      <!-- Main Body -->
-      <div class="panel-body">
+      <!-- Main Body: 载荷控制面板 -->
+      <div v-if="activeTab === 'payload'" class="panel-body payload-tab-body">
+        <PayloadControlPanel />
+      </div>
+
+      <!-- Main Body: 防除冰监控 -->
+      <div v-else class="panel-body">
         <!-- 顶部概览条 (模式与健康指示) -->
         <section class="section-card mode-overview-card" @mousedown.stop>
           <div class="overview-grid">
@@ -369,6 +395,7 @@ import { ref, computed, onBeforeUnmount } from 'vue'
 import { NConfigProvider, darkTheme } from 'naive-ui'
 import { useUavStore } from '@/store/uavStore'
 import { useDeiceMonitor } from '@/composables/useDeiceMonitor'
+import PayloadControlPanel from '@/components/PayloadControlPanel.vue'
 
 const props = defineProps<{
   standalone?: boolean
@@ -382,6 +409,7 @@ const emit = defineEmits<{
 }>()
 
 const uavStore = useUavStore()
+const activeTab = ref<'deice' | 'payload'>('deice')
 
 const naiveThemeOverrides = {
   common: {
@@ -576,6 +604,44 @@ onBeforeUnmount(() => {
   font-size: 12px;
   color: var(--text-secondary);
   font-weight: 500;
+}
+
+/* Panel Tabs */
+.panel-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 3px;
+  border-radius: 6px;
+  border: 1px solid var(--border-default);
+}
+
+.tab-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tab-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.tab-btn.active {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.15);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.payload-tab-body {
+  padding: 0 !important;
 }
 
 .header-meta {
