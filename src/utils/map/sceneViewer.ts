@@ -101,6 +101,17 @@ function createImageryProviderViewModels(
       ],
     }),
     new ProviderViewModel({
+      name: '天地图地形',
+      tooltip: '天地图地形晕渲与地形注记',
+      iconUrl: buildModuleUrl('Widgets/Images/ImageryProviders/mapboxTerrain.png'),
+      category: '影像底图',
+      creationFunction: () => [
+        ...baseLayers,
+        getTDTProvider(TDTLayerType.Ter, TDTProjectionType.WebMercator),
+        getTDTProvider(TDTLayerType.Cta, TDTProjectionType.WebMercator),
+      ],
+    }),
+    new ProviderViewModel({
       name: 'Bing 影像',
       tooltip: 'Cesium ion 提供的 Bing 全球卫星影像',
       iconUrl: buildModuleUrl('Widgets/Images/ImageryProviders/bingAerial.png'),
@@ -247,7 +258,9 @@ async function initViewer(container: string | Element): Promise<Viewer> {
     sceneMode: SceneMode.SCENE3D, //设置默认场景模式为 3D 球体
     baseLayerPicker: true, //显示Cesium自带的底图选择控件
     imageryProviderViewModels,
-    selectedImageryProviderViewModel: imageryProviderViewModels[0],
+    selectedImageryProviderViewModel:
+      imageryProviderViewModels.find((vm) => vm.name === '天地图影像') ||
+      imageryProviderViewModels[0],
     terrainProviderViewModels: [],
     targetFrameRate: 60, //活动场景固定以最高 60 FPS 调度
     requestRenderMode: true, //启用请求渲染模式

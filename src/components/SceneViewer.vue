@@ -337,7 +337,7 @@ function waitForLocalFirstFrame(): Promise<void> {
   })
 }
 
-async function loadOnlineTerrain(timeoutMs = 2000) {
+async function loadOnlineTerrain(timeoutMs = 10000) {
   if (!viewer || viewer.isDestroyed() || !navigator.onLine) return
 
   const generation = ++terrainLoadGeneration
@@ -362,9 +362,28 @@ async function loadOnlineTerrain(timeoutMs = 2000) {
     viewer.terrainProvider = terrainProvider
     viewer.scene.requestRender()
   } catch (error) {
-    console.warn('在线地形加载跳过，使用默认椭球:', error)
+    console.warn('在线地形加载跳过或超时，降级为天地图地形晕渲:', error)
+    fallbackToTiandituTerrain()
   } finally {
     if (timeoutTimer) clearTimeout(timeoutTimer)
+  }
+}
+
+/** 若在线三维 DEM 加载失败或超时，自动切换底图为“天地图地形”以显示地形地貌 */
+function fallbackToTiandituTerrain() {
+  if (!viewer || viewer.isDestroyed() || !viewer.baseLayerPicker) return
+  const vm = viewer.baseLayerPicker.viewModel
+  if (!vm || !vm.imageryProviderViewModels) return
+  // 仅在当前使用的是天地图影像时自动降级切换
+  if (vm.selectedImagery?.name === '天地图影像') {
+    const terrainImagery = vm.imageryProviderViewModels.find(
+      (item) => item.name === '天地图地形',
+    )
+    if (terrainImagery) {
+      vm.selectedImagery = terrainImagery
+      viewer.scene.requestRender()
+      message.warning('在线三维高程服务连接超时，已自动切换为天地图地形晕渲底图')
+    }
   }
 }
 
