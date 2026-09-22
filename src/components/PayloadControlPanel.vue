@@ -1,140 +1,155 @@
 <template>
   <div class="avionics-payload-panel">
-    <!-- 顶部概览条：通信与结冰状态 -->
+    <!-- 顶部状态与回路总控条 -->
     <section class="section-card overview-section" @mousedown.stop>
       <div class="overview-grid">
-        <!-- 结冰状态诊断 -->
+        <!-- 结冰综合诊断 -->
         <div class="overview-item">
-          <span class="overview-label">结冰传感器诊断 (ICING STATUS)</span>
+          <span class="overview-label">结冰状态与告警诊断 (0xC5)</span>
           <div class="overview-value-row">
             <span class="health-badge" :class="icingHealthClass">
               <span class="dot"></span>
               {{ icingDesc.text }}
             </span>
-            <span v-if="currentPayload?.icingSensor?.heatingActive" class="heating-tag">
-              电加热中
+            <span
+              v-if="currentPayload?.icingSensor?.heatingActive"
+              class="tag-heating"
+            >
+              探头电加热
             </span>
           </div>
         </div>
 
-        <!-- 继电器工作状态摘要 -->
+        <!-- 供电回路状态统计 -->
         <div class="overview-item">
-          <span class="overview-label">继电器总线控制 (RELAY STATUS)</span>
+          <span class="overview-label">16 路加热回路闭合统计 (0xC3)</span>
           <div class="overview-value-row">
             <span class="mode-badge" :class="relaySummaryClass">
-              闭合: {{ closedRelayCount }} / 16
+              通电回路: {{ closedRelayCount }} / 16
             </span>
             <span class="sub-code">
-              掩码: {{ formatHex(relayStatus?.mask, 4) }}
+              寄存器掩码: {{ formatHex(relayStatus?.mask, 4) }}
             </span>
           </div>
         </div>
 
-        <!-- 通信与快捷指令 -->
+        <!-- 回路总控与通信操作 -->
         <div class="overview-item text-right">
-          <span class="overview-label">载荷链路 0xC3~0xC5 (MISSION BUS)</span>
+          <span class="overview-label">总线控制与巡检操作 (BUS COMMAND)</span>
           <div class="overview-value-row justify-end">
             <button
-              class="avionics-btn"
+              class="toolbar-btn"
               type="button"
               :disabled="loadingQuery"
               @click="handleRefreshRelay"
             >
-              {{ loadingQuery ? '查询中...' : '刷新状态' }}
+              <span class="btn-dot"></span>
+              {{ loadingQuery ? '巡检中...' : '状态巡检' }}
             </button>
             <button
-              class="avionics-btn btn-success"
+              class="toolbar-btn toolbar-btn-active"
               type="button"
               @click="handleSetAll(true)"
             >
-              一键全开
+              一键全通电
             </button>
             <button
-              class="avionics-btn btn-danger"
+              class="toolbar-btn toolbar-btn-danger"
               type="button"
               @click="handleSetAll(false)"
             >
-              一键全关
+              一键全断开
             </button>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- 16路继电器航电控制矩阵 -->
+    <!-- 16 路防除冰与载荷供电回路控制矩阵 (4x4 航电开关网格) -->
     <section class="section-card" @mousedown.stop>
       <div class="section-header-title">
-        <span>16 路继电器航电控制矩阵</span>
-        <span class="section-sub">AVIONICS RELAY CONTROL MATRIX (0xC3)</span>
+        <span>防除冰与载荷加热回路控制矩阵 (16通道)</span>
+        <span class="section-sub">HEATING CIRCUITS & PAYLOAD RELAY MATRIX (0xC3)</span>
       </div>
 
-      <div class="relay-matrix">
+      <div class="circuit-grid">
         <div
-          v-for="index in 16"
-          :key="index"
-          class="relay-cell"
+          v-for="ch in RELAY_CHANNELS"
+          :key="ch.id"
+          class="circuit-card"
           :class="{
-            'relay-closed': isRelayClosed(index),
-            'relay-open': !isRelayClosed(index),
+            'circuit-energized': isRelayClosed(ch.id),
+            'circuit-deenergized': !isRelayClosed(ch.id),
           }"
         >
-          <div class="relay-cell-header">
-            <span class="relay-id">RLY-{{ formatPad(index, 2) }}</span>
-            <span class="relay-led"></span>
+          <!-- 航电硬件指示灯 -->
+          <div class="circuit-indicator">
+            <span class="indicator-led"></span>
           </div>
-          <div class="relay-status-text">
-            {{ isRelayClosed(index) ? 'CLOSED' : 'OPEN' }}
+
+          <!-- 回路名称与通道编码 -->
+          <div class="circuit-info">
+            <div class="circuit-name" :title="ch.name">{{ ch.name }}</div>
+            <div class="circuit-meta-row">
+              <span class="circuit-code">CH-{{ formatPad(ch.id, 2) }}</span>
+              <span class="circuit-relay-id">({{ ch.code }})</span>
+              <span class="circuit-tag" :class="`tag-${ch.group}`">{{ ch.groupLabel }}</span>
+            </div>
           </div>
+
+          <!-- 航电触控开关 -->
           <button
-            class="relay-toggle-btn"
+            class="circuit-switch"
             type="button"
-            :disabled="loadingSwitch === index"
-            @click="handleToggleRelay(index, !isRelayClosed(index))"
+            :disabled="loadingSwitch === ch.id"
+            @click="handleToggleRelay(ch.id, !isRelayClosed(ch.id))"
           >
-            <span v-if="loadingSwitch === index">...</span>
-            <span v-else>{{ isRelayClosed(index) ? '断开' : '闭合' }}</span>
+            <span v-if="loadingSwitch === ch.id" class="switch-loading">...</span>
+            <span v-else class="switch-state-text">
+              {{ isRelayClosed(ch.id) ? 'ON 通电' : 'OFF 断开' }}
+            </span>
           </button>
         </div>
       </div>
     </section>
 
-    <!-- 双列指标：100V 升压模块 + 温湿度与结冰传感器 -->
+    <!-- 双列核心度量：100V 升压电源 + 大气环境与结冰探测 -->
     <div class="metrics-two-column" @mousedown.stop>
-      <!-- 100V 升压模块电气监控 -->
+      <!-- 100V 升压电源系统 -->
       <section class="section-card metric-panel">
         <div class="section-header-title">
-          <span>100V 升压模块电气特性</span>
+          <span>100V 升压电源转换系统</span>
           <span class="section-sub">100V BOOST CONVERTER (0xC4-01)</span>
         </div>
 
         <div class="electrical-grid">
-          <!-- 输入电压 -->
+          <!-- 28V 输入电压 -->
           <div class="stat-box">
-            <span class="stat-label">输入电压 (Vin)</span>
+            <span class="stat-label">母线输入电压 (Vin)</span>
             <div class="stat-value-group">
               <span class="stat-number">
-                {{ formatFixed(currentPayload?.boostModule?.inputVoltage, 2) }}
+                {{ formatFixed(currentPayload?.boostModule?.inputVoltage, 1) }}
               </span>
               <span class="stat-unit">V</span>
             </div>
-            <div class="stat-footer">28V DC Input</div>
+            <div class="stat-footer">28V DC Primary Bus</div>
           </div>
 
           <!-- 输入电流 -->
           <div class="stat-box">
-            <span class="stat-label">输入电流 (Iin)</span>
+            <span class="stat-label">母线输入电流 (Iin)</span>
             <div class="stat-value-group">
               <span class="stat-number">
                 {{ formatFixed(currentPayload?.boostModule?.inputCurrent, 2) }}
               </span>
               <span class="stat-unit">A</span>
             </div>
-            <div class="stat-footer">Primary Current</div>
+            <div class="stat-footer">Primary Bus Current</div>
           </div>
 
-          <!-- 输出电压 -->
+          <!-- 100V 输出电压 -->
           <div class="stat-box primary">
-            <span class="stat-label">输出电压 (Vout)</span>
+            <span class="stat-label">升压输出电压 (Vout)</span>
             <div class="stat-value-group">
               <span class="stat-number">
                 {{ formatFixed(currentPayload?.boostModule?.outputVoltage, 1) }}
@@ -144,21 +159,33 @@
             <div class="stat-footer">100V High-Voltage Bus</div>
           </div>
 
-          <!-- 输出电流 -->
+          <!-- 100V 输出电流 -->
           <div class="stat-box secondary">
-            <span class="stat-label">输出电流 (Iout)</span>
+            <span class="stat-label">负载输出电流 (Iout)</span>
             <div class="stat-value-group">
               <span class="stat-number">
                 {{ formatFixed(currentPayload?.boostModule?.outputCurrent, 2) }}
               </span>
               <span class="stat-unit">A</span>
             </div>
-            <div class="stat-footer">Load Output Current</div>
+            <div class="stat-footer">Heating Load Current</div>
+          </div>
+
+          <!-- 升压总功率 -->
+          <div class="stat-box">
+            <span class="stat-label">升压转换功率 (Pout)</span>
+            <div class="stat-value-group">
+              <span class="stat-number">
+                {{ boostPowerText }}
+              </span>
+              <span class="stat-unit">W</span>
+            </div>
+            <div class="stat-footer">Vout × Iout Calculated</div>
           </div>
 
           <!-- 模块温度 -->
           <div class="stat-box" :class="{ 'temp-warning': isBoostTempHigh }">
-            <span class="stat-label">模块温度 (Temp)</span>
+            <span class="stat-label">模块工作温度 (Temp)</span>
             <div class="stat-value-group">
               <span class="stat-number">
                 {{ formatFixed(currentPayload?.boostModule?.temperature, 1) }}
@@ -166,47 +193,73 @@
               <span class="stat-unit">℃</span>
             </div>
             <div class="stat-footer">
-              {{ isBoostTempHigh ? '超温警戒' : '正常工作温度' }}
+              {{ isBoostTempHigh ? '模块超温预警 (>85℃)' : '工作温升正常' }}
             </div>
-          </div>
-
-          <!-- 输出视在功率 -->
-          <div class="stat-box">
-            <span class="stat-label">输出功率 (Pout)</span>
-            <div class="stat-value-group">
-              <span class="stat-number">
-                {{ boostPowerText }}
-              </span>
-              <span class="stat-unit">W</span>
-            </div>
-            <div class="stat-footer">Vout × Iout</div>
           </div>
         </div>
       </section>
 
-      <!-- 大气环境与结冰诊断 -->
+      <!-- 结冰探测与大气环境指标 -->
       <section class="section-card metric-panel">
         <div class="section-header-title">
-          <span>大气环境与结冰探测器</span>
-          <span class="section-sub">ENVIRONMENT & ICING DIAGNOSTICS (0xC4-07 / 0xC5)</span>
+          <span>结冰探测与大气环境数据</span>
+          <span class="section-sub">ICING DETECTOR & ATMOSPHERE (0xC5 / 0xC4-07)</span>
         </div>
 
         <div class="electrical-grid">
-          <!-- 环境温度 -->
+          <!-- 结冰等级 -->
+          <div class="stat-box" :class="{ 'temp-warning': isIcingActive }">
+            <span class="stat-label">结冰威胁等级</span>
+            <div class="stat-value-group">
+              <span class="stat-number-text" :class="{ 'text-danger': isIcingActive }">
+                {{ icingDesc.text }}
+              </span>
+            </div>
+            <div class="stat-footer">Level 0~5 Severity</div>
+          </div>
+
+          <!-- 探测器状态 -->
           <div class="stat-box">
-            <span class="stat-label">大气环境温度</span>
+            <span class="stat-label">结冰探测器健康度</span>
+            <div class="stat-value-group">
+              <span
+                class="stat-number-text"
+                :class="{ 'text-danger': currentPayload?.icingSensor?.detectorFault }"
+              >
+                {{ currentPayload?.icingSensor?.detectorFault ? '硬件故障 (FAULT)' : '探测器正常 (OK)' }}
+              </span>
+            </div>
+            <div class="stat-footer">
+              固件 V{{ currentPayload?.icingSensor?.versionMajor ?? '-' }}.{{ currentPayload?.icingSensor?.versionMinor ?? '-' }}
+            </div>
+          </div>
+
+          <!-- 探头加热 -->
+          <div class="stat-box">
+            <span class="stat-label">探头防冰加热状态</span>
+            <div class="stat-value-group">
+              <span class="stat-number-text">
+                {{ currentPayload?.icingSensor?.heatingActive ? '加热中 (HEATING)' : '未加热 (STANDBY)' }}
+              </span>
+            </div>
+            <div class="stat-footer">Probe Heater Status</div>
+          </div>
+
+          <!-- 大气温度 -->
+          <div class="stat-box">
+            <span class="stat-label">外部大气温度 (OAT)</span>
             <div class="stat-value-group">
               <span class="stat-number">
                 {{ formatFixed(currentPayload?.environmentSensor?.temperature, 1) }}
               </span>
               <span class="stat-unit">℃</span>
             </div>
-            <div class="stat-footer">Ambient Temperature</div>
+            <div class="stat-footer">Outside Air Temp</div>
           </div>
 
           <!-- 相对湿度 -->
           <div class="stat-box">
-            <span class="stat-label">相对环境湿度</span>
+            <span class="stat-label">环境相对湿度</span>
             <div class="stat-value-group">
               <span class="stat-number">
                 {{ formatFixed(currentPayload?.environmentSensor?.humidity, 1) }}
@@ -227,134 +280,169 @@
             </div>
             <div class="stat-footer">Barometric Pressure</div>
           </div>
-
-          <!-- 结冰告警等级 -->
-          <div class="stat-box" :class="{ 'temp-warning': isIcingActive }">
-            <span class="stat-label">结冰告警等级</span>
-            <div class="stat-value-group">
-              <span class="stat-number-text">
-                {{ icingDesc.text }}
-              </span>
-            </div>
-            <div class="stat-footer">Ice Detection Level</div>
-          </div>
-
-          <!-- 探头加热状态 -->
-          <div class="stat-box">
-            <span class="stat-label">探头电加热状态</span>
-            <div class="stat-value-group">
-              <span class="stat-number-text">
-                {{ currentPayload?.icingSensor?.heatingActive ? '加热中 (HEATING)' : '未加热 (OFF)' }}
-              </span>
-            </div>
-            <div class="stat-footer">Probe Heater Status</div>
-          </div>
-
-          <!-- 传感器诊断 -->
-          <div class="stat-box">
-            <span class="stat-label">结冰传感器诊断</span>
-            <div class="stat-value-group">
-              <span class="stat-number-text" :class="{ 'text-danger': currentPayload?.icingSensor?.detectorFault }">
-                {{ currentPayload?.icingSensor?.detectorFault ? '探测器故障' : '探测器正常' }}
-              </span>
-            </div>
-            <div class="stat-footer">
-              V{{ currentPayload?.icingSensor?.versionMajor ?? '-' }}.{{ currentPayload?.icingSensor?.versionMinor ?? '-' }} (Cnt: {{ currentPayload?.icingSensor?.counter ?? '-' }})
-            </div>
-          </div>
         </div>
       </section>
     </div>
 
-    <!-- 翼面加热膜细粒度温控采温矩阵 (0xC4-02 / 03) -->
+    <!-- 翼面加热膜温控采温矩阵 (左右机翼对称航电仪表) -->
     <section class="section-card" @mousedown.stop>
       <div class="section-header-title">
         <span>机翼与尾翼加热膜温控采温矩阵</span>
         <span class="section-sub">AIRFRAME SURFACE TEMPERATURE MATRIX (0xC4-02 / 0xC4-03)</span>
       </div>
 
-      <div class="temp-matrix-layout">
-        <!-- 左侧翼面与平尾垂尾 -->
-        <div class="temp-sub-panel">
-          <div class="temp-sub-title">左机翼与尾翼 (LEFT AIRFRAME)</div>
-          <div class="temp-cards-grid">
-            <div class="temp-stat-card">
-              <span class="t-label">左内常加 / 加热</span>
-              <div class="t-vals">
-                <span class="t-num">{{ formatFixed(currentPayload?.tempSensor1?.innerWingConst, 1) }}</span>
-                <span class="t-sep">/</span>
-                <span class="t-num highlight">{{ formatFixed(currentPayload?.tempSensor1?.innerWingHeat, 1) }}</span>
-                <span class="t-unit">℃</span>
+      <div class="airframe-temp-layout">
+        <!-- 左侧机翼与尾翼 -->
+        <div class="wing-side-panel">
+          <div class="wing-side-header">
+            <span class="wing-side-dot left"></span>
+            <span class="wing-side-title">左机翼与左尾翼 (LEFT AIRFRAME)</span>
+          </div>
+
+          <div class="temp-channel-grid">
+            <!-- 左内机翼 -->
+            <div class="temp-channel-card">
+              <div class="temp-channel-title">左内机翼</div>
+              <div class="temp-dual-values">
+                <div class="temp-val-item">
+                  <span class="temp-val-label">常加:</span>
+                  <span class="temp-val-num">{{ formatFixed(currentPayload?.tempSensor1?.innerWingConst, 1) }}</span>
+                  <span class="temp-val-unit">℃</span>
+                </div>
+                <div class="temp-val-item highlight">
+                  <span class="temp-val-label">脉冲:</span>
+                  <span class="temp-val-num">{{ formatFixed(currentPayload?.tempSensor1?.innerWingHeat, 1) }}</span>
+                  <span class="temp-val-unit">℃</span>
+                </div>
               </div>
             </div>
-            <div class="temp-stat-card">
-              <span class="t-label">左中常加 / 加热</span>
-              <div class="t-vals">
-                <span class="t-num">{{ formatFixed(currentPayload?.tempSensor1?.midWingConst, 1) }}</span>
-                <span class="t-sep">/</span>
-                <span class="t-num highlight">{{ formatFixed(currentPayload?.tempSensor1?.midWingHeat, 1) }}</span>
-                <span class="t-unit">℃</span>
+
+            <!-- 左中机翼 -->
+            <div class="temp-channel-card">
+              <div class="temp-channel-title">左中机翼</div>
+              <div class="temp-dual-values">
+                <div class="temp-val-item">
+                  <span class="temp-val-label">常加:</span>
+                  <span class="temp-val-num">{{ formatFixed(currentPayload?.tempSensor1?.midWingConst, 1) }}</span>
+                  <span class="temp-val-unit">℃</span>
+                </div>
+                <div class="temp-val-item highlight">
+                  <span class="temp-val-label">脉冲:</span>
+                  <span class="temp-val-num">{{ formatFixed(currentPayload?.tempSensor1?.midWingHeat, 1) }}</span>
+                  <span class="temp-val-unit">℃</span>
+                </div>
               </div>
             </div>
-            <div class="temp-stat-card">
-              <span class="t-label">左外常加 / 加热</span>
-              <div class="t-vals">
-                <span class="t-num">{{ formatFixed(currentPayload?.tempSensor1?.outerWingConst, 1) }}</span>
-                <span class="t-sep">/</span>
-                <span class="t-num highlight">{{ formatFixed(currentPayload?.tempSensor1?.outerWingHeat, 1) }}</span>
-                <span class="t-unit">℃</span>
+
+            <!-- 左外机翼 -->
+            <div class="temp-channel-card">
+              <div class="temp-channel-title">左外机翼</div>
+              <div class="temp-dual-values">
+                <div class="temp-val-item">
+                  <span class="temp-val-label">常加:</span>
+                  <span class="temp-val-num">{{ formatFixed(currentPayload?.tempSensor1?.outerWingConst, 1) }}</span>
+                  <span class="temp-val-unit">℃</span>
+                </div>
+                <div class="temp-val-item highlight">
+                  <span class="temp-val-label">脉冲:</span>
+                  <span class="temp-val-num">{{ formatFixed(currentPayload?.tempSensor1?.outerWingHeat, 1) }}</span>
+                  <span class="temp-val-unit">℃</span>
+                </div>
               </div>
             </div>
-            <div class="temp-stat-card">
-              <span class="t-label">左平尾 / 左垂尾</span>
-              <div class="t-vals">
-                <span class="t-num">{{ formatFixed(currentPayload?.tempSensor1?.horizontalTail, 1) }}</span>
-                <span class="t-sep">/</span>
-                <span class="t-num highlight">{{ formatFixed(currentPayload?.tempSensor1?.verticalTail, 1) }}</span>
-                <span class="t-unit">℃</span>
+
+            <!-- 左平尾 / 左垂尾 -->
+            <div class="temp-channel-card">
+              <div class="temp-channel-title">左尾翼 (平/垂)</div>
+              <div class="temp-dual-values">
+                <div class="temp-val-item">
+                  <span class="temp-val-label">平尾:</span>
+                  <span class="temp-val-num">{{ formatFixed(currentPayload?.tempSensor1?.horizontalTail, 1) }}</span>
+                  <span class="temp-val-unit">℃</span>
+                </div>
+                <div class="temp-val-item highlight">
+                  <span class="temp-val-label">垂尾:</span>
+                  <span class="temp-val-num">{{ formatFixed(currentPayload?.tempSensor1?.verticalTail, 1) }}</span>
+                  <span class="temp-val-unit">℃</span>
+                </div>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- 右侧翼面与平尾垂尾 -->
-        <div class="temp-sub-panel">
-          <div class="temp-sub-title">右机翼与尾翼 (RIGHT AIRFRAME)</div>
-          <div class="temp-cards-grid">
-            <div class="temp-stat-card">
-              <span class="t-label">右内常加 / 加热</span>
-              <div class="t-vals">
-                <span class="t-num">{{ formatFixed(currentPayload?.tempSensor2?.innerWingConst, 1) }}</span>
-                <span class="t-sep">/</span>
-                <span class="t-num highlight">{{ formatFixed(currentPayload?.tempSensor2?.innerWingHeat, 1) }}</span>
-                <span class="t-unit">℃</span>
+        <!-- 右侧机翼与尾翼 -->
+        <div class="wing-side-panel">
+          <div class="wing-side-header">
+            <span class="wing-side-dot right"></span>
+            <span class="wing-side-title">右机翼与右尾翼 (RIGHT AIRFRAME)</span>
+          </div>
+
+          <div class="temp-channel-grid">
+            <!-- 右内机翼 -->
+            <div class="temp-channel-card">
+              <div class="temp-channel-title">右内机翼</div>
+              <div class="temp-dual-values">
+                <div class="temp-val-item">
+                  <span class="temp-val-label">常加:</span>
+                  <span class="temp-val-num">{{ formatFixed(currentPayload?.tempSensor2?.innerWingConst, 1) }}</span>
+                  <span class="temp-val-unit">℃</span>
+                </div>
+                <div class="temp-val-item highlight">
+                  <span class="temp-val-label">脉冲:</span>
+                  <span class="temp-val-num">{{ formatFixed(currentPayload?.tempSensor2?.innerWingHeat, 1) }}</span>
+                  <span class="temp-val-unit">℃</span>
+                </div>
               </div>
             </div>
-            <div class="temp-stat-card">
-              <span class="t-label">右中常加 / 加热</span>
-              <div class="t-vals">
-                <span class="t-num">{{ formatFixed(currentPayload?.tempSensor2?.midWingConst, 1) }}</span>
-                <span class="t-sep">/</span>
-                <span class="t-num highlight">{{ formatFixed(currentPayload?.tempSensor2?.midWingHeat, 1) }}</span>
-                <span class="t-unit">℃</span>
+
+            <!-- 右中机翼 -->
+            <div class="temp-channel-card">
+              <div class="temp-channel-title">右中机翼</div>
+              <div class="temp-dual-values">
+                <div class="temp-val-item">
+                  <span class="temp-val-label">常加:</span>
+                  <span class="temp-val-num">{{ formatFixed(currentPayload?.tempSensor2?.midWingConst, 1) }}</span>
+                  <span class="temp-val-unit">℃</span>
+                </div>
+                <div class="temp-val-item highlight">
+                  <span class="temp-val-label">脉冲:</span>
+                  <span class="temp-val-num">{{ formatFixed(currentPayload?.tempSensor2?.midWingHeat, 1) }}</span>
+                  <span class="temp-val-unit">℃</span>
+                </div>
               </div>
             </div>
-            <div class="temp-stat-card">
-              <span class="t-label">右外常加 / 加热</span>
-              <div class="t-vals">
-                <span class="t-num">{{ formatFixed(currentPayload?.tempSensor2?.outerWingConst, 1) }}</span>
-                <span class="t-sep">/</span>
-                <span class="t-num highlight">{{ formatFixed(currentPayload?.tempSensor2?.outerWingHeat, 1) }}</span>
-                <span class="t-unit">℃</span>
+
+            <!-- 右外机翼 -->
+            <div class="temp-channel-card">
+              <div class="temp-channel-title">右外机翼</div>
+              <div class="temp-dual-values">
+                <div class="temp-val-item">
+                  <span class="temp-val-label">常加:</span>
+                  <span class="temp-val-num">{{ formatFixed(currentPayload?.tempSensor2?.outerWingConst, 1) }}</span>
+                  <span class="temp-val-unit">℃</span>
+                </div>
+                <div class="temp-val-item highlight">
+                  <span class="temp-val-label">脉冲:</span>
+                  <span class="temp-val-num">{{ formatFixed(currentPayload?.tempSensor2?.outerWingHeat, 1) }}</span>
+                  <span class="temp-val-unit">℃</span>
+                </div>
               </div>
             </div>
-            <div class="temp-stat-card">
-              <span class="t-label">右平尾 / 右垂尾</span>
-              <div class="t-vals">
-                <span class="t-num">{{ formatFixed(currentPayload?.tempSensor2?.horizontalTail, 1) }}</span>
-                <span class="t-sep">/</span>
-                <span class="t-num highlight">{{ formatFixed(currentPayload?.tempSensor2?.verticalTail, 1) }}</span>
-                <span class="t-unit">℃</span>
+
+            <!-- 右平尾 / 右垂尾 -->
+            <div class="temp-channel-card">
+              <div class="temp-channel-title">右尾翼 (平/垂)</div>
+              <div class="temp-dual-values">
+                <div class="temp-val-item">
+                  <span class="temp-val-label">平尾:</span>
+                  <span class="temp-val-num">{{ formatFixed(currentPayload?.tempSensor2?.horizontalTail, 1) }}</span>
+                  <span class="temp-val-unit">℃</span>
+                </div>
+                <div class="temp-val-item highlight">
+                  <span class="temp-val-label">垂尾:</span>
+                  <span class="temp-val-num">{{ formatFixed(currentPayload?.tempSensor2?.verticalTail, 1) }}</span>
+                  <span class="temp-val-unit">℃</span>
+                </div>
               </div>
             </div>
           </div>
@@ -371,6 +459,34 @@ import { usePayloadStore } from '@/store/payloadStore'
 
 const payloadStore = usePayloadStore()
 const message = useMessage()
+
+export interface RelayChannelDef {
+  id: number // 1 ~ 16
+  name: string
+  code: string // Y1 ~ Y16
+  group: 'wing' | 'tail' | 'payload' | 'special'
+  groupLabel: string
+}
+
+// 严格根据《任管-载荷上下行协议.docx》图 3 物理定义映射 16 路继电器真实名称与编码
+const RELAY_CHANNELS: RelayChannelDef[] = [
+  { id: 1, name: '右平尾加热膜供电', code: 'Y1', group: 'tail', groupLabel: '尾翼' },
+  { id: 2, name: '右垂尾加热膜供电', code: 'Y2', group: 'tail', groupLabel: '尾翼' },
+  { id: 3, name: '右内机翼加热膜供电', code: 'Y3', group: 'wing', groupLabel: '机翼' },
+  { id: 4, name: '右中机翼加热膜供电', code: 'Y4', group: 'wing', groupLabel: '机翼' },
+  { id: 5, name: '右外机翼加热膜供电', code: 'Y5', group: 'wing', groupLabel: '机翼' },
+  { id: 6, name: '左垂尾加热膜供电', code: 'Y6', group: 'tail', groupLabel: '尾翼' },
+  { id: 7, name: '左平尾加热膜供电', code: 'Y7', group: 'tail', groupLabel: '尾翼' },
+  { id: 8, name: '机翼常加热膜供电', code: 'Y8', group: 'wing', groupLabel: '常加' },
+  { id: 9, name: '左内机翼加热膜供电', code: 'Y9', group: 'wing', groupLabel: '机翼' },
+  { id: 10, name: '左中机翼加热膜供电', code: 'Y10', group: 'wing', groupLabel: '机翼' },
+  { id: 11, name: '左外机翼加热膜供电', code: 'Y11', group: 'wing', groupLabel: '机翼' },
+  { id: 12, name: '大气测量-加温供电', code: 'Y12', group: 'payload', groupLabel: '载荷' },
+  { id: 13, name: '云滴探测-加温供电', code: 'Y13', group: 'payload', groupLabel: '载荷' },
+  { id: 14, name: '电源设备供电', code: 'Y14', group: 'special', groupLabel: '电源' },
+  { id: 15, name: '桨叶防除冰控制', code: 'Y15', group: 'special', groupLabel: '防冰' },
+  { id: 16, name: '备用通道', code: 'Y16', group: 'special', groupLabel: '备用' },
+]
 
 const currentPayload = computed(() => payloadStore.currentPayload)
 const relayStatus = computed(() => payloadStore.relayStatus)
@@ -442,11 +558,13 @@ function formatPad(val: number, len = 2): string {
 
 async function handleToggleRelay(index: number, enabled: boolean) {
   loadingSwitch.value = index
+  const ch = RELAY_CHANNELS[index - 1]
+  const name = ch ? ch.name : `CH-${formatPad(index)}`
   try {
     await payloadStore.sendRelayControl(index, enabled)
-    message.success(`继电器 RLY-${formatPad(index)} 指令已发送: ${enabled ? '闭合' : '断开'}`)
+    message.success(`已下发指令: ${name} [${enabled ? '通电' : '断开'}]`)
   } catch (e: any) {
-    message.error(`下发继电器 RLY-${formatPad(index)} 失败: ${e}`)
+    message.error(`控制 ${name} 失败: ${e}`)
   } finally {
     loadingSwitch.value = null
   }
@@ -456,7 +574,7 @@ async function handleSetAll(enabled: boolean) {
   try {
     const mask = enabled ? 0xFFFF : 0x0000
     await payloadStore.sendRelayBatch(mask)
-    message.success(`已下发一键${enabled ? '全开' : '全关'}控制指令`)
+    message.success(`已下发一键全部 [${enabled ? '通电' : '断开'}] 指令`)
   } catch (e: any) {
     message.error(`一键控制失败: ${e}`)
   }
@@ -466,9 +584,9 @@ async function handleRefreshRelay() {
   loadingQuery.value = true
   try {
     await payloadStore.queryRelayStatus()
-    message.info('已发送 16 路继电器状态查询指令')
+    message.info('已发送 16 路继电器状态回读巡检指令')
   } catch (e: any) {
-    message.error(`查询失败: ${e}`)
+    message.error(`巡检失败: ${e}`)
   } finally {
     loadingQuery.value = false
   }
@@ -490,7 +608,7 @@ onBeforeUnmount(() => {
   gap: 12px;
 }
 
-/* 顶部概览 */
+/* 顶部概览栏 */
 .overview-section {
   background: var(--surface-under);
   border: 1px solid var(--border-default);
@@ -531,7 +649,7 @@ onBeforeUnmount(() => {
   text-align: right;
 }
 
-/* 模式与健康徽章（继承 Deice 航电风格） */
+/* 航电模式徽章 */
 .mode-badge {
   display: inline-block;
   font-size: 12px;
@@ -610,8 +728,8 @@ onBeforeUnmount(() => {
   background: var(--text-tertiary);
 }
 
-.heating-tag {
-  font-size: 11px;
+.tag-heating {
+  font-size: 10px;
   padding: 2px 6px;
   border-radius: 4px;
   font-weight: 600;
@@ -620,153 +738,208 @@ onBeforeUnmount(() => {
   border: 1px solid rgba(245, 158, 11, 0.4);
 }
 
-/* 航电按键样式 */
-.avionics-btn {
+/* 顶部工具栏内敛按键 */
+.toolbar-btn {
   background: var(--surface-secondary);
   border: 1px solid var(--border-heavy);
-  color: var(--text-primary);
+  color: var(--text-secondary);
   font-size: 11px;
   font-weight: 600;
   padding: 4px 10px;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   transition: all 0.15s ease;
 }
 
-.avionics-btn:hover:not(:disabled) {
+.toolbar-btn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
   border-color: var(--focus-blue);
-  color: var(--focus-blue);
 }
 
-.avionics-btn:disabled {
+.toolbar-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.avionics-btn.btn-success {
+.toolbar-btn .btn-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--focus-blue);
+}
+
+.toolbar-btn-active {
   color: #34d399;
   border-color: rgba(52, 211, 153, 0.3);
   background: rgba(16, 163, 127, 0.1);
 }
-.avionics-btn.btn-success:hover:not(:disabled) {
-  background: rgba(16, 163, 127, 0.25);
+
+.toolbar-btn-active:hover:not(:disabled) {
+  background: rgba(16, 163, 127, 0.2);
   border-color: var(--accent-green);
+  color: #6ee7b7;
 }
 
-.avionics-btn.btn-danger {
+.toolbar-btn-danger {
   color: #f87171;
   border-color: rgba(239, 68, 68, 0.3);
   background: rgba(239, 68, 68, 0.1);
 }
-.avionics-btn.btn-danger:hover:not(:disabled) {
-  background: rgba(239, 68, 68, 0.25);
+
+.toolbar-btn-danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.2);
   border-color: var(--accent-red);
+  color: #fca5a5;
 }
 
-/* 16 路继电器航电矩阵 */
-.relay-matrix {
+/* 16 路继电器航电控制网格 (4x4 与 alarm-grid 风格呼应) */
+.circuit-grid {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: 8px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
 }
 
 @media (max-width: 860px) {
-  .relay-matrix {
-    grid-template-columns: repeat(4, 1fr);
+  .circuit-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 
-.relay-cell {
+.circuit-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 8px;
   background: var(--surface-secondary);
   border: 1px solid var(--border-light);
-  border-radius: 8px;
-  padding: 8px 6px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
   transition: all 0.2s ease;
 }
 
-.relay-cell-header {
-  width: 100%;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0 4px;
-}
-
-.relay-id {
-  font-size: 10px;
-  font-family: monospace;
-  font-weight: 700;
-  color: var(--text-tertiary);
-}
-
-.relay-led {
-  width: 6px;
-  height: 6px;
+.circuit-indicator .indicator-led {
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
+  display: block;
   background: var(--text-tertiary);
   transition: all 0.2s ease;
 }
 
-.relay-status-text {
-  font-size: 11px;
+.circuit-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.circuit-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.circuit-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.circuit-code {
+  font-size: 10px;
   font-family: monospace;
   font-weight: 700;
-  letter-spacing: 0.5px;
   color: var(--text-tertiary);
 }
 
-.relay-toggle-btn {
-  width: 100%;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--border-light);
-  border-radius: 4px;
-  color: var(--text-secondary);
+.circuit-relay-id {
   font-size: 10px;
+  font-family: monospace;
+  color: var(--text-tertiary);
+}
+
+.circuit-tag {
+  font-size: 9px;
   font-weight: 600;
-  padding: 3px 0;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary);
+}
+
+.circuit-tag.tag-wing {
+  color: #60a5fa;
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.circuit-tag.tag-tail {
+  color: #a78bfa;
+  background: rgba(139, 92, 246, 0.12);
+}
+
+.circuit-tag.tag-payload {
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.circuit-tag.tag-special {
+  color: #34d399;
+  background: rgba(16, 163, 127, 0.12);
+}
+
+/* 航电触控开关按键 */
+.circuit-switch {
+  padding: 4px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border-heavy);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
   cursor: pointer;
   transition: all 0.15s ease;
+  white-space: nowrap;
 }
 
-.relay-toggle-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.12);
+.circuit-switch:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
   color: var(--text-primary);
 }
 
-/* 闭合状态高亮 */
-.relay-cell.relay-closed {
+.circuit-switch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 闭合通电状态高亮 */
+.circuit-card.circuit-energized {
   background: rgba(16, 163, 127, 0.08);
   border-color: rgba(16, 163, 127, 0.35);
-  box-shadow: 0 0 10px rgba(16, 163, 127, 0.1);
+  box-shadow: 0 0 12px rgba(16, 163, 127, 0.1);
 }
 
-.relay-cell.relay-closed .relay-id {
-  color: var(--text-primary);
-}
-
-.relay-cell.relay-closed .relay-led {
+.circuit-card.circuit-energized .indicator-led {
   background: var(--accent-green);
-  box-shadow: 0 0 6px rgba(16, 163, 127, 0.8);
+  box-shadow: 0 0 8px rgba(16, 163, 127, 0.8);
 }
 
-.relay-cell.relay-closed .relay-status-text {
+.circuit-card.circuit-energized .circuit-switch {
+  background: rgba(16, 163, 127, 0.18);
+  border-color: rgba(16, 163, 127, 0.4);
   color: #34d399;
 }
 
-.relay-cell.relay-closed .relay-toggle-btn {
-  background: rgba(239, 68, 68, 0.15);
-  border-color: rgba(239, 68, 68, 0.3);
+.circuit-card.circuit-energized .circuit-switch:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.5);
   color: #fca5a5;
-}
-
-.relay-cell.relay-closed .relay-toggle-btn:hover:not(:disabled) {
-  background: rgba(239, 68, 68, 0.25);
-  border-color: var(--accent-red);
 }
 
 /* 双列网格 */
@@ -793,7 +966,7 @@ onBeforeUnmount(() => {
   gap: 10px;
 }
 
-/* 航电风格 Stat-Box */
+/* 航电 Stat-Box 结构 */
 .stat-box {
   background: var(--surface-secondary);
   border: 1px solid var(--border-light);
@@ -819,7 +992,7 @@ onBeforeUnmount(() => {
 
 .stat-label {
   font-size: 11px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font-weight: 500;
 }
 
@@ -830,18 +1003,17 @@ onBeforeUnmount(() => {
 }
 
 .stat-number {
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
-  font-family: monospace;
   color: var(--text-primary);
-  line-height: 1.1;
+  letter-spacing: -0.5px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
 }
 
 .stat-number-text {
   font-size: 13px;
   font-weight: 700;
   color: var(--text-primary);
-  line-height: 1.2;
 }
 
 .stat-number-text.text-danger {
@@ -849,90 +1021,118 @@ onBeforeUnmount(() => {
 }
 
 .stat-unit {
-  font-size: 11px;
+  font-size: 12px;
+  color: var(--text-tertiary);
   font-weight: 600;
-  color: var(--text-secondary);
 }
 
 .stat-footer {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--text-tertiary);
-  margin-top: 2px;
+  letter-spacing: 0.2px;
 }
 
-/* 翼面采温矩阵布局 */
-.temp-matrix-layout {
+/* 机翼加热膜对称采温布局 */
+.airframe-temp-layout {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 14px;
 }
 
 @media (max-width: 800px) {
-  .temp-matrix-layout {
+  .airframe-temp-layout {
     grid-template-columns: 1fr;
   }
 }
 
-.temp-sub-panel {
+.wing-side-panel {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.temp-sub-title {
+.wing-side-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 2px;
+}
+
+.wing-side-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.wing-side-dot.left {
+  background: #60a5fa;
+}
+
+.wing-side-dot.right {
+  background: #34d399;
+}
+
+.wing-side-title {
   font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
   letter-spacing: 0.5px;
 }
 
-.temp-cards-grid {
+.temp-channel-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
 
-.temp-stat-card {
+.temp-channel-card {
   background: var(--surface-secondary);
   border: 1px solid var(--border-light);
-  border-radius: 6px;
+  border-radius: 8px;
   padding: 8px 10px;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.t-label {
-  font-size: 10px;
-  color: var(--text-tertiary);
+.temp-channel-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
 }
 
-.t-vals {
+.temp-dual-values {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.temp-val-item {
   display: flex;
   align-items: baseline;
   gap: 3px;
 }
 
-.t-num {
+.temp-val-label {
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.temp-val-num {
   font-size: 14px;
   font-weight: 700;
   font-family: monospace;
   color: var(--text-primary);
 }
 
-.t-num.highlight {
+.temp-val-item.highlight .temp-val-num {
   color: #38bdf8;
 }
 
-.t-sep {
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-
-.t-unit {
+.temp-val-unit {
   font-size: 10px;
-  color: var(--text-secondary);
-  margin-left: 2px;
+  color: var(--text-tertiary);
 }
 
 @keyframes pulse-danger {

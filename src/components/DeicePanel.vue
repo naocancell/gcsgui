@@ -16,34 +16,14 @@
           :data-tauri-drag-region="props.standalone ? '' : undefined"
         >
           <span :data-tauri-drag-region="props.standalone ? '' : undefined">
-            DEICE & PAYLOAD
+            DEICE & MISSION PAYLOAD
           </span>
           <span
             class="sub-title"
             :data-tauri-drag-region="props.standalone ? '' : undefined"
           >
-            防除冰与载荷控制系统
+            综合防除冰与加热载荷控制系统
           </span>
-        </div>
-
-        <!-- 选项卡切换 -->
-        <div class="panel-tabs" @mousedown.stop>
-          <button
-            class="tab-btn"
-            :class="{ active: activeTab === 'deice' }"
-            type="button"
-            @click="activeTab = 'deice'"
-          >
-            防除冰监控 (0x94)
-          </button>
-          <button
-            class="tab-btn"
-            :class="{ active: activeTab === 'payload' }"
-            type="button"
-            @click="activeTab = 'payload'"
-          >
-            载荷与继电器控制 (0xC3~C5)
-          </button>
         </div>
 
         <div class="header-meta">
@@ -105,6 +85,36 @@
               </svg>
             </button>
           </div>
+        </div>
+      </div>
+
+      <!-- 航电系统模式软键导航条 (Avionics Sub-System Softkeys) -->
+      <div class="avionics-subnav" @mousedown.stop>
+        <div class="subnav-container">
+          <button
+            class="subnav-btn"
+            :class="{ active: activeTab === 'deice' }"
+            type="button"
+            @click="activeTab = 'deice'"
+          >
+            <span class="subnav-tag">SYS-01</span>
+            <span class="subnav-title">机翼防除冰状态监控 (0x94)</span>
+            <span
+              class="subnav-status"
+              :class="{ ok: hasData && !hasAnyAlarm, alarm: hasData && hasAnyAlarm, idle: !hasData }"
+            ></span>
+          </button>
+
+          <button
+            class="subnav-btn"
+            :class="{ active: activeTab === 'payload' }"
+            type="button"
+            @click="activeTab = 'payload'"
+          >
+            <span class="subnav-tag">SYS-02</span>
+            <span class="subnav-title">加热回路与载荷总线控制 (0xC3~C5)</span>
+            <span class="subnav-status ok"></span>
+          </button>
         </div>
       </div>
 
@@ -606,42 +616,89 @@ onBeforeUnmount(() => {
   font-weight: 500;
 }
 
-/* Panel Tabs */
-.panel-tabs {
+/* 航电系统模式软键导航条 (Avionics Sub-System Softkeys) */
+.avionics-subnav {
+  background: #1a1a1a;
+  border-bottom: 1px solid var(--border-default);
+  padding: 0 16px;
   display: flex;
   align-items: center;
-  gap: 4px;
-  background: rgba(0, 0, 0, 0.3);
-  padding: 3px;
-  border-radius: 6px;
-  border: 1px solid var(--border-default);
 }
 
-.tab-btn {
+.subnav-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.subnav-btn {
   background: transparent;
   border: none;
+  border-bottom: 2px solid transparent;
   color: var(--text-secondary);
-  font-size: 11px;
+  padding: 8px 12px;
+  font-size: 12px;
   font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
-.tab-btn:hover {
+.subnav-btn:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.03);
 }
 
-.tab-btn.active {
+.subnav-btn.active {
   color: #38bdf8;
-  background: rgba(56, 189, 248, 0.15);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  border-bottom-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.06);
+}
+
+.subnav-tag {
+  font-size: 10px;
+  font-family: monospace;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-tertiary);
+}
+
+.subnav-btn.active .subnav-tag {
+  background: rgba(56, 189, 248, 0.2);
+  color: #38bdf8;
+}
+
+.subnav-title {
+  letter-spacing: 0.3px;
+}
+
+.subnav-status {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.subnav-status.ok {
+  background: var(--accent-green);
+  box-shadow: 0 0 6px rgba(16, 163, 127, 0.6);
+}
+
+.subnav-status.alarm {
+  background: var(--accent-red);
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.6);
+}
+
+.subnav-status.idle {
+  background: var(--text-tertiary);
 }
 
 .payload-tab-body {
-  padding: 0 !important;
+  padding: 14px 18px 20px !important;
 }
 
 .header-meta {
