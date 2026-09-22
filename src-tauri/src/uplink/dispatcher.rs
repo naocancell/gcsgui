@@ -44,6 +44,45 @@ pub(crate) async fn broadcast_frame(state: &AppState, frame: [u8; 32]) {
     }
 }
 
+pub async fn broadcast_raw_payload(state: &AppState, bytes: &[u8]) -> Result<(), String> {
+    let targets: Vec<_> = state
+        .active_links
+        .iter()
+        .filter(|entry| supports_uplink(entry.protocol))
+        .map(|entry| (entry.name.clone(), entry.transport.clone()))
+        .collect();
+
+    if targets.is_empty() {
+        return Err("无活动的上行链路".to_string());
+    }
+
+    let mut sends = JoinSet::new();
+    for (name, transport) in targets {
+        let frame = bytes.to_vec();
+        sends.spawn(async move {
+            let result =
+                tokio::time::timeout(Duration::from_millis(100), transport.send(&frame)).await;
+            (name, result)
+        });
+    }
+
+    while let Some(result) = sends.join_next().await {
+        match result {
+            Ok((_name, Ok(Ok(_)))) => {}
+            Ok((name, Ok(Err(error)))) => {
+                log::warn!("上行链路 {name} 发送载荷失败: {error}");
+            }
+            Ok((name, Err(_))) => {
+                log::warn!("上行链路 {name} 发送载荷超时");
+            }
+            Err(error) => {
+                log::warn!("上行广播载荷任务异常结束: {error}");
+            }
+        }
+    }
+    Ok(())
+}
+
 struct DispatcherSink {
     state: AppState,
     tx: mpsc::Sender<[u8; 32]>,

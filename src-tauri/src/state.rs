@@ -99,9 +99,13 @@ pub struct AppState {
     /// RX 层：FP95 协议单机聚合状态
     fp95_state: Arc<Mutex<Option<TimedFP95Aggregate>>>,
 
+    /// RX 层：任管载荷全状态聚合池 (Key 为 无人机ID u8)
+    pub mission_payload_pool: Arc<DashMap<u8, crate::protocol::payload::MissionPayloadAggregate>>,
+
     /// RX 层：心跳追踪记录池 (用于死链路超时剔除)
     pub uav_seen: Arc<DashMap<u8, Instant>>,
     pub fp981c_seen: Arc<DashMap<u8, Instant>>,
+    pub mission_payload_seen: Arc<DashMap<u8, Instant>>,
 
     /// TX 层：当前已打开的所有物理链路集合 (Key 为 链路名称/ID)
     pub active_links: Arc<DashMap<String, ActiveLink>>,
@@ -122,8 +126,10 @@ impl AppState {
             uav_pool: Arc::new(DashMap::new()),
             fp981c_pool: Arc::new(DashMap::new()),
             fp95_state: Arc::new(Mutex::new(None)),
+            mission_payload_pool: Arc::new(DashMap::new()),
             uav_seen: Arc::new(DashMap::new()),
             fp981c_seen: Arc::new(DashMap::new()),
+            mission_payload_seen: Arc::new(DashMap::new()),
             active_links: Arc::new(DashMap::new()),
             next_link_generation: Arc::new(AtomicU64::new(0)),
             metrics: Arc::new(LinkMetrics::default()),

@@ -20,6 +20,7 @@ struct LinkBuffer {
     generation: u64,
     protocol: ProtocolType,
     data: BytesMut,
+    payload_reassembler: crate::protocol::payload::PayloadStreamReassembler,
 }
 
 impl LinkBuffer {
@@ -28,6 +29,7 @@ impl LinkBuffer {
             generation,
             protocol,
             data: BytesMut::new(),
+            payload_reassembler: crate::protocol::payload::PayloadStreamReassembler::new(),
         }
     }
 
@@ -36,6 +38,7 @@ impl LinkBuffer {
             self.generation = generation;
             self.protocol = protocol;
             self.data.clear();
+            self.payload_reassembler = crate::protocol::payload::PayloadStreamReassembler::new();
         }
     }
 }
@@ -98,8 +101,9 @@ impl RouterCore {
             ProtocolType::UAVInfo => {
                 extract_and_process_uav_info(&mut buffer.data, raw.received_at, app_state)
             }
-            ProtocolType::FP95 => extract_and_process_fp95(
+            ProtocolType::FP95 => extract_and_process_fp95_and_payload(
                 &mut buffer.data,
+                &mut buffer.payload_reassembler,
                 &raw.source_link,
                 raw.received_at,
                 active_protocol_links,
@@ -328,20 +332,31 @@ fn extract_and_process_uav_info(buffer: &mut BytesMut, received_at: Instant, app
     }
 }
 
-// ==================== FP95 切帧 + 解析 ====================
+// ==================== FP95 + 任管载荷 (EB90 / 2323 + AA55) 双协议切帧 + 解析 ====================
 
-/// 从字节流中寻找 FP95 包头 0x23 0x23
-fn find_fp95_header(buffer: &[u8]) -> Option<usize> {
+enum MixedFp95Header {
+    Fp95(usize, u8, u8), // 偏移量, 同步字1, 同步字2 (支持 0xEB 0x90 与 0x23 0x23)
+    Payload(usize),      // 偏移量 (0xAA 0x55)
+}
+
+/// 从字节流中寻找最靠前的 FP95 包头 (0xEB 0x90 / 0x23 0x23) 或任管载荷包头 (0xAA 0x55)
+fn find_next_fp95_or_payload_header(buffer: &[u8]) -> Option<MixedFp95Header> {
     for i in 0..buffer.len().saturating_sub(1) {
-        if buffer[i] == 0x23 && buffer[i + 1] == 0x23 {
-            return Some(i);
+        let b0 = buffer[i];
+        let b1 = buffer[i + 1];
+        if (b0 == 0xEB && b1 == 0x90) || (b0 == 0x23 && b1 == 0x23) {
+            return Some(MixedFp95Header::Fp95(i, b0, b1));
+        }
+        if b0 == 0xAA && b1 == 0x55 {
+            return Some(MixedFp95Header::Payload(i));
         }
     }
     None
 }
 
-fn extract_and_process_fp95(
+fn extract_and_process_fp95_and_payload(
     buffer: &mut BytesMut,
+    reassembler: &mut crate::protocol::payload::PayloadStreamReassembler,
     source_link: &str,
     received_at: Instant,
     active_links: HashSet<String>,
@@ -349,34 +364,90 @@ fn extract_and_process_fp95(
     app_state: &AppState,
     response_coordinator: &FP95ResponseCoordinator,
 ) {
-    while let Some(header_idx) = find_fp95_header(buffer) {
-        if header_idx > 0 {
-            let _ = buffer.split_to(header_idx);
-        }
-        if buffer.len() >= 32 {
-            let frame = buffer.split_to(32);
-            process_fp95_frame(
-                frame.as_ref(),
-                source_link,
-                received_at,
-                active_links.clone(),
-                arbiter,
-                app_state,
-                response_coordinator,
-            );
-        } else {
-            break;
+    while let Some(header) = find_next_fp95_or_payload_header(buffer) {
+        match header {
+            MixedFp95Header::Fp95(header_idx, h1, h2) => {
+                if header_idx > 0 {
+                    let _ = buffer.split_to(header_idx);
+                }
+                if buffer.len() >= 32 {
+                    let frame = buffer.split_to(32);
+                    process_fp95_frame(
+                        frame.as_ref(),
+                        (h1, h2),
+                        source_link,
+                        received_at,
+                        active_links.clone(),
+                        arbiter,
+                        app_state,
+                        response_coordinator,
+                    );
+                } else {
+                    break;
+                }
+            }
+            MixedFp95Header::Payload(header_idx) => {
+                if header_idx > 0 {
+                    let _ = buffer.split_to(header_idx);
+                }
+                if buffer.len() < 8 {
+                    break; // 长度不足以读取头部和长度字段
+                }
+                let data_len = u16::from_le_bytes([buffer[4], buffer[5]]) as usize;
+                let total_len = 8 + data_len;
+                if buffer.len() >= total_len {
+                    let frame = buffer.split_to(total_len);
+                    process_payload_frame(
+                        frame.as_ref(),
+                        reassembler,
+                        app_state,
+                        received_at,
+                    );
+                } else {
+                    break;
+                }
+            }
         }
     }
 
-    if find_fp95_header(buffer).is_none() && buffer.len() > 1 {
+    if find_next_fp95_or_payload_header(buffer).is_none() && buffer.len() > 1 {
         let drop_len = buffer.len() - 1;
         let _ = buffer.split_to(drop_len);
     }
 }
 
+fn process_payload_frame(
+    frame: &[u8],
+    reassembler: &mut crate::protocol::payload::PayloadStreamReassembler,
+    app_state: &AppState,
+    received_at: Instant,
+) {
+    match crate::protocol::payload::unpack_payload_frame(frame) {
+        Ok(outer) => {
+            app_state.metrics.inc_ok();
+            let uav_id = 95; // 默认机号
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+
+            let mut agg = app_state
+                .mission_payload_pool
+                .entry(uav_id)
+                .or_insert_with(|| crate::protocol::payload::MissionPayloadAggregate::new(uav_id));
+
+            reassembler.feed_payload(outer.payload_id, &outer.data, &mut agg, now_ms);
+            app_state.mission_payload_seen.insert(uav_id, received_at);
+        }
+        Err(_err) => {
+            app_state.metrics.inc_parse_err();
+        }
+    }
+}
+
 fn process_fp95_frame(
     frame: &[u8],
+    header: (u8, u8),
     source_link: &str,
     received_at: Instant,
     active_links: HashSet<String>,
@@ -384,7 +455,7 @@ fn process_fp95_frame(
     app_state: &AppState,
     response_coordinator: &FP95ResponseCoordinator,
 ) {
-    if !crate::protocol::fkd_crc::verify_fkd_crc(frame, 0x23, 0x23) {
+    if !crate::protocol::fkd_crc::verify_fkd_crc(frame, header.0, header.1) {
         app_state.metrics.inc_crc_fail();
         return;
     }
@@ -520,5 +591,65 @@ fn accept_decision(decision: RxDecision, app_state: &AppState) -> bool {
             app_state.metrics.inc_recovery_buffered();
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_next_fp95_or_payload_header() {
+        let buf = [0xFF, 0x00, 0xEB, 0x90, 0x01, 0xAA, 0x55];
+        let found = find_next_fp95_or_payload_header(&buf);
+        assert!(matches!(found, Some(MixedFp95Header::Fp95(2, 0xEB, 0x90))));
+
+        let buf2 = [0xAA, 0x55, 0x0B, 0xC3];
+        let found2 = find_next_fp95_or_payload_header(&buf2);
+        assert!(matches!(found2, Some(MixedFp95Header::Payload(0))));
+
+        let buf3 = [0x12, 0x34, 0x23, 0x23, 0x01];
+        let found3 = find_next_fp95_or_payload_header(&buf3);
+        assert!(matches!(found3, Some(MixedFp95Header::Fp95(2, 0x23, 0x23))));
+    }
+
+    #[test]
+    fn test_extract_mixed_fp95_and_payload() {
+        let mut buffer = BytesMut::new();
+        let mut reassembler = crate::protocol::payload::PayloadStreamReassembler::new();
+        let app_state = AppState::new();
+        let mut arbiter = RxArbiter::new(RxArbiterConfig::default());
+        let coordinator = FP95ResponseCoordinator::default();
+
+        // 构造一包任管 0xC3 继电器响应帧
+        let relay_inner = [0x01, 0x01, 0x02, 0xF0, 0x0F, 0xF8, 0xBD];
+        let payload_frame = crate::protocol::payload::pack_payload_frame(
+            crate::protocol::payload::CODE_DOWNLINK,
+            crate::protocol::payload::PAYLOAD_ID_RELAY,
+            1,
+            &relay_inner,
+        );
+
+        // 拼接：垃圾字节 + 载荷帧
+        buffer.extend_from_slice(&[0x00, 0x11]);
+        buffer.extend_from_slice(&payload_frame);
+
+        extract_and_process_fp95_and_payload(
+            &mut buffer,
+            &mut reassembler,
+            "test_link",
+            Instant::now(),
+            HashSet::new(),
+            &mut arbiter,
+            &app_state,
+            &coordinator,
+        );
+
+        // 验证载荷成功解析并存入 app_state
+        let agg = app_state.mission_payload_pool.get(&95);
+        assert!(agg.is_some(), "应成功解析并创建 95 号机载荷状态");
+        let payload_data = agg.unwrap();
+        assert!(payload_data.relay.is_some());
+        assert_eq!(payload_data.relay.unwrap().mask, 0xF00F);
     }
 }

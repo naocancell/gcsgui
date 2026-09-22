@@ -10,7 +10,7 @@ pub mod uplink;
 pub mod encrypted_cache;
 pub mod model_cache;
 pub mod tiles;
-
+pub mod payload;
 
 pub use config::*;
 pub use network::*;
@@ -24,3 +24,4 @@ pub use uplink::*;
 pub use encrypted_cache::*;
 pub use model_cache::*;
 pub use tiles::*;
+pub use payload::*;

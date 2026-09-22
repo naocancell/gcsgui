@@ -7,3 +7,4 @@ pub mod route_info;
 pub mod uav_info;
 pub mod uplink;
 pub mod servo_turntable;
+pub mod payload;

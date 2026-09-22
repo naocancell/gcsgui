@@ -165,6 +165,10 @@ pub fn run() {
             ensure_model_cached,
             resolve_cached_model,
             pick_3d_tiles_file,
+            send_relay_control,
+            send_relay_batch,
+            query_relay_status,
+            get_mission_payload_snapshot,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
