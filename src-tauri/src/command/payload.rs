@@ -2,7 +2,7 @@
 
 use crate::protocol::payload::{
     build_read_coils_cmd, build_write_coils_cmd, pack_payload_frame, MissionPayloadAggregate,
-    CODE_UPLINK, PAYLOAD_ID_RELAY,
+    RelayStatus, CODE_UPLINK, PAYLOAD_ID_RELAY,
 };
 use crate::state::AppState;
 use crate::uplink::dispatcher::broadcast_raw_payload;
@@ -19,8 +19,8 @@ pub async fn send_relay_control(
         return Err(format!("继电器编号超出范围 (1~16): {}", relay_index));
     }
 
-    // 获取当前掩码（如果已有），在此基础上修改对应 bit
-    let bit_pos = relay_index - 1;
+    // 根据协议图映射：b0~b7 对应线圈 9~16，b8~b15 对应线圈 1~8
+    let bit_pos = RelayStatus::coil_to_bit_pos(relay_index);
     let current_mask = state
         .mission_payload_pool
         .get(&uav_id)

@@ -621,8 +621,8 @@ mod tests {
         let mut arbiter = RxArbiter::new(RxArbiterConfig::default());
         let coordinator = FP95ResponseCoordinator::default();
 
-        // 构造一包任管 0xC3 继电器响应帧
-        let relay_inner = [0x01, 0x01, 0x02, 0xF0, 0x0F, 0xF8, 0xBD];
+        // 构造一包任管 0xC3 继电器响应帧（新版协议低字节在前）
+        let relay_inner = [0x01, 0x01, 0x02, 0xF0, 0x0F, 0xBD, 0xF8];
         let payload_frame = crate::protocol::payload::pack_payload_frame(
             crate::protocol::payload::CODE_DOWNLINK,
             crate::protocol::payload::PAYLOAD_ID_RELAY,
