@@ -152,11 +152,9 @@ export const usePayloadStore = defineStore('payloadStore', () => {
   const minHeatingMat = computed<{
     temp: number | null
     location: string
-    isWarning: boolean
-    isCritical: boolean
   }>(() => {
     const p = currentPayload.value
-    if (!p) return { temp: null, location: '等待遥测数据', isWarning: false, isCritical: false }
+    if (!p) return { temp: null, location: '等待遥测数据' }
 
     const s1 = p.tempSensor1
     const s2 = p.tempSensor2
@@ -190,14 +188,9 @@ export const usePayloadStore = defineStore('payloadStore', () => {
       }
     }
 
-    const isCritical = minVal !== null && minVal < -10
-    const isWarning = minVal !== null && minVal <= 0 && !isCritical
-
     return {
       temp: minVal,
       location: minLoc,
-      isWarning,
-      isCritical,
     }
   })
 

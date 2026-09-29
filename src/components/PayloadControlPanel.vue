@@ -2,61 +2,67 @@
   <div class="payload-panel-container">
     <!-- 顶部状态概览与总控操作条 -->
     <section class="section-card overview-card" @mousedown.stop>
-      <div class="overview-grid">
-        <!-- 最低加热膜温度与位置监视 (严格根据需求实现) -->
-        <div class="overview-item">
-          <span class="overview-label">全机最低加热膜监视</span>
-          <div class="overview-value-row">
-            <span class="min-temp-badge" :class="minTempClass">
-              <span class="dot"></span>
-              {{ formatFixed(payloadStore.minHeatingMat.temp, 1) }} ℃
-            </span>
-            <span class="min-temp-loc">
-              {{ payloadStore.minHeatingMat.location }}
-            </span>
+      <div class="overview-bar">
+        <!-- 左侧三大核心指标监控组 -->
+        <div class="overview-metrics-group">
+          <!-- 1. 最低加热膜温度与位置监视 -->
+          <div class="overview-item">
+            <span class="overview-label">全机最低加热膜监视</span>
+            <div class="overview-value-row">
+              <span class="min-temp-badge">
+                {{ formatFixed(payloadStore.minHeatingMat.temp, 1) }} ℃
+              </span>
+              <span class="min-temp-loc">
+                {{ payloadStore.minHeatingMat.location }}
+              </span>
+            </div>
+          </div>
+
+          <div class="overview-v-divider"></div>
+
+          <!-- 2. 结冰状态诊断 -->
+          <div class="overview-item">
+            <span class="overview-label">0xC5 结冰探测状态</span>
+            <div class="overview-value-row">
+              <span class="health-badge" :class="icingDesc.level">
+                <span class="dot"></span>
+                {{ icingDesc.text }}
+              </span>
+              <span
+                v-if="currentPayload?.icingSensor?.heatingActive"
+                class="heating-status-tag"
+              >
+                探头加热中
+              </span>
+              <span
+                v-if="currentPayload?.icingSensor?.detectorFault"
+                class="fault-status-tag"
+              >
+                探测器故障
+              </span>
+            </div>
+          </div>
+
+          <div class="overview-v-divider"></div>
+
+          <!-- 3. 继电器回路统计 -->
+          <div class="overview-item">
+            <span class="overview-label">0xC3 继电器回路状态</span>
+            <div class="overview-value-row">
+              <span class="mode-badge">
+                已闭合: {{ closedRelayCount }} / 16
+              </span>
+              <span class="mask-code">
+                掩码: {{ formatHex(relayStatus?.mask, 4) }}
+              </span>
+            </div>
           </div>
         </div>
 
-        <!-- 结冰状态诊断 -->
-        <div class="overview-item">
-          <span class="overview-label">0xC5 结冰探测状态</span>
-          <div class="overview-value-row">
-            <span class="health-badge" :class="icingHealthClass">
-              <span class="dot"></span>
-              {{ icingDesc.text }}
-            </span>
-            <span
-              v-if="currentPayload?.icingSensor?.heatingActive"
-              class="heating-status-tag"
-            >
-              探头加热中
-            </span>
-            <span
-              v-if="currentPayload?.icingSensor?.detectorFault"
-              class="fault-status-tag"
-            >
-              探测器故障
-            </span>
-          </div>
-        </div>
-
-        <!-- 继电器回路统计 -->
-        <div class="overview-item">
-          <span class="overview-label">0xC3 继电器回路状态</span>
-          <div class="overview-value-row">
-            <span class="mode-badge" :class="relaySummaryClass">
-              已闭合: {{ closedRelayCount }} / 16
-            </span>
-            <span class="mask-code">
-              掩码: {{ formatHex(relayStatus?.mask, 4) }}
-            </span>
-          </div>
-        </div>
-
-        <!-- 快捷控制按键 -->
-        <div class="overview-item text-right">
+        <!-- 右侧回路控制按键组 -->
+        <div class="overview-actions-group">
           <span class="overview-label">回路控制与巡检</span>
-          <div class="overview-value-row justify-end">
+          <div class="overview-value-row">
             <button
               class="action-btn"
               type="button"
@@ -66,14 +72,14 @@
               {{ loadingQuery ? '巡检中...' : '状态巡检' }}
             </button>
             <button
-              class="action-btn btn-on"
+              class="action-btn"
               type="button"
               @click="handleSetAll(true)"
             >
               全部通电
             </button>
             <button
-              class="action-btn btn-off"
+              class="action-btn"
               type="button"
               @click="handleSetAll(false)"
             >
@@ -170,24 +176,24 @@
             <!-- 1. 内机翼 -->
             <tr>
               <td class="td-val">
-                <span class="cell-sub" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor1?.innerWingConst) }">常加: {{ formatFixed(currentPayload?.tempSensor1?.innerWingConst, 1) }}</span>
-                <span class="cell-main" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor1?.innerWingHeat) }">加热: {{ formatFixed(currentPayload?.tempSensor1?.innerWingHeat, 1) }}</span>
+                <span class="cell-sub">常加: {{ formatFixed(currentPayload?.tempSensor1?.innerWingConst, 1) }}</span>
+                <span class="cell-main">加热: {{ formatFixed(currentPayload?.tempSensor1?.innerWingHeat, 1) }}</span>
               </td>
-              <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.leftInnerWing) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.leftInnerWing, 2) }}
               </td>
-              <td class="td-val" :class="{ 'val-active': hasCurrent(currentPayload?.currentSensor1?.leftInnerWing) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.currentSensor1?.leftInnerWing, 3) }}
               </td>
               <td class="td-position">内机翼</td>
               <td class="td-val">
-                <span class="cell-sub" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor2?.innerWingConst) }">常加: {{ formatFixed(currentPayload?.tempSensor2?.innerWingConst, 1) }}</span>
-                <span class="cell-main" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor2?.innerWingHeat) }">加热: {{ formatFixed(currentPayload?.tempSensor2?.innerWingHeat, 1) }}</span>
+                <span class="cell-sub">常加: {{ formatFixed(currentPayload?.tempSensor2?.innerWingConst, 1) }}</span>
+                <span class="cell-main">加热: {{ formatFixed(currentPayload?.tempSensor2?.innerWingHeat, 1) }}</span>
               </td>
-              <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.rightInnerWing) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.rightInnerWing, 2) }}
               </td>
-              <td class="td-val" :class="{ 'val-active': hasCurrent(currentPayload?.currentSensor2?.rightInnerWing) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.currentSensor2?.rightInnerWing, 3) }}
               </td>
             </tr>
@@ -195,24 +201,24 @@
             <!-- 2. 中机翼 -->
             <tr>
               <td class="td-val">
-                <span class="cell-sub" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor1?.midWingConst) }">常加: {{ formatFixed(currentPayload?.tempSensor1?.midWingConst, 1) }}</span>
-                <span class="cell-main" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor1?.midWingHeat) }">加热: {{ formatFixed(currentPayload?.tempSensor1?.midWingHeat, 1) }}</span>
+                <span class="cell-sub">常加: {{ formatFixed(currentPayload?.tempSensor1?.midWingConst, 1) }}</span>
+                <span class="cell-main">加热: {{ formatFixed(currentPayload?.tempSensor1?.midWingHeat, 1) }}</span>
               </td>
-              <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.leftMidWing) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.leftMidWing, 2) }}
               </td>
-              <td class="td-val" :class="{ 'val-active': hasCurrent(currentPayload?.currentSensor1?.leftMidWing) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.currentSensor1?.leftMidWing, 3) }}
               </td>
               <td class="td-position">中机翼</td>
               <td class="td-val">
-                <span class="cell-sub" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor2?.midWingConst) }">常加: {{ formatFixed(currentPayload?.tempSensor2?.midWingConst, 1) }}</span>
-                <span class="cell-main" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor2?.midWingHeat) }">加热: {{ formatFixed(currentPayload?.tempSensor2?.midWingHeat, 1) }}</span>
+                <span class="cell-sub">常加: {{ formatFixed(currentPayload?.tempSensor2?.midWingConst, 1) }}</span>
+                <span class="cell-main">加热: {{ formatFixed(currentPayload?.tempSensor2?.midWingHeat, 1) }}</span>
               </td>
-              <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.rightMidWing) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.rightMidWing, 2) }}
               </td>
-              <td class="td-val" :class="{ 'val-active': hasCurrent(currentPayload?.currentSensor2?.rightMidWing) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.currentSensor2?.rightMidWing, 3) }}
               </td>
             </tr>
@@ -220,24 +226,24 @@
             <!-- 3. 外机翼 -->
             <tr>
               <td class="td-val">
-                <span class="cell-sub" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor1?.outerWingConst) }">常加: {{ formatFixed(currentPayload?.tempSensor1?.outerWingConst, 1) }}</span>
-                <span class="cell-main" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor1?.outerWingHeat) }">加热: {{ formatFixed(currentPayload?.tempSensor1?.outerWingHeat, 1) }}</span>
+                <span class="cell-sub">常加: {{ formatFixed(currentPayload?.tempSensor1?.outerWingConst, 1) }}</span>
+                <span class="cell-main">加热: {{ formatFixed(currentPayload?.tempSensor1?.outerWingHeat, 1) }}</span>
               </td>
-              <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.leftOuterWing) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.leftOuterWing, 2) }}
               </td>
-              <td class="td-val" :class="{ 'val-active': hasCurrent(currentPayload?.currentSensor1?.leftOuterWing) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.currentSensor1?.leftOuterWing, 3) }}
               </td>
               <td class="td-position">外机翼</td>
               <td class="td-val">
-                <span class="cell-sub" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor2?.outerWingConst) }">常加: {{ formatFixed(currentPayload?.tempSensor2?.outerWingConst, 1) }}</span>
-                <span class="cell-main" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor2?.outerWingHeat) }">加热: {{ formatFixed(currentPayload?.tempSensor2?.outerWingHeat, 1) }}</span>
+                <span class="cell-sub">常加: {{ formatFixed(currentPayload?.tempSensor2?.outerWingConst, 1) }}</span>
+                <span class="cell-main">加热: {{ formatFixed(currentPayload?.tempSensor2?.outerWingHeat, 1) }}</span>
               </td>
-              <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.rightOuterWing) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.rightOuterWing, 2) }}
               </td>
-              <td class="td-val" :class="{ 'val-active': hasCurrent(currentPayload?.currentSensor2?.rightOuterWing) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.currentSensor2?.rightOuterWing, 3) }}
               </td>
             </tr>
@@ -245,12 +251,12 @@
             <!-- 4. 水平尾翼（平尾）- 独立清晰展示 -->
             <tr class="row-highlight">
               <td class="td-val">
-                <span class="cell-main cell-tail" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor1?.horizontalTail) }">{{ formatFixed(currentPayload?.tempSensor1?.horizontalTail, 1) }}</span>
+                <span class="cell-main cell-tail">{{ formatFixed(currentPayload?.tempSensor1?.horizontalTail, 1) }}</span>
               </td>
-              <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.leftHorizontalTail) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.leftHorizontalTail, 2) }}
               </td>
-              <td class="td-val" :class="{ 'val-active': hasCurrent(currentPayload?.currentSensor1?.leftHorizontalTail) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.currentSensor1?.leftHorizontalTail, 3) }}
               </td>
               <td class="td-position td-tail-name">
@@ -258,12 +264,12 @@
                 <span>水平尾翼</span>
               </td>
               <td class="td-val">
-                <span class="cell-main cell-tail" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor2?.horizontalTail) }">{{ formatFixed(currentPayload?.tempSensor2?.horizontalTail, 1) }}</span>
+                <span class="cell-main cell-tail">{{ formatFixed(currentPayload?.tempSensor2?.horizontalTail, 1) }}</span>
               </td>
-              <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.rightHorizontalTail) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.rightHorizontalTail, 2) }}
               </td>
-              <td class="td-val" :class="{ 'val-active': hasCurrent(currentPayload?.currentSensor2?.rightHorizontalTail) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.currentSensor2?.rightHorizontalTail, 3) }}
               </td>
             </tr>
@@ -271,12 +277,12 @@
             <!-- 5. 垂直尾翼（垂尾）- 独立清晰展示 -->
             <tr class="row-highlight">
               <td class="td-val">
-                <span class="cell-main cell-tail" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor1?.verticalTail) }">{{ formatFixed(currentPayload?.tempSensor1?.verticalTail, 1) }}</span>
+                <span class="cell-main cell-tail">{{ formatFixed(currentPayload?.tempSensor1?.verticalTail, 1) }}</span>
               </td>
-              <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.leftVerticalTail) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.leftVerticalTail, 2) }}
               </td>
-              <td class="td-val" :class="{ 'val-active': hasCurrent(currentPayload?.currentSensor1?.leftVerticalTail) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.currentSensor1?.leftVerticalTail, 3) }}
               </td>
               <td class="td-position td-tail-name">
@@ -284,12 +290,12 @@
                 <span>垂直尾翼</span>
               </td>
               <td class="td-val">
-                <span class="cell-main cell-tail" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor2?.verticalTail) }">{{ formatFixed(currentPayload?.tempSensor2?.verticalTail, 1) }}</span>
+                <span class="cell-main cell-tail">{{ formatFixed(currentPayload?.tempSensor2?.verticalTail, 1) }}</span>
               </td>
-              <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.rightVerticalTail) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.rightVerticalTail, 2) }}
               </td>
-              <td class="td-val" :class="{ 'val-active': hasCurrent(currentPayload?.currentSensor2?.rightVerticalTail) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.currentSensor2?.rightVerticalTail, 3) }}
               </td>
             </tr>
@@ -298,16 +304,16 @@
             <!-- 6. 常加热膜 / 低压供电 -->
             <tr class="row-aux">
               <td class="td-val">—</td>
-              <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.wingConstHeat) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.wingConstHeat, 2) }}
               </td>
-              <td class="td-val" :class="{ 'val-active': hasCurrent(currentPayload?.currentSensor1?.wingConstHeat) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.currentSensor1?.wingConstHeat, 3) }}
               </td>
               <td class="td-position">常加 / 低压</td>
               <td class="td-val">—</td>
               <td class="td-val">—</td>
-              <td class="td-val" :class="{ 'val-active': hasCurrent(currentPayload?.currentSensor2?.lowVoltageSupply) }">
+              <td class="td-val">
                 {{ formatFixed(currentPayload?.currentSensor2?.lowVoltageSupply, 3) }}
               </td>
             </tr>
@@ -321,7 +327,7 @@
           <span>电池温度采集 (协议 6.2 节)</span>
         </div>
         <div class="battery-strip-grid">
-          <div class="battery-metric-card" :class="{ 'is-warm': isBatteryWarm(currentPayload?.tempSensor1?.batteryA) }">
+          <div class="battery-metric-card">
             <span class="b-label">电池1温度采集</span>
             <div class="b-val-row">
               <span class="b-val">{{ formatFixed(currentPayload?.tempSensor1?.batteryA, 1) }}</span>
@@ -330,7 +336,7 @@
             <span class="b-device">采集设备 1</span>
           </div>
 
-          <div class="battery-metric-card" :class="{ 'is-warm': isBatteryWarm(currentPayload?.tempSensor1?.batteryB) }">
+          <div class="battery-metric-card">
             <span class="b-label">电池2温度采集</span>
             <div class="b-val-row">
               <span class="b-val">{{ formatFixed(currentPayload?.tempSensor1?.batteryB, 1) }}</span>
@@ -339,7 +345,7 @@
             <span class="b-device">采集设备 1</span>
           </div>
 
-          <div class="battery-metric-card" :class="{ 'is-warm': isBatteryWarm(currentPayload?.tempSensor2?.batteryA) }">
+          <div class="battery-metric-card">
             <span class="b-label">电池3温度采集</span>
             <div class="b-val-row">
               <span class="b-val">{{ formatFixed(currentPayload?.tempSensor2?.batteryA, 1) }}</span>
@@ -348,7 +354,7 @@
             <span class="b-device">采集设备 2</span>
           </div>
 
-          <div class="battery-metric-card" :class="{ 'is-warm': isBatteryWarm(currentPayload?.tempSensor2?.batteryB) }">
+          <div class="battery-metric-card">
             <span class="b-label">电池4温度采集</span>
             <div class="b-val-row">
               <span class="b-val">{{ formatFixed(currentPayload?.tempSensor2?.batteryB, 1) }}</span>
@@ -516,13 +522,12 @@
               </div>
             </div>
 
-            <div class="p-card span-2" :class="{ 'is-warm': isBoostTempHigh }">
+            <div class="p-card span-2">
               <span class="p-label">温度</span>
               <div class="p-val-row">
                 <span class="p-val">{{ formatFixed(currentPayload?.boostModule?.temperature, 1) }}</span>
                 <span class="p-unit">℃</span>
               </div>
-              <span v-if="isBoostTempHigh" class="p-alert">超温告警 (>85℃)</span>
             </div>
           </div>
         </section>
@@ -586,7 +591,7 @@
           <div class="v-card">
             <span class="v-name">100V输入电压</span>
             <div class="v-val-group">
-              <span class="v-val" :class="{ on: hasVoltage(currentPayload?.voltageSensor?.v100Input) }">
+              <span class="v-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.v100Input, 2) }}
               </span>
               <span class="v-unit">V</span>
@@ -596,7 +601,7 @@
           <div class="v-card">
             <span class="v-name">电池输入电压</span>
             <div class="v-val-group">
-              <span class="v-val" :class="{ on: hasVoltage(currentPayload?.voltageSensor?.batteryInput) }">
+              <span class="v-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.batteryInput, 2) }}
               </span>
               <span class="v-unit">V</span>
@@ -606,7 +611,7 @@
           <div class="v-card">
             <span class="v-name">48V升压模块 电压采集</span>
             <div class="v-val-group">
-              <span class="v-val" :class="{ on: hasVoltage(currentPayload?.voltageSensor?.v48BoostModule) }">
+              <span class="v-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.v48BoostModule, 2) }}
               </span>
               <span class="v-unit">V</span>
@@ -616,7 +621,7 @@
           <div class="v-card">
             <span class="v-name">降压模块 电压采集</span>
             <div class="v-val-group">
-              <span class="v-val" :class="{ on: hasVoltage(currentPayload?.voltageSensor?.stepDownModule) }">
+              <span class="v-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.stepDownModule, 2) }}
               </span>
               <span class="v-unit">V</span>
@@ -626,7 +631,7 @@
           <div class="v-card">
             <span class="v-name">整流器1输入电压</span>
             <div class="v-val-group">
-              <span class="v-val" :class="{ on: hasVoltage(currentPayload?.voltageSensor?.rectifier1Input) }">
+              <span class="v-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.rectifier1Input, 2) }}
               </span>
               <span class="v-unit">V</span>
@@ -636,7 +641,7 @@
           <div class="v-card">
             <span class="v-name">整流器1后继电器电压</span>
             <div class="v-val-group">
-              <span class="v-val" :class="{ on: hasVoltage(currentPayload?.voltageSensor?.rectifier1PostRelay) }">
+              <span class="v-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.rectifier1PostRelay, 2) }}
               </span>
               <span class="v-unit">V</span>
@@ -646,7 +651,7 @@
           <div class="v-card">
             <span class="v-name">整流器3 电压采集</span>
             <div class="v-val-group">
-              <span class="v-val" :class="{ on: hasVoltage(currentPayload?.voltageSensor?.rectifier3) }">
+              <span class="v-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.rectifier3, 2) }}
               </span>
               <span class="v-unit">V</span>
@@ -656,7 +661,7 @@
           <div class="v-card">
             <span class="v-name">稳压模块1输出电压</span>
             <div class="v-val-group">
-              <span class="v-val" :class="{ on: hasVoltage(currentPayload?.voltageSensor?.regulator1Output) }">
+              <span class="v-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.regulator1Output, 2) }}
               </span>
               <span class="v-unit">V</span>
@@ -666,7 +671,7 @@
           <div class="v-card">
             <span class="v-name">稳压模块2输出电压</span>
             <div class="v-val-group">
-              <span class="v-val" :class="{ on: hasVoltage(currentPayload?.voltageSensor?.regulator2Output) }">
+              <span class="v-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.regulator2Output, 2) }}
               </span>
               <span class="v-unit">V</span>
@@ -676,7 +681,7 @@
           <div class="v-card">
             <span class="v-name">大气测量-加温供电电压</span>
             <div class="v-val-group">
-              <span class="v-val" :class="{ on: hasVoltage(currentPayload?.voltageSensor?.atmosphereHeat) }">
+              <span class="v-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.atmosphereHeat, 2) }}
               </span>
               <span class="v-unit">V</span>
@@ -686,7 +691,7 @@
           <div class="v-card">
             <span class="v-name">云滴探测-加温电压</span>
             <div class="v-val-group">
-              <span class="v-val" :class="{ on: hasVoltage(currentPayload?.voltageSensor?.cloudDropHeat) }">
+              <span class="v-val">
                 {{ formatFixed(currentPayload?.voltageSensor?.cloudDropHeat, 2) }}
               </span>
               <span class="v-unit">V</span>
@@ -758,18 +763,6 @@ const relaySummaryClass = computed(() => {
   return 'mode-command'
 })
 
-const minTempClass = computed(() => {
-  if (payloadStore.minHeatingMat.isCritical) return 'temp-critical'
-  if (payloadStore.minHeatingMat.isWarning) return 'temp-warning'
-  return 'temp-normal'
-})
-
-
-const isBoostTempHigh = computed(() => {
-  const t = currentPayload.value?.boostModule?.temperature
-  return typeof t === 'number' && t > 85.0
-})
-
 function isRelayClosed(index: number): boolean {
   const channels = relayStatus.value?.channels
   if (!channels || index < 1 || index > 16) return false
@@ -788,24 +781,6 @@ function formatHex(val: unknown, padLength = 2): string {
     return `0x${val.toString(16).toUpperCase().padStart(padLength, '0')}`
   }
   return '—'
-}
-
-function hasCurrent(val: unknown): boolean {
-  return typeof val === 'number' && Number.isFinite(val) && val > 0.05
-}
-
-function hasVoltage(val: unknown): boolean {
-  return typeof val === 'number' && Number.isFinite(val) && val > 1.0
-}
-
-function isMinTemp(val: unknown): boolean {
-  if (typeof val !== 'number' || !Number.isFinite(val)) return false
-  const min = payloadStore.minHeatingMat.temp
-  return min !== null && Math.abs(val - min) < 0.05
-}
-
-function isBatteryWarm(val: unknown): boolean {
-  return typeof val === 'number' && Number.isFinite(val) && val > 55.0
 }
 
 
@@ -866,11 +841,34 @@ onBeforeUnmount(() => {
   padding: 12px 16px;
 }
 
-.overview-grid {
-  display: grid;
-  grid-template-columns: 1.2fr 1.1fr 1.3fr;
+.overview-bar {
+  display: flex;
   align-items: center;
-  gap: 16px;
+  justify-content: space-between;
+  gap: 20px;
+  width: 100%;
+}
+
+.overview-metrics-group {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex: 1;
+}
+
+.overview-v-divider {
+  width: 1px;
+  height: 28px;
+  background: var(--border-light);
+  flex-shrink: 0;
+}
+
+.overview-actions-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .overview-item {
@@ -884,20 +882,14 @@ onBeforeUnmount(() => {
   color: var(--text-tertiary);
   font-weight: 600;
   letter-spacing: 0.3px;
+  white-space: nowrap;
 }
 
 .overview-value-row {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.justify-end {
-  justify-content: flex-end;
-}
-
-.text-right {
-  text-align: right;
+  white-space: nowrap;
 }
 
 .mask-code {
@@ -906,24 +898,61 @@ onBeforeUnmount(() => {
   color: var(--text-tertiary);
 }
 
+.min-temp-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 700;
+  font-family: monospace;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--surface-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-heavy);
+}
+
+.min-temp-loc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
 .health-badge {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: 12px;
   font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 6px;
-  background: rgba(16, 163, 127, 0.12);
-  color: var(--accent-green);
-  border: 1px solid rgba(16, 163, 127, 0.3);
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--surface-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-heavy);
 }
 
 .health-badge .dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--accent-green);
+  background: var(--text-tertiary);
+}
+
+.health-badge.warning {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.4);
+}
+
+.health-badge.warning .dot {
+  background: #fbbf24;
+}
+
+.health-badge.danger {
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.health-badge.danger .dot {
+  background: #f87171;
 }
 
 .heating-status-tag {
@@ -947,60 +976,38 @@ onBeforeUnmount(() => {
 }
 
 .mode-badge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
   font-size: 12px;
   font-weight: 600;
   padding: 3px 8px;
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface-secondary);
   color: var(--text-primary);
   border: 1px solid var(--border-heavy);
-}
-
-.mode-constant-temp {
-  background: rgba(16, 163, 127, 0.15);
-  color: #34d399;
-  border-color: rgba(52, 211, 153, 0.3);
-}
-
-.mode-command {
-  background: rgba(245, 158, 11, 0.15);
-  color: #fbbf24;
-  border-color: rgba(251, 191, 36, 0.3);
-}
-
-.mode-closed {
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-tertiary);
 }
 
 .action-btn {
   background: var(--surface-secondary);
   border: 1px solid var(--border-heavy);
-  color: var(--text-secondary);
+  color: var(--text-primary);
   font-size: 11px;
   font-weight: 600;
-  padding: 5px 12px;
-  border-radius: 6px;
+  padding: 4px 10px;
+  border-radius: 4px;
   cursor: pointer;
   transition: all 0.15s ease;
+  white-space: nowrap;
 }
 
 .action-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--border-light);
 }
 
-.action-btn.btn-on {
-  color: #34d399;
-  border-color: rgba(52, 211, 153, 0.3);
-  background: rgba(16, 163, 127, 0.1);
-}
-
-.action-btn.btn-off {
-  color: #f87171;
-  border-color: rgba(239, 68, 68, 0.3);
-  background: rgba(239, 68, 68, 0.1);
+.action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* 导航分栏 */
@@ -1133,18 +1140,13 @@ onBeforeUnmount(() => {
 .td-val {
   font-family: monospace;
   font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.val-active {
-  color: #34d399;
-  font-weight: 700;
+  color: var(--text-primary);
 }
 
 .cell-sub {
   display: block;
   font-size: 11px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 
 .cell-main {
@@ -1157,17 +1159,6 @@ onBeforeUnmount(() => {
 .cell-tail {
   font-size: 13px;
   color: var(--text-primary);
-}
-
-.cell-main.is-min,
-.cell-sub.is-min,
-.cell-tail.is-min {
-  color: #fbbf24 !important;
-  font-weight: 700 !important;
-  background: rgba(245, 158, 11, 0.1);
-  border-radius: 3px;
-  padding: 1px 4px;
-  border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
 
@@ -1238,11 +1229,6 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
-}
-
-.battery-metric-card.is-warm {
-  border-color: rgba(239, 68, 68, 0.4);
-  background: rgba(239, 68, 68, 0.06);
 }
 
 .b-label {
@@ -1446,11 +1432,6 @@ onBeforeUnmount(() => {
   grid-column: span 2;
 }
 
-.p-card.is-warm {
-  border-left: 3px solid var(--accent-red);
-  background: rgba(239, 68, 68, 0.08);
-}
-
 .p-label {
   font-size: 11px;
   color: var(--text-secondary);
@@ -1474,12 +1455,6 @@ onBeforeUnmount(() => {
   font-size: 11px;
   color: var(--text-tertiary);
   font-weight: 600;
-}
-
-.p-alert {
-  font-size: 10px;
-  color: var(--accent-red);
-  font-weight: 700;
 }
 
 .p-status-pill {
@@ -1538,11 +1513,7 @@ onBeforeUnmount(() => {
   font-size: 15px;
   font-weight: 700;
   font-family: monospace;
-  color: var(--text-tertiary);
-}
-
-.v-val.on {
-  color: #34d399;
+  color: var(--text-primary);
 }
 
 .v-unit {

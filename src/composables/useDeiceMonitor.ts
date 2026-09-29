@@ -155,11 +155,7 @@ export function useDeiceMonitor(store: ReturnType<typeof useUavStore>) {
   })
 
   const powerDeltaClass = computed(() => {
-    if (powerDelta.value === null) return ''
-    const absVal = Math.abs(powerDelta.value)
-    if (absVal < 50) return 'delta-good'
-    if (absVal < 200) return 'delta-warning'
-    return 'delta-danger'
+    return ''
   })
 
   // 计算视在功率 (U × I)
@@ -183,26 +179,16 @@ export function useDeiceMonitor(store: ReturnType<typeof useUavStore>) {
     return calculatedPower.value.toFixed(1)
   })
 
-  // 控制器温度状态
+  // 控制器温度状态 (严格依据 94 帧遥测状态位 tempError，无协议门限不按数值变色)
   const isTempHigh = computed(() => {
     if (!deiceData.value) return false
-    const t = deiceData.value.controllerTemp
-    return (
-      (typeof t === 'number' && Number.isFinite(t) && t >= 65) ||
-      Boolean(deiceData.value.status1?.tempError)
-    )
+    return Boolean(deiceData.value.status1?.tempError)
   })
 
   const tempStatusText = computed(() => {
-    if (!deiceData.value) return 'STANDBY'
-    const t = deiceData.value.controllerTemp
-    if (deiceData.value.status1?.tempError) return 'CRITICAL OVERTEMP'
-    if (typeof t === 'number' && Number.isFinite(t)) {
-      if (t >= 75) return 'HIGH TEMPERATURE'
-      if (t >= 55) return 'WARM'
-      if (t <= -40) return 'LOW TEMPERATURE'
-    }
-    return 'NORMAL'
+    if (!deiceData.value) return '待机'
+    if (deiceData.value.status1?.tempError) return '温度异常'
+    return '正常'
   })
 
   return {

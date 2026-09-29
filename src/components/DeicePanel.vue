@@ -308,7 +308,7 @@
               </div>
 
               <!-- 控制器温度 -->
-              <div class="stat-box" :class="{ 'temp-warning': isTempHigh }">
+              <div class="stat-box">
                 <span class="stat-label">控制器温度</span>
                 <div class="stat-value-group">
                   <span class="stat-number">
@@ -1199,11 +1199,6 @@ onBeforeUnmount(() => {
 
 .stat-box.secondary {
   border-left: 3px solid var(--accent-green);
-}
-
-.stat-box.temp-warning {
-  border-left: 3px solid var(--accent-red);
-  background: rgba(239, 68, 68, 0.08);
 }
 
 .stat-label {
