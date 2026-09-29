@@ -69,3 +69,30 @@ pub async fn get_mission_payload_snapshot(
 ) -> Result<Option<MissionPayloadAggregate>, String> {
     Ok(state.mission_payload_pool.get(&uav_id).map(|kv| kv.value().clone()))
 }
+
+/// 螺旋桨加热模式与功率/温度控制指令
+///
+/// 工作模式: 0x00 关闭模式, 0x01 指令调节, 0x02 恒功率模式, 0x03 恒温模式
+#[tauri::command]
+pub async fn send_propeller_deice_command(
+    state: tauri::State<'_, AppState>,
+    _uav_id: u8,
+    work_mode: u8,
+    target_power: u16,
+    target_temp: i16,
+) -> Result<(), String> {
+    // 组装螺旋桨加热控制器控制指令帧 (透传上行或载荷格式)
+    // 报文结构: 0xEB 0x90 [目标功率u16_le] [工作模式u8] [目标温度i16_le] [校验和u8]
+    let mut cmd_bytes = Vec::with_capacity(8);
+    cmd_bytes.extend_from_slice(&[0xEB, 0x90]);
+    cmd_bytes.extend_from_slice(&target_power.to_le_bytes());
+    cmd_bytes.push(work_mode);
+    cmd_bytes.extend_from_slice(&target_temp.to_le_bytes());
+    let sum: u32 = cmd_bytes.iter().map(|&b| b as u32).sum();
+    cmd_bytes.push((sum & 0xFF) as u8);
+
+    // 通过外层任管报文或广播信道下发
+    let frame = pack_payload_frame(CODE_UPLINK, 0x94, 0, &cmd_bytes);
+    broadcast_raw_payload(&state, &frame).await
+}
+

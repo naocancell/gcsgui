@@ -120,9 +120,9 @@
         <!-- 顶部概览条 (模式与健康指示) -->
         <section class="section-card mode-overview-card" @mousedown.stop>
           <div class="overview-grid">
-            <!-- 运行模式 -->
+            <!-- 运行模式与指令切换 -->
             <div class="overview-item">
-              <span class="overview-label">工作模式</span>
+              <span class="overview-label">工作模式与控制指令</span>
               <div class="overview-value-row">
                 <span
                   class="mode-badge"
@@ -133,6 +133,19 @@
                 <span class="sub-code">
                   代码: {{ formatHex(deiceData?.workMode) }}
                 </span>
+              </div>
+              <div class="mode-cmd-btns">
+                <button
+                  v-for="m in propModes"
+                  :key="m.mode"
+                  class="mode-cmd-btn"
+                  :class="{ active: deiceData?.workMode === m.mode }"
+                  type="button"
+                  :disabled="loadingPropMode === m.mode"
+                  @click="handleSendPropMode(m.mode, m.name)"
+                >
+                  {{ loadingPropMode === m.mode ? '...' : m.name }}
+                </button>
               </div>
             </div>
 
@@ -385,8 +398,9 @@
 
 <script setup lang="ts">
 import { ref, computed, onBeforeUnmount } from 'vue'
-import { NConfigProvider, darkTheme } from 'naive-ui'
+import { NConfigProvider, darkTheme, useMessage } from 'naive-ui'
 import { useUavStore } from '@/store/uavStore'
+import { usePayloadStore } from '@/store/payloadStore'
 import { useDeiceMonitor } from '@/composables/useDeiceMonitor'
 import PayloadControlPanel from '@/components/PayloadControlPanel.vue'
 
@@ -402,7 +416,31 @@ const emit = defineEmits<{
 }>()
 
 const uavStore = useUavStore()
+const payloadStore = usePayloadStore()
+const message = useMessage()
 const activeTab = ref<'deice' | 'payload'>('deice')
+
+// 螺旋桨防除冰工作模式指令列表 (严格对应需求规范)
+const propModes = [
+  { mode: 0, name: '关闭模式' },
+  { mode: 1, name: '指令调节' },
+  { mode: 2, name: '恒功率' },
+  { mode: 3, name: '恒温模式' },
+]
+const loadingPropMode = ref<number | null>(null)
+
+async function handleSendPropMode(mode: number, name: string) {
+  loadingPropMode.value = mode
+  try {
+    const targetPower = deiceData.value?.targetPower || 2500
+    await payloadStore.sendPropellerDeiceCommand(mode, targetPower, 15)
+    message.success(`已下发螺旋桨防除冰指令: [${name}]`)
+  } catch (e: any) {
+    message.error(`下发 [${name}] 指令失败: ${e}`)
+  } finally {
+    loadingPropMode.value = null
+  }
+}
 
 const naiveThemeOverrides = {
   common: {
@@ -924,6 +962,36 @@ onBeforeUnmount(() => {
   color: var(--text-tertiary);
   font-family: monospace;
 }
+
+.mode-cmd-btns {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.mode-cmd-btn {
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  transition: all 0.15s ease;
+}
+
+.mode-cmd-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-primary);
+}
+
+.mode-cmd-btn.active {
+  background: rgba(56, 189, 248, 0.2);
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.4);
+}
+
 
 .health-badge {
   display: inline-flex;

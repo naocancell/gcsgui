@@ -124,7 +124,7 @@ export const usePayloadStore = defineStore('payloadStore', () => {
     return currentPayload.value?.relay || null
   })
 
-  // 结冰告警描述
+  // 结冰告警描述 (0xC5 探测器真实遥测)
   const icingDesc = computed<{ text: string; level: string }>(() => {
     const ice = currentPayload.value?.icingSensor
     if (!ice) return { text: '无结冰数据', level: 'offline' }
@@ -145,6 +145,59 @@ export const usePayloadStore = defineStore('payloadStore', () => {
         return { text: '极强结冰', level: 'danger' }
       default:
         return { text: '未知状态', level: 'offline' }
+    }
+  })
+
+  // 16 组加热膜最低温度与位置追踪 (严格基于 tempSensor1 / tempSensor2 真实采温)
+  const minHeatingMat = computed<{
+    temp: number | null
+    location: string
+    isWarning: boolean
+    isCritical: boolean
+  }>(() => {
+    const p = currentPayload.value
+    if (!p) return { temp: null, location: '等待遥测数据', isWarning: false, isCritical: false }
+
+    const s1 = p.tempSensor1
+    const s2 = p.tempSensor2
+    const mats: { name: string; temp: number | undefined }[] = [
+      { name: '左内机翼常加热膜', temp: s1?.innerWingConst },
+      { name: '左中机翼常加热膜', temp: s1?.midWingConst },
+      { name: '左外机翼常加热膜', temp: s1?.outerWingConst },
+      { name: '左内机翼加热膜', temp: s1?.innerWingHeat },
+      { name: '左中机翼加热膜', temp: s1?.midWingHeat },
+      { name: '左外机翼加热膜', temp: s1?.outerWingHeat },
+      { name: '左垂尾加热膜', temp: s1?.verticalTail },
+      { name: '左平尾加热膜', temp: s1?.horizontalTail },
+      { name: '右内机翼常加热膜', temp: s2?.innerWingConst },
+      { name: '右中机翼常加热膜', temp: s2?.midWingConst },
+      { name: '右外机翼常加热膜', temp: s2?.outerWingConst },
+      { name: '右内机翼加热膜', temp: s2?.innerWingHeat },
+      { name: '右中机翼加热膜', temp: s2?.midWingHeat },
+      { name: '右外机翼加热膜', temp: s2?.outerWingHeat },
+      { name: '右垂尾加热膜', temp: s2?.verticalTail },
+      { name: '右平尾加热膜', temp: s2?.horizontalTail },
+    ]
+
+    let minVal: number | null = null
+    let minLoc = '—'
+    for (const item of mats) {
+      if (typeof item.temp === 'number' && Number.isFinite(item.temp)) {
+        if (minVal === null || item.temp < minVal) {
+          minVal = item.temp
+          minLoc = item.name
+        }
+      }
+    }
+
+    const isCritical = minVal !== null && minVal < -10
+    const isWarning = minVal !== null && minVal <= 0 && !isCritical
+
+    return {
+      temp: minVal,
+      location: minLoc,
+      isWarning,
+      isCritical,
     }
   })
 
@@ -193,16 +246,30 @@ export const usePayloadStore = defineStore('payloadStore', () => {
     })
   }
 
+  // 螺旋桨防除冰模式控制指令 (0x00关闭, 0x01调节, 0x02恒功率, 0x03恒温)
+  async function sendPropellerDeiceCommand(workMode: number, targetPower: number, targetTemp = 0) {
+    return await invoke('send_propeller_deice_command', {
+      uavId: activeUavId.value,
+      workMode,
+      targetPower,
+      targetTemp,
+    })
+  }
+
   return {
     payloadMap,
     activeUavId,
     currentPayload,
     relayStatus,
     icingDesc,
+    minHeatingMat,
     startListening,
     stopListening,
     sendRelayControl,
     sendRelayBatch,
     queryRelayStatus,
+    sendPropellerDeiceCommand,
   }
 })
+
+

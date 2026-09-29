@@ -3,6 +3,20 @@
     <!-- 顶部状态概览与总控操作条 -->
     <section class="section-card overview-card" @mousedown.stop>
       <div class="overview-grid">
+        <!-- 最低加热膜温度与位置监视 (严格根据需求实现) -->
+        <div class="overview-item">
+          <span class="overview-label">全机最低加热膜监视</span>
+          <div class="overview-value-row">
+            <span class="min-temp-badge" :class="minTempClass">
+              <span class="dot"></span>
+              {{ formatFixed(payloadStore.minHeatingMat.temp, 1) }} ℃
+            </span>
+            <span class="min-temp-loc">
+              {{ payloadStore.minHeatingMat.location }}
+            </span>
+          </div>
+        </div>
+
         <!-- 结冰状态诊断 -->
         <div class="overview-item">
           <span class="overview-label">0xC5 结冰探测状态</span>
@@ -78,7 +92,9 @@
         type="button"
         @click="currentView = 'matrix'"
       >
-        <span class="nav-icon">📊</span>
+        <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2 2.5h12v11H2zM2 6.5h12M2 10.5h12M6 2.5v11M10.5 2.5v11" />
+        </svg>
         <span>翼面防除冰看板 (温·压·流矩阵)</span>
       </button>
 
@@ -88,7 +104,9 @@
         type="button"
         @click="currentView = 'circuits'"
       >
-        <span class="nav-icon">🔌</span>
+        <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M5 1.5v3.5M11 1.5v3.5M3 5h10v2.5a5 5 0 0 1-10 0zM8 12.5V14.5" />
+        </svg>
         <span>16路供电回路控制 (0xC3)</span>
       </button>
 
@@ -98,7 +116,9 @@
         type="button"
         @click="currentView = 'power'"
       >
-        <span class="nav-icon">⚡</span>
+        <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M9.2 1.5L3.8 9h3.1l-.9 5.5L11.4 7H8.3z" />
+        </svg>
         <span>电源与系统总线遥测 (0xC4)</span>
       </button>
 
@@ -108,7 +128,9 @@
         type="button"
         @click="currentView = 'all'"
       >
-        <span class="nav-icon">📑</span>
+        <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M5.8 4h8M5.8 8h8M5.8 12h8M2.2 4h.6M2.2 8h.6M2.2 12h.6" />
+        </svg>
         <span>全景平铺视图</span>
       </button>
     </div>
@@ -148,8 +170,8 @@
             <!-- 1. 内机翼 -->
             <tr>
               <td class="td-val">
-                <span class="cell-sub">常加: {{ formatFixed(currentPayload?.tempSensor1?.innerWingConst, 1) }}</span>
-                <span class="cell-main">加热: {{ formatFixed(currentPayload?.tempSensor1?.innerWingHeat, 1) }}</span>
+                <span class="cell-sub" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor1?.innerWingConst) }">常加: {{ formatFixed(currentPayload?.tempSensor1?.innerWingConst, 1) }}</span>
+                <span class="cell-main" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor1?.innerWingHeat) }">加热: {{ formatFixed(currentPayload?.tempSensor1?.innerWingHeat, 1) }}</span>
               </td>
               <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.leftInnerWing) }">
                 {{ formatFixed(currentPayload?.voltageSensor?.leftInnerWing, 2) }}
@@ -159,8 +181,8 @@
               </td>
               <td class="td-position">内机翼</td>
               <td class="td-val">
-                <span class="cell-sub">常加: {{ formatFixed(currentPayload?.tempSensor2?.innerWingConst, 1) }}</span>
-                <span class="cell-main">加热: {{ formatFixed(currentPayload?.tempSensor2?.innerWingHeat, 1) }}</span>
+                <span class="cell-sub" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor2?.innerWingConst) }">常加: {{ formatFixed(currentPayload?.tempSensor2?.innerWingConst, 1) }}</span>
+                <span class="cell-main" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor2?.innerWingHeat) }">加热: {{ formatFixed(currentPayload?.tempSensor2?.innerWingHeat, 1) }}</span>
               </td>
               <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.rightInnerWing) }">
                 {{ formatFixed(currentPayload?.voltageSensor?.rightInnerWing, 2) }}
@@ -173,8 +195,8 @@
             <!-- 2. 中机翼 -->
             <tr>
               <td class="td-val">
-                <span class="cell-sub">常加: {{ formatFixed(currentPayload?.tempSensor1?.midWingConst, 1) }}</span>
-                <span class="cell-main">加热: {{ formatFixed(currentPayload?.tempSensor1?.midWingHeat, 1) }}</span>
+                <span class="cell-sub" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor1?.midWingConst) }">常加: {{ formatFixed(currentPayload?.tempSensor1?.midWingConst, 1) }}</span>
+                <span class="cell-main" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor1?.midWingHeat) }">加热: {{ formatFixed(currentPayload?.tempSensor1?.midWingHeat, 1) }}</span>
               </td>
               <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.leftMidWing) }">
                 {{ formatFixed(currentPayload?.voltageSensor?.leftMidWing, 2) }}
@@ -184,8 +206,8 @@
               </td>
               <td class="td-position">中机翼</td>
               <td class="td-val">
-                <span class="cell-sub">常加: {{ formatFixed(currentPayload?.tempSensor2?.midWingConst, 1) }}</span>
-                <span class="cell-main">加热: {{ formatFixed(currentPayload?.tempSensor2?.midWingHeat, 1) }}</span>
+                <span class="cell-sub" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor2?.midWingConst) }">常加: {{ formatFixed(currentPayload?.tempSensor2?.midWingConst, 1) }}</span>
+                <span class="cell-main" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor2?.midWingHeat) }">加热: {{ formatFixed(currentPayload?.tempSensor2?.midWingHeat, 1) }}</span>
               </td>
               <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.rightMidWing) }">
                 {{ formatFixed(currentPayload?.voltageSensor?.rightMidWing, 2) }}
@@ -198,8 +220,8 @@
             <!-- 3. 外机翼 -->
             <tr>
               <td class="td-val">
-                <span class="cell-sub">常加: {{ formatFixed(currentPayload?.tempSensor1?.outerWingConst, 1) }}</span>
-                <span class="cell-main">加热: {{ formatFixed(currentPayload?.tempSensor1?.outerWingHeat, 1) }}</span>
+                <span class="cell-sub" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor1?.outerWingConst) }">常加: {{ formatFixed(currentPayload?.tempSensor1?.outerWingConst, 1) }}</span>
+                <span class="cell-main" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor1?.outerWingHeat) }">加热: {{ formatFixed(currentPayload?.tempSensor1?.outerWingHeat, 1) }}</span>
               </td>
               <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.leftOuterWing) }">
                 {{ formatFixed(currentPayload?.voltageSensor?.leftOuterWing, 2) }}
@@ -209,8 +231,8 @@
               </td>
               <td class="td-position">外机翼</td>
               <td class="td-val">
-                <span class="cell-sub">常加: {{ formatFixed(currentPayload?.tempSensor2?.outerWingConst, 1) }}</span>
-                <span class="cell-main">加热: {{ formatFixed(currentPayload?.tempSensor2?.outerWingHeat, 1) }}</span>
+                <span class="cell-sub" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor2?.outerWingConst) }">常加: {{ formatFixed(currentPayload?.tempSensor2?.outerWingConst, 1) }}</span>
+                <span class="cell-main" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor2?.outerWingHeat) }">加热: {{ formatFixed(currentPayload?.tempSensor2?.outerWingHeat, 1) }}</span>
               </td>
               <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.rightOuterWing) }">
                 {{ formatFixed(currentPayload?.voltageSensor?.rightOuterWing, 2) }}
@@ -223,7 +245,7 @@
             <!-- 4. 水平尾翼（平尾）- 独立清晰展示 -->
             <tr class="row-highlight">
               <td class="td-val">
-                <span class="cell-main cell-tail">{{ formatFixed(currentPayload?.tempSensor1?.horizontalTail, 1) }}</span>
+                <span class="cell-main cell-tail" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor1?.horizontalTail) }">{{ formatFixed(currentPayload?.tempSensor1?.horizontalTail, 1) }}</span>
               </td>
               <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.leftHorizontalTail) }">
                 {{ formatFixed(currentPayload?.voltageSensor?.leftHorizontalTail, 2) }}
@@ -236,7 +258,7 @@
                 <span>水平尾翼</span>
               </td>
               <td class="td-val">
-                <span class="cell-main cell-tail">{{ formatFixed(currentPayload?.tempSensor2?.horizontalTail, 1) }}</span>
+                <span class="cell-main cell-tail" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor2?.horizontalTail) }">{{ formatFixed(currentPayload?.tempSensor2?.horizontalTail, 1) }}</span>
               </td>
               <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.rightHorizontalTail) }">
                 {{ formatFixed(currentPayload?.voltageSensor?.rightHorizontalTail, 2) }}
@@ -249,7 +271,7 @@
             <!-- 5. 垂直尾翼（垂尾）- 独立清晰展示 -->
             <tr class="row-highlight">
               <td class="td-val">
-                <span class="cell-main cell-tail">{{ formatFixed(currentPayload?.tempSensor1?.verticalTail, 1) }}</span>
+                <span class="cell-main cell-tail" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor1?.verticalTail) }">{{ formatFixed(currentPayload?.tempSensor1?.verticalTail, 1) }}</span>
               </td>
               <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.leftVerticalTail) }">
                 {{ formatFixed(currentPayload?.voltageSensor?.leftVerticalTail, 2) }}
@@ -262,7 +284,7 @@
                 <span>垂直尾翼</span>
               </td>
               <td class="td-val">
-                <span class="cell-main cell-tail">{{ formatFixed(currentPayload?.tempSensor2?.verticalTail, 1) }}</span>
+                <span class="cell-main cell-tail" :class="{ 'is-min': isMinTemp(currentPayload?.tempSensor2?.verticalTail) }">{{ formatFixed(currentPayload?.tempSensor2?.verticalTail, 1) }}</span>
               </td>
               <td class="td-val" :class="{ 'val-active': hasVoltage(currentPayload?.voltageSensor?.rightVerticalTail) }">
                 {{ formatFixed(currentPayload?.voltageSensor?.rightVerticalTail, 2) }}
@@ -271,6 +293,7 @@
                 {{ formatFixed(currentPayload?.currentSensor2?.rightVerticalTail, 3) }}
               </td>
             </tr>
+
 
             <!-- 6. 常加热膜 / 低压供电 -->
             <tr class="row-aux">
@@ -735,6 +758,13 @@ const relaySummaryClass = computed(() => {
   return 'mode-command'
 })
 
+const minTempClass = computed(() => {
+  if (payloadStore.minHeatingMat.isCritical) return 'temp-critical'
+  if (payloadStore.minHeatingMat.isWarning) return 'temp-warning'
+  return 'temp-normal'
+})
+
+
 const isBoostTempHigh = computed(() => {
   const t = currentPayload.value?.boostModule?.temperature
   return typeof t === 'number' && t > 85.0
@@ -768,9 +798,16 @@ function hasVoltage(val: unknown): boolean {
   return typeof val === 'number' && Number.isFinite(val) && val > 1.0
 }
 
+function isMinTemp(val: unknown): boolean {
+  if (typeof val !== 'number' || !Number.isFinite(val)) return false
+  const min = payloadStore.minHeatingMat.temp
+  return min !== null && Math.abs(val - min) < 0.05
+}
+
 function isBatteryWarm(val: unknown): boolean {
   return typeof val === 'number' && Number.isFinite(val) && val > 55.0
 }
+
 
 async function handleToggleRelay(index: number, enabled: boolean) {
   loadingSwitch.value = index
@@ -966,14 +1003,14 @@ onBeforeUnmount(() => {
   background: rgba(239, 68, 68, 0.1);
 }
 
-/* 导航分栏药丸 */
+/* 导航分栏 */
 .panel-view-nav {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px;
-  background: rgba(0, 0, 0, 0.25);
-  border-radius: 8px;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-under);
+  border-radius: 6px;
   border: 1px solid var(--border-light);
 }
 
@@ -981,31 +1018,37 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 14px;
-  border-radius: 6px;
+  padding: 5px 12px;
+  border-radius: 4px;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-tertiary);
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: color 0.15s ease, background 0.15s ease;
+  white-space: nowrap;
 }
 
 .nav-tab-btn:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.04);
 }
 
 .nav-tab-btn.active {
-  color: #ffffff;
-  background: var(--surface-secondary);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-  border: 1px solid var(--border-heavy);
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.07);
 }
 
 .nav-icon {
-  font-size: 14px;
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.75;
+  flex-shrink: 0;
 }
 
 /* 通用面板标题 */
@@ -1054,15 +1097,17 @@ onBeforeUnmount(() => {
 }
 
 .th-group-left {
-  background: rgba(56, 189, 248, 0.08);
-  color: #7dd3fc;
+  background: rgba(56, 189, 248, 0.05);
+  color: var(--text-secondary);
   font-size: 12px;
+  font-weight: 600;
 }
 
 .th-group-right {
-  background: rgba(52, 211, 153, 0.08);
-  color: #6ee7b7;
+  background: rgba(52, 211, 153, 0.05);
+  color: var(--text-secondary);
   font-size: 12px;
+  font-weight: 600;
 }
 
 .th-position {
@@ -1105,14 +1150,26 @@ onBeforeUnmount(() => {
 .cell-main {
   display: block;
   font-size: 12px;
-  font-weight: 700;
-  color: #38bdf8;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .cell-tail {
   font-size: 13px;
-  color: #38bdf8;
+  color: var(--text-primary);
 }
+
+.cell-main.is-min,
+.cell-sub.is-min,
+.cell-tail.is-min {
+  color: #fbbf24 !important;
+  font-weight: 700 !important;
+  background: rgba(245, 158, 11, 0.1);
+  border-radius: 3px;
+  padding: 1px 4px;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
 
 .td-position {
   font-weight: 700;
@@ -1134,18 +1191,18 @@ onBeforeUnmount(() => {
 
 .badge-tail {
   font-size: 10px;
-  font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: rgba(56, 189, 248, 0.2);
-  color: #38bdf8;
-  border: 1px solid rgba(56, 189, 248, 0.4);
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-default);
 }
 
 .badge-tail.vtail {
-  background: rgba(168, 85, 247, 0.2);
-  color: #c084fc;
-  border-color: rgba(168, 85, 247, 0.4);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  border-color: var(--border-default);
 }
 
 .row-aux {
@@ -1176,17 +1233,16 @@ onBeforeUnmount(() => {
 .battery-metric-card {
   background: var(--surface-secondary);
   border: 1px solid var(--border-light);
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 10px 14px;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  border-left: 3px solid var(--focus-blue);
 }
 
 .battery-metric-card.is-warm {
-  border-left-color: var(--accent-red);
-  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.06);
 }
 
 .b-label {
@@ -1248,15 +1304,15 @@ onBeforeUnmount(() => {
 }
 
 .wing-dot {
-  background: #38bdf8;
+  background: var(--text-tertiary);
 }
 
 .tail-dot {
-  background: #c084fc;
+  background: var(--text-tertiary);
 }
 
 .payload-dot {
-  background: #fbbf24;
+  background: var(--text-tertiary);
 }
 
 .circuit-tiles-grid {
@@ -1283,13 +1339,13 @@ onBeforeUnmount(() => {
 }
 
 .circuit-tile.is-closed {
-  background: rgba(16, 163, 127, 0.08);
+  background: rgba(16, 163, 127, 0.07);
   border-color: rgba(16, 163, 127, 0.4);
 }
 
 .tile-tail.is-closed {
-  border-color: rgba(192, 132, 252, 0.5);
-  background: rgba(192, 132, 252, 0.08);
+  border-color: rgba(16, 163, 127, 0.4);
+  background: rgba(16, 163, 127, 0.07);
 }
 
 .tile-header {
@@ -1379,15 +1435,11 @@ onBeforeUnmount(() => {
 .p-card {
   background: var(--surface-secondary);
   border: 1px solid var(--border-light);
-  border-radius: 6px;
+  border-radius: 4px;
   padding: 8px 10px;
   display: flex;
   flex-direction: column;
   gap: 4px;
-}
-
-.p-card.highlight-box {
-  border-left: 3px solid #38bdf8;
 }
 
 .p-card.span-2 {
@@ -1490,7 +1542,7 @@ onBeforeUnmount(() => {
 }
 
 .v-val.on {
-  color: #38bdf8;
+  color: #34d399;
 }
 
 .v-unit {

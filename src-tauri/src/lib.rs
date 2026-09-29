@@ -169,6 +169,7 @@ pub fn run() {
             send_relay_batch,
             query_relay_status,
             get_mission_payload_snapshot,
+            send_propeller_deice_command,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
