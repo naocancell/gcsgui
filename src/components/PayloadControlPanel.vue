@@ -61,16 +61,8 @@
 
         <!-- 右侧回路控制按键组 -->
         <div class="overview-actions-group">
-          <span class="overview-label">回路控制与巡检</span>
+          <span class="overview-label">回路总控</span>
           <div class="overview-value-row">
-            <button
-              class="action-btn"
-              type="button"
-              :disabled="loadingQuery"
-              @click="handleRefreshRelay"
-            >
-              {{ loadingQuery ? '巡检中...' : '状态巡检' }}
-            </button>
             <button
               class="action-btn"
               type="button"
@@ -749,7 +741,6 @@ const relayStatus = computed(() => payloadStore.relayStatus)
 const icingDesc = computed(() => payloadStore.icingDesc)
 
 const loadingSwitch = ref<number | null>(null)
-const loadingQuery = ref(false)
 
 const closedRelayCount = computed(() => {
   const channels = relayStatus.value?.channels
@@ -791,6 +782,10 @@ async function handleToggleRelay(index: number, enabled: boolean) {
   try {
     await payloadStore.sendRelayControl(index, enabled)
     message.success(`已下发: ${name} [${enabled ? '通电' : '断开'}]`)
+    // 进阶闭环方案：控制下发后延时 200ms 立即主动回读一次，快速确认状态
+    setTimeout(() => {
+      payloadStore.queryRelayStatus().catch(() => {})
+    }, 200)
   } catch (e: any) {
     message.error(`控制 ${name} 失败: ${e}`)
   } finally {
@@ -803,25 +798,20 @@ async function handleSetAll(enabled: boolean) {
     const mask = enabled ? 0xFFFF : 0x0000
     await payloadStore.sendRelayBatch(mask)
     message.success(`已下发全部 [${enabled ? '通电' : '断开'}]`)
+    // 进阶闭环方案：控制下发后延时 200ms 立即主动回读一次，快速确认状态
+    setTimeout(() => {
+      payloadStore.queryRelayStatus().catch(() => {})
+    }, 200)
   } catch (e: any) {
     message.error(`操作失败: ${e}`)
   }
 }
 
-async function handleRefreshRelay() {
-  loadingQuery.value = true
-  try {
-    await payloadStore.queryRelayStatus()
-    message.info('已发送回路状态巡检指令')
-  } catch (e: any) {
-    message.error(`巡检失败: ${e}`)
-  } finally {
-    loadingQuery.value = false
-  }
-}
 
 onMounted(() => {
   payloadStore.startListening()
+  // 进入页面立即触发一次状态巡检进行初态同步
+  payloadStore.queryRelayStatus().catch(() => {})
 })
 
 onBeforeUnmount(() => {

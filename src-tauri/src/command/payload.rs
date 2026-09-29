@@ -35,7 +35,17 @@ pub async fn send_relay_control(
 
     let inner_cmd = build_write_coils_cmd(new_mask);
     let frame = pack_payload_frame(CODE_UPLINK, PAYLOAD_ID_RELAY, 0, &inner_cmd);
-    broadcast_raw_payload(&state, &frame).await
+    let res = broadcast_raw_payload(&state, &frame).await;
+    if res.is_ok() {
+        let state_clone = state.inner().clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let inner_cmd = build_read_coils_cmd();
+            let query_frame = pack_payload_frame(CODE_UPLINK, PAYLOAD_ID_RELAY, 0, &inner_cmd);
+            let _ = broadcast_raw_payload(&state_clone, &query_frame).await;
+        });
+    }
+    res
 }
 
 /// 批量设置 16 路继电器状态（掩码控制）
@@ -47,7 +57,43 @@ pub async fn send_relay_batch(
 ) -> Result<(), String> {
     let inner_cmd = build_write_coils_cmd(mask);
     let frame = pack_payload_frame(CODE_UPLINK, PAYLOAD_ID_RELAY, 0, &inner_cmd);
-    broadcast_raw_payload(&state, &frame).await
+    let res = broadcast_raw_payload(&state, &frame).await;
+    if res.is_ok() {
+        let state_clone = state.inner().clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let inner_cmd = build_read_coils_cmd();
+            let query_frame = pack_payload_frame(CODE_UPLINK, PAYLOAD_ID_RELAY, 0, &inner_cmd);
+            let _ = broadcast_raw_payload(&state_clone, &query_frame).await;
+        });
+    }
+    res
+}
+
+/// 启动地面站 0xC3 继电器自主轮询后台任务（频率 0.5Hz，即 2 秒 1 次）
+///
+/// 穿插在原本的上行链路中，当存在活动通信链路时自动周期性发送读线圈指令
+pub fn start_relay_status_poller(state: AppState) {
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(2000));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        loop {
+            interval.tick().await;
+
+            // 仅在存在活动的上行通信链路时穿插发送读线圈指令
+            let has_active_uplink = state
+                .active_links
+                .iter()
+                .any(|entry| matches!(entry.protocol, crate::comms::ProtocolType::FP981C | crate::comms::ProtocolType::FP95));
+
+            if has_active_uplink {
+                let inner_cmd = build_read_coils_cmd();
+                let frame = pack_payload_frame(CODE_UPLINK, PAYLOAD_ID_RELAY, 0, &inner_cmd);
+                let _ = broadcast_raw_payload(&state, &frame).await;
+            }
+        }
+    });
 }
 
 /// 下发读线圈指令，主动查询 16 路继电器当前状态

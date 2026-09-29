@@ -80,6 +80,9 @@ pub fn run() {
             // 启动串口热插拔监测后台任务
             crate::command::serial::start_port_monitor(app.handle().clone());
 
+            // 启动 0xC3 继电器 0.5Hz 自主轮询上行任务（开始通信后自主轮询）
+            crate::command::payload::start_relay_status_poller(app_state.clone());
+
             // 开启软件日志插件（强行创建目录并落盘）
             use tauri_plugin_log::{Target, TargetKind};
             let log_dir = app
