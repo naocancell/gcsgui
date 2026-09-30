@@ -1,8 +1,8 @@
 //! 13所吊舱控制 Tauri 命令层。
 //!
-//! 时序设计（对应规范第五节）：
-//! - 单次触发：`RepeatCycles { cycles: 5 }`，以 20ms tick 连发 5 帧 = 约 100ms
-//!   注入窗口，随后自动回落周期常发帧（fcode 0x51），等效"单发 + 100ms + 清空复位"。
+//! 时序设计（对应规范第五节与 98 版工程实际）：
+//! - 单次触发：`CommandSendPolicy::Once`，单发 1 帧，随后自动回落周期常发帧（fcode 0x51）。
+//!   避免 50Hz 连发多帧导致图像切换（0xA3）等 Toggle 脉冲指令在机载吊舱连续翻转切回原画面。
 //! - 连续/长按：`UntilClearedPeriodic { interval_ticks: 5 }`，100ms 周期（10Hz）
 //!   持续发送，松开时调用 `stop_pod_command` 立即回落，等效"长按循环 + 松开清空"。
 //! - VMC 通道指令：复用飞行开关三判二机制（6 帧指令 + 4 帧释放）。
@@ -15,8 +15,6 @@ use crate::uplink::{CommandSendPolicy, UplinkCommandError, UplinkHandle};
 
 /// 上行 actor 的固定 tick 周期（毫秒）。
 const UPLINK_TICK_MS: u8 = 20;
-/// 单次触发指令的注入窗口（毫秒），对应规范 5.1 的 100ms 延时窗口。
-const SINGLE_INJECT_WINDOW_MS: u8 = 100;
 /// 连续指令的发送周期（毫秒），对应规范 5.2 的 10Hz 循环。
 const CONTINUOUS_PERIOD_MS: u8 = 100;
 
@@ -45,10 +43,9 @@ pub async fn send_pod_command(
     request: PodCommandRequest,
 ) -> Result<(), String> {
     let payload = encode_pod_injection(&request)?;
-    let cycles = u16::from(SINGLE_INJECT_WINDOW_MS / UPLINK_TICK_MS);
     let interval_ticks = CONTINUOUS_PERIOD_MS / UPLINK_TICK_MS;
     let policy = match request.mode {
-        PodSendMode::Single => CommandSendPolicy::RepeatCycles { cycles },
+        PodSendMode::Single => CommandSendPolicy::Once,
         PodSendMode::Continuous => CommandSendPolicy::UntilClearedPeriodic { interval_ticks },
     };
 

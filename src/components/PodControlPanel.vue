@@ -712,6 +712,9 @@ async function onGuideSubmit() {
 // ==================== 指令分发 ====================
 
 async function onSingle(command: PodSingleCommand) {
+  if (podStore.pendingKey === command.key) {
+    return
+  }
   try {
     if (command.key === 'reset') {
       await podStore.resetPlatform(command)
