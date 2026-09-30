@@ -42,6 +42,11 @@ async fn apply_comms_hot_reload(
             log::info!("[热重载] 停止变更或禁用的 UDP 链路: {}", name);
             if let Some((_, link)) = state.active_links.remove(&name) {
                 link.transport.stop();
+                let recorder = state.recorder.clone();
+                let n = name.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = recorder.stop_link(&n).await;
+                });
             }
         }
     }
@@ -98,6 +103,11 @@ async fn apply_comms_hot_reload(
             log::info!("[热重载] 停止变更或禁用的串口链路: {}", name);
             if let Some((_, link)) = state.active_links.remove(&name) {
                 link.transport.stop();
+                let recorder = state.recorder.clone();
+                let n = name.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = recorder.stop_link(&n).await;
+                });
             }
         }
     }

@@ -27,17 +27,21 @@ gcs-macros.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tokio-serial.workspace = true
+async-trait.workspace = true
 
 # 序列化与工具
 serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
+thiserror.workspace = true
 dashmap.workspace = true
 bytes.workspace = true
 once_cell.workspace = true
 get_if_addrs.workspace = true
 aes-gcm.workspace = true
 reqwest.workspace = true
+crc32fast.workspace = true
+chrono.workspace = true
 
 # Tauri 插件
 tauri.workspace = true

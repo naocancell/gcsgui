@@ -157,7 +157,7 @@ pub async fn start_router(
             raw = rx.recv() => {
                 let Some(raw) = raw else { break };
                 router.sync_link_generations(&active_link_generations(&app_state));
-                let protocol = {
+                let (protocol, link_type) = {
                     let Some(link) = app_state.active_links.get(&raw.source_link) else {
                         continue;
                     };
@@ -169,15 +169,21 @@ pub async fn start_router(
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
                     *lock = raw.received_at;
-                    link.protocol
+                    (link.protocol, link.link_type.clone())
                 };
                 let active = active_links_for_protocol(&app_state, protocol);
+                // 记录 tap：非阻塞，按链路独立记录
+                app_state
+                    .recorder
+                    .try_record(&raw, protocol, Some(&link_type));
                 router.process_raw(raw, protocol, active, &app_state, &response_coordinator);
             }
             _ = maintenance.tick() => {
                 router.sync_link_generations(&active_link_generations(&app_state));
                 let active = active_links_by_protocol(&app_state);
                 app_state.replace_rx_health(router.maintenance(Instant::now(), &active));
+                // 自动同步并清理已停用链路的录制会话
+                app_state.recorder.sync_active_links(&app_state.active_links);
             }
         }
     }
@@ -541,6 +547,11 @@ fn forward_to_servo_turntable(
     app_state: &AppState,
     frame83: &crate::protocol::fp95::FP95Frame83,
 ) {
+    // 回放安全围栏：回放会话存在时禁止向真实伺服转台链路转发数据
+    if app_state.replay_active() {
+        return;
+    }
+
     let servo_transports: Vec<_> = app_state
         .active_links
         .iter()

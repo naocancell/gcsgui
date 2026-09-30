@@ -81,13 +81,14 @@ pub fn start_relay_status_poller(state: AppState) {
         loop {
             interval.tick().await;
 
-            // 仅在存在活动的上行通信链路时穿插发送读线圈指令
+            // 仅在存在活动的上行通信链路时穿插发送读线圈指令；
+            // 回放安全围栏：回放会话存在时暂停轮询，避免向真实链路发包
             let has_active_uplink = state
                 .active_links
                 .iter()
                 .any(|entry| matches!(entry.protocol, crate::comms::ProtocolType::FP981C | crate::comms::ProtocolType::FP95));
 
-            if has_active_uplink {
+            if has_active_uplink && !state.replay_active() {
                 let inner_cmd = build_read_coils_cmd();
                 let frame = pack_payload_frame(CODE_UPLINK, PAYLOAD_ID_RELAY, 0, &inner_cmd);
                 let _ = broadcast_raw_payload(&state, &frame).await;

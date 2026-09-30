@@ -13,31 +13,36 @@ pub async fn start_emitter(app_handle: AppHandle, app_state: AppState) {
         tick_count = tick_count.wrapping_add(1);
         let now = Instant::now();
 
+        // 回放暂停或播完留存时跳过 10s 死链剔除，保住复盘画面
+        let skip_eviction = app_state.replay_paused() || (!app_state.replay_active() && app_state.replay_retained());
+
         // 驱逐超过 10 秒未更新的死链路
-        app_state.uav_seen.retain(|id, last_seen| {
-            if now.duration_since(*last_seen) > evict_timeout {
-                app_state.uav_pool.remove(id);
-                false
-            } else {
-                true
-            }
-        });
-        app_state.fp981c_seen.retain(|id, last_seen| {
-            if now.duration_since(*last_seen) > evict_timeout {
-                app_state.fp981c_pool.remove(id);
-                false
-            } else {
-                true
-            }
-        });
-        app_state.mission_payload_seen.retain(|id, last_seen| {
-            if now.duration_since(*last_seen) > evict_timeout {
-                app_state.mission_payload_pool.remove(id);
-                false
-            } else {
-                true
-            }
-        });
+        if !skip_eviction {
+            app_state.uav_seen.retain(|id, last_seen| {
+                if now.duration_since(*last_seen) > evict_timeout {
+                    app_state.uav_pool.remove(id);
+                    false
+                } else {
+                    true
+                }
+            });
+            app_state.fp981c_seen.retain(|id, last_seen| {
+                if now.duration_since(*last_seen) > evict_timeout {
+                    app_state.fp981c_pool.remove(id);
+                    false
+                } else {
+                    true
+                }
+            });
+            app_state.mission_payload_seen.retain(|id, last_seen| {
+                if now.duration_since(*last_seen) > evict_timeout {
+                    app_state.mission_payload_pool.remove(id);
+                    false
+                } else {
+                    true
+                }
+            });
+        }
 
         // 推送 UAVInfo 原始状态
         let uavs: Vec<_> = app_state
@@ -86,6 +91,13 @@ pub async fn start_emitter(app_handle: AppHandle, app_state: AppState) {
             let snapshot = app_state.rx_health_snapshot();
             if let Err(e) = app_handle.emit("link-health-event", snapshot) {
                 log::error!("Tauri emitter 发送 link-health-event 失败: {}", e);
+            }
+        }
+
+        // 回放会话存在时推送回放状态（10Hz，前端进度条数据源）
+        if let Some(status) = app_state.replay_status_snapshot() {
+            if let Err(e) = app_handle.emit("replay-status-event", &status) {
+                log::error!("Tauri emitter 发送 replay-status-event 失败: {}", e);
             }
         }
     }

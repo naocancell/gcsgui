@@ -118,6 +118,15 @@ pub struct AppState {
 
     /// RX 层：多物理链路仲裁器发布的最新健康快照。
     pub rx_health: Arc<RwLock<crate::router::rx_arbiter::RxHealthSnapshot>>,
+
+    /// 记录回放子系统：原始数据记录器（tap 由路由器主循环调用）
+    pub recorder: Arc<crate::recorder::RecorderService>,
+
+    /// 回放子系统引擎
+    pub replay: Arc<crate::recorder::replay::ReplayEngine>,
+
+    /// 回放会话公共状态（pacing 循环写，emitter / command 读）
+    pub replay_status: Arc<RwLock<Option<crate::recorder::replay::ReplayStatus>>>,
 }
 
 impl AppState {
@@ -134,7 +143,21 @@ impl AppState {
             next_link_generation: Arc::new(AtomicU64::new(0)),
             metrics: Arc::new(LinkMetrics::default()),
             rx_health: Arc::new(RwLock::new(Default::default())),
+            recorder: Arc::new(crate::recorder::RecorderService::new()),
+            replay: Arc::new(crate::recorder::replay::ReplayEngine::new()),
+            replay_status: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// 清空全部 RX 状态池（回放启动/跳转前调用，保证状态从零重演）
+    pub fn reset_rx_pools(&self) {
+        self.uav_pool.clear();
+        self.fp981c_pool.clear();
+        self.mission_payload_pool.clear();
+        self.uav_seen.clear();
+        self.fp981c_seen.clear();
+        self.mission_payload_seen.clear();
+        *self.fp95_state.lock().expect("FP95 state mutex poisoned") = None;
     }
 
     pub fn allocate_link_generation(&self) -> u64 {
@@ -173,9 +196,12 @@ impl AppState {
         timeout: std::time::Duration,
     ) -> Option<FP95EventPayload> {
         let mut guard = self.fp95_state.lock().expect("FP95 state mutex poisoned");
-        if guard
-            .as_ref()
-            .is_some_and(|state| now.duration_since(state.last_seen) > timeout)
+        // 回放存在（播放、暂停或播完留存）时跳过超时剔除，保住画面
+        let keep_replay = self.replay_retained();
+        if !keep_replay
+            && guard
+                .as_ref()
+                .is_some_and(|state| now.duration_since(state.last_seen) > timeout)
         {
             *guard = None;
         }
@@ -195,6 +221,49 @@ impl AppState {
 
     pub fn rx_health_snapshot(&self) -> crate::router::rx_arbiter::RxHealthSnapshot {
         self.rx_health
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// 回放会话是否激活（Playing 或 Paused；Stopped/无会话为 false）。
+    /// 用于安全围栏：回放期间抑制一切对外副作用（伺服转发/继电器轮询/上行发送）。
+    pub fn replay_active(&self) -> bool {
+        let guard = self
+            .replay_status
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        matches!(
+            guard.as_ref().map(|s| s.state),
+            Some(crate::recorder::replay::ReplayState::Playing)
+                | Some(crate::recorder::replay::ReplayState::Paused)
+        )
+    }
+
+    /// 回放是否处于暂停态（暂停时 emitter 跳过 10s 死链剔除，保住画面）
+    pub fn replay_paused(&self) -> bool {
+        let guard = self
+            .replay_status
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        matches!(
+            guard.as_ref().map(|s| s.state),
+            Some(crate::recorder::replay::ReplayState::Paused)
+        )
+    }
+
+    /// 回放会话是否存在（Playing/Paused/Stopped，控制条可见期间保住复盘画面）
+    pub fn replay_retained(&self) -> bool {
+        let guard = self
+            .replay_status
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard.is_some()
+    }
+
+    /// 回放状态快照（emitter 推送 / command 查询）
+    pub fn replay_status_snapshot(&self) -> Option<crate::recorder::replay::ReplayStatus> {
+        self.replay_status
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()

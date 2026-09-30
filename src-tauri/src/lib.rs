@@ -10,6 +10,7 @@ pub mod command;
 pub mod comms;
 pub mod config;
 pub mod protocol;
+pub mod recorder;
 pub mod router;
 pub mod state;
 pub mod uplink;
@@ -111,6 +112,17 @@ pub fn run() {
                 log::info!("日志持久化保存路径: {:?}", log_dir);
             }}
 
+            // 初始化记录回放子系统数据存放目录
+            let rec_dir = app
+                .path()
+                .app_data_dir()
+                .or_else(|_| app.path().app_config_dir())
+                .unwrap_or_else(|_| std::path::PathBuf::from("./recordings"))
+                .join("recordings");
+            let _ = std::fs::create_dir_all(&rec_dir);
+            app_state.recorder.init_dir(rec_dir.clone());
+            log::info!("原始链路数据自动录制保存路径: {:?}", rec_dir);
+
             // 软件开启时，把本地配置中的 enabled 全部重置为 false，避免前后端状态不一致
             let mut comms_config = config::comms::CommsConfig::load(app.handle());
             for udp in &mut comms_config.udp {
@@ -173,6 +185,16 @@ pub fn run() {
             query_relay_status,
             get_mission_payload_snapshot,
             send_propeller_deice_command,
+            recorder::command::start_recording,
+            recorder::command::stop_recording,
+            recorder::command::get_recorder_status,
+            recorder::command::start_replay,
+            recorder::command::pause_replay,
+            recorder::command::resume_replay,
+            recorder::command::stop_replay,
+            recorder::command::set_replay_speed,
+            recorder::command::seek_replay,
+            recorder::command::get_replay_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

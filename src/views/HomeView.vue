@@ -5,6 +5,8 @@ import BottomBar from '@/components/BottomBar.vue'
 import Toolbar from '@/components/toolbar.vue'
 import CollisionDetection from '@/components/CollisionDetection.vue'
 import RouteManageView from '@/views/RouteManageView.vue'
+import RecorderEntry from '@/components/RecorderEntry.vue'
+import ReplayController from '@/components/ReplayController.vue'
 import { useMessage } from 'naive-ui'
 import { useStaticStore } from '@/store/staticStore'
 import { useUavStore } from '@/store/uavStore'
@@ -23,6 +25,8 @@ export default defineComponent({
     BottomBar,
     SceneViewer,
     RouteManageView,
+    RecorderEntry,
+    ReplayController,
   },
   data() {
     return {
@@ -155,6 +159,8 @@ export default defineComponent({
         ref="ToolBar"
         @resizeMap="resizeMap"
       ></toolbar>
+      <RecorderEntry v-show="!staticStore.showRouteManage" />
+      <ReplayController v-show="!staticStore.showRouteManage" />
     </div>
     <RouteManageView v-if="staticStore.showRouteManage"></RouteManageView>
   </div>

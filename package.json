@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-dialog": "~2.7.3",
     "@turf/turf": "^7.4.0",
     "@vicons/carbon": "^0.13.0",
     "@vicons/fa": "^0.13.0",

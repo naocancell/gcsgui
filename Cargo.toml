@@ -39,6 +39,8 @@ dashmap = "6.2.1"
 bytes = "1.5"
 once_cell = { version = "1.21.4", features = ["parking_lot"] }
 aes-gcm = "0.10"
+crc32fast = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 # Tauri 生态
 tauri = { version = "2.11.2", features = ["protocol-asset"] }

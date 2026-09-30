@@ -78,6 +78,7 @@ pub async fn start_udp_internal(
     };
 
     state.active_links.insert(link_name.clone(), active_link);
+    let _ = state.recorder.start_link(&link_name, protocol_type, "UDP");
 
     let router_tx_clone = router_tx.clone();
     let ln_clone = link_name.clone();
@@ -144,6 +145,11 @@ pub fn stop_udp_listener(
 ) -> Result<String, String> {
     match state.active_links.remove(&name) { Some((_, link)) => {
         link.transport.stop();
+        let recorder = state.recorder.clone();
+        let n = name.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = recorder.stop_link(&n).await;
+        });
         Ok(format!("UDP 监听服务 [{}] 已停止", name))
     } _ => {
         Err(format!("未找到指定的 UDP 链路 [{}]", name))

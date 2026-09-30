@@ -12,6 +12,12 @@ fn supports_uplink(protocol: ProtocolType) -> bool {
 }
 
 pub(crate) async fn broadcast_frame(state: &AppState, frame: [u8; 32]) {
+    // 回放安全围栏：回放会话存在时禁止一切上行发送（防误触真实设备）
+    if state.replay_active() {
+        log::warn!("[Replay] 回放会话进行中，已拦截一帧上行广播");
+        return;
+    }
+
     let targets: Vec<_> = state
         .active_links
         .iter()
@@ -45,6 +51,11 @@ pub(crate) async fn broadcast_frame(state: &AppState, frame: [u8; 32]) {
 }
 
 pub async fn broadcast_raw_payload(state: &AppState, bytes: &[u8]) -> Result<(), String> {
+    // 回放安全围栏：回放会话存在时禁止一切上行发送（防误触真实设备）
+    if state.replay_active() {
+        return Err("回放会话进行中，已禁止上行发送".to_string());
+    }
+
     let targets: Vec<_> = state
         .active_links
         .iter()

@@ -45,6 +45,7 @@ pub async fn start_serial_internal(
     };
 
     state.active_links.insert(link_name.clone(), active_link);
+    let _ = state.recorder.start_link(&link_name, protocol_type, "Serial");
 
     let router_tx_clone = router_tx.clone();
     let ln_clone = link_name.clone();
@@ -105,6 +106,11 @@ pub fn stop_serial_listener(
 ) -> Result<String, String> {
     match state.active_links.remove(&name) { Some((_, link)) => {
         link.transport.stop();
+        let recorder = state.recorder.clone();
+        let n = name.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = recorder.stop_link(&n).await;
+        });
         Ok(format!("已停止串口链路 [{}]", name))
     } _ => {
         Err(format!("找不到指定的串口链路 [{}]", name))

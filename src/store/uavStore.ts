@@ -89,21 +89,36 @@ export const useUavStore = defineStore('uav', () => {
   let healthUnlisten: UnlistenFn | null = null
   let healthListenPromise: Promise<void> | null = null
   let healthListenerGeneration = 0
-  // 检查当前通信链路列表中，是否存在一个“启用状态 + 协议是 FP95”的链路
+
+  /** 是否处于回放会话模式（回放作为数据源，不受物理链路开启状态限制） */
+  const isReplaying = ref(false)
+
+  function setReplaying(active: boolean) {
+    if (isReplaying.value !== active) {
+      isReplaying.value = active
+      syncProtocolListeners()
+    }
+  }
+
+  // 检查当前通信链路列表或回放会话，是否存在 FP95 数据源
   function needsFp95Listening() {
-    // some() 是 JavaScript 数组方法  是否有满足条件的链路
-    return links.value.some((link) => link.enabled && link.protocol === 'FP95')
+    return (
+      isReplaying.value ||
+      links.value.some((link) => link.enabled && link.protocol === 'FP95')
+    )
   }
 
   function needsFp981cListening() {
-    return links.value.some(
-      (link) => link.enabled && link.protocol === 'FP981C',
+    return (
+      isReplaying.value ||
+      links.value.some((link) => link.enabled && link.protocol === 'FP981C')
     )
   }
 
   function needsUavInfoListening() {
-    return links.value.some(
-      (link) => link.enabled && link.protocol === 'UAVInfo',
+    return (
+      isReplaying.value ||
+      links.value.some((link) => link.enabled && link.protocol === 'UAVInfo')
     )
   }
 
@@ -634,10 +649,12 @@ export const useUavStore = defineStore('uav', () => {
     }
     uavInfoMap.value = map
     if (uavWatchdog) clearTimeout(uavWatchdog)
-    uavWatchdog = setTimeout(() => {
-      uavInfoMap.value = new Map()
-      uavWatchdog = null
-    }, UAV_TIMEOUT)
+    if (!isReplaying.value) {
+      uavWatchdog = setTimeout(() => {
+        uavInfoMap.value = new Map()
+        uavWatchdog = null
+      }, UAV_TIMEOUT)
+    }
   }
 
   let fp95Watchdog: ReturnType<typeof setTimeout> | null = null
@@ -659,10 +676,12 @@ export const useUavStore = defineStore('uav', () => {
       frame94: nextFrame94,
     }
     if (fp95Watchdog) clearTimeout(fp95Watchdog)
-    fp95Watchdog = setTimeout(() => {
-      fp95Aggregate.value = null
-      fp95Watchdog = null
-    }, FP95_TIMEOUT)
+    if (!isReplaying.value) {
+      fp95Watchdog = setTimeout(() => {
+        fp95Aggregate.value = null
+        fp95Watchdog = null
+      }, FP95_TIMEOUT)
+    }
 
     const now = Date.now()
     // 仅在后端确认收到一帧新的 94/子帧1 时刷新目标时间。
@@ -1085,5 +1104,7 @@ export const useUavStore = defineStore('uav', () => {
     stopListening,
     startFp95Listening,
     startFp981cListening,
+    isReplaying,
+    setReplaying,
   }
 })
