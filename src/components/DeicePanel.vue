@@ -1,5 +1,9 @@
 <template>
-  <div class="avionics-panel deice-panel" :style="panelStyle" @mousedown="startDrag">
+  <div
+    class="avionics-panel deice-panel"
+    :style="panelStyle"
+    @mousedown="startDrag"
+  >
     <n-config-provider
       :abstract="true"
       :theme="darkTheme"
@@ -59,7 +63,11 @@
               :title="props.maximized ? '还原' : '最大化'"
               @click="emit('maximize')"
             >
-              <svg v-if="!props.maximized" aria-hidden="true" viewBox="0 0 12 12">
+              <svg
+                v-if="!props.maximized"
+                aria-hidden="true"
+                viewBox="0 0 12 12"
+              >
                 <rect x="2.5" y="2.5" width="7" height="7" />
               </svg>
               <svg v-else aria-hidden="true" viewBox="0 0 12 12">
@@ -94,7 +102,11 @@
             <span class="subnav-title">防除冰监控</span>
             <span
               class="subnav-status"
-              :class="{ ok: hasData && !hasAnyAlarm, alarm: hasData && hasAnyAlarm, idle: !hasData }"
+              :class="{
+                ok: hasData && !hasAnyAlarm,
+                alarm: hasData && hasAnyAlarm,
+                idle: !hasData,
+              }"
             ></span>
           </button>
 
@@ -117,84 +129,151 @@
 
       <!-- Main Body: 防除冰监控 -->
       <div v-else class="panel-body">
-        <!-- 顶部概览条 (模式与健康指示) -->
-        <section class="section-card mode-overview-card" @mousedown.stop>
-          <div class="overview-grid">
-            <!-- 运行模式与指令切换 -->
-            <div class="overview-item">
-              <span class="overview-label">工作模式与控制指令</span>
-              <div class="overview-value-row">
-                <span
-                  class="mode-badge"
-                  :class="modeBadgeClass"
-                >
-                  {{ deiceData?.workModeDesc || (hasData ? '未知模式' : '等待遥测数据') }}
-                </span>
-                <span class="sub-code">
-                  代码: {{ formatHex(deiceData?.workMode) }}
-                </span>
-              </div>
-              <div class="mode-cmd-btns">
+        <!-- 1. 控制指令配置与下发 (严格对应协议表 3 / 表 4) -->
+        <section class="section-card cmd-control-card" @mousedown.stop>
+          <div class="section-header-title">
+            <span>防除冰工作模式与控制指令</span>
+            <span class="section-sub">
+              当前运行:
+              {{ deiceData?.workModeDesc || (hasData ? '未知' : '待机') }} ({{
+                formatHex(deiceData?.workMode)
+              }})
+            </span>
+          </div>
+
+          <div class="cmd-control-body">
+            <!-- 模式选择行 -->
+            <div class="cmd-form-row">
+              <span class="cmd-field-label">工作模式:</span>
+              <div class="cmd-mode-selector">
                 <button
                   v-for="m in propModes"
                   :key="m.mode"
-                  class="mode-cmd-btn"
-                  :class="{ active: deiceData?.workMode === m.mode }"
                   type="button"
-                  :disabled="loadingPropMode === m.mode"
-                  @click="handleSendPropMode(m.mode, m.name)"
+                  class="cmd-mode-option"
+                  :class="{ active: selectedPropMode === m.mode }"
+                  @click="selectedPropMode = m.mode"
                 >
-                  {{ loadingPropMode === m.mode ? '...' : m.name }}
+                  <span class="mode-name">{{ m.name }}</span>
+                  <span class="mode-hex">
+                    0x{{ m.mode.toString(16).toUpperCase().padStart(2, '0') }}
+                  </span>
                 </button>
               </div>
             </div>
 
-            <!-- 系统健康度 -->
-            <div class="overview-item">
-              <span class="overview-label">系统综合健康诊断</span>
-              <div class="overview-value-row">
-                <span
-                  class="health-badge"
-                  :class="{
-                    healthy: hasData && !hasAnyAlarm,
-                    danger: hasData && hasAnyAlarm,
-                    idle: !hasData,
-                  }"
+            <!-- 根据选中的模式动态展示对应操作区 -->
+            <div class="cmd-mode-content-area">
+              <!-- 0x00: 关闭模式 -->
+              <div v-if="selectedPropMode === 0" class="cmd-mode-action-row">
+                <span class="cmd-mode-tip">停止防除冰电加热输出</span>
+                <button
+                  type="button"
+                  class="btn-send-cmd btn-danger"
+                  :disabled="isSendingCommand"
+                  @click="handleSendClosedMode"
                 >
-                  <span class="dot"></span>
-                  {{
-                    !hasData
-                      ? '链路未建立 / 待机'
-                      : hasAnyAlarm
-                        ? '检测到异常故障告警'
-                        : '所有检测项正常'
-                  }}
-                </span>
+                  {{ isSendingCommand ? '下发中...' : '下发关闭指令' }}
+                </button>
               </div>
-            </div>
 
-            <!-- 帧率与通信链路 -->
-            <div class="overview-item text-right">
-              <span class="overview-label">透传子帧 0x94</span>
-              <div class="overview-value-row justify-end">
-                <span class="frame-tag">
-                  计数: {{ formatInt(deiceData?.frameCount) }}
+              <!-- 0x01: 指令调节 -->
+              <div
+                v-else-if="selectedPropMode === 1"
+                class="cmd-mode-action-row"
+              >
+                <span class="cmd-mode-tip">
+                  以每次 1% 步长动态微调输出功率:
                 </span>
-                <span
-                  class="sync-tag"
-                  :class="{ valid: deiceData?.syncValid, invalid: hasData && !deiceData?.syncValid }"
+                <div class="cmd-adjust-btns">
+                  <button
+                    type="button"
+                    class="btn-adjust btn-adjust-dec"
+                    :disabled="isSendingCommand"
+                    @click="handleSendAdjust(0)"
+                  >
+                    <span class="adjust-symbol">−</span>
+                    <span>减小功率 (-1%)</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-adjust btn-adjust-inc"
+                    :disabled="isSendingCommand"
+                    @click="handleSendAdjust(1)"
+                  >
+                    <span class="adjust-symbol">+</span>
+                    <span>增大功率 (+1%)</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- 0x02: 恒功率模式 -->
+              <div
+                v-else-if="selectedPropMode === 2"
+                class="cmd-mode-action-row"
+              >
+                <div class="cmd-param-input-group">
+                  <label class="cmd-field-label">设定目标功率</label>
+                  <div class="cmd-input-box">
+                    <input
+                      v-model.number="cmdTargetPower"
+                      type="number"
+                      min="0"
+                      max="65535"
+                      step="50"
+                      class="param-input"
+                      placeholder="0~65535"
+                    />
+                    <span class="param-unit">W</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  class="btn-send-cmd"
+                  :disabled="isSendingCommand"
+                  @click="handleSendConstantPower"
                 >
-                  {{ deiceData?.syncValid ? '同步锁相正常' : (hasData ? '同步异常' : '未同步') }}
-                </span>
+                  {{ isSendingCommand ? '下发中...' : '下发恒功率指令' }}
+                </button>
+              </div>
+
+              <!-- 0x03: 恒温模式 -->
+              <div
+                v-else-if="selectedPropMode === 3"
+                class="cmd-mode-action-row"
+              >
+                <div class="cmd-param-input-group">
+                  <label class="cmd-field-label">设定目标温度</label>
+                  <div class="cmd-input-box">
+                    <input
+                      v-model.number="cmdTargetTemp"
+                      type="number"
+                      min="-40"
+                      max="100"
+                      step="1"
+                      class="param-input"
+                      placeholder="-40~100"
+                    />
+                    <span class="param-unit">℃</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  class="btn-send-cmd"
+                  :disabled="isSendingCommand"
+                  @click="handleSendConstantTemp"
+                >
+                  {{ isSendingCommand ? '下发中...' : '下发恒温指令' }}
+                </button>
               </div>
             </div>
           </div>
         </section>
 
-        <!-- 7 项健康与故障告警矩阵 -->
+        <!-- 2. 7 项健康与故障告警矩阵 (严格对应协议表 2) -->
         <section class="section-card" @mousedown.stop>
           <div class="section-header-title">
-            <span>控制器故障与安全告警矩阵</span>
+            <span>控制器故障与状态告警矩阵</span>
           </div>
 
           <div class="alarm-grid">
@@ -218,19 +297,21 @@
               </div>
               <div class="alarm-status-pill">
                 <span v-if="!hasData" class="pill pill-offline">待机</span>
-                <span v-else-if="alarm.active" class="pill pill-danger">异常告警</span>
+                <span v-else-if="alarm.active" class="pill pill-danger">
+                  异常告警
+                </span>
                 <span v-else class="pill pill-normal">正常</span>
               </div>
             </div>
           </div>
         </section>
 
-        <!-- 核心度量指标网格: 功率监控 + 电气与温度 -->
+        <!-- 3. 协议度量指标监控 (严格对应协议表 1) -->
         <div class="metrics-two-column" @mousedown.stop>
-          <!-- 功率状态 -->
+          <!-- 功率遥测 -->
           <section class="section-card metric-panel">
             <div class="section-header-title">
-              <span>功率状态监控</span>
+              <span>功率遥测</span>
             </div>
 
             <div class="power-stats-layout">
@@ -254,34 +335,12 @@
                 </div>
               </div>
             </div>
-
-            <!-- 功率偏差与调节状态 -->
-            <div class="power-progress-section">
-              <div class="progress-info">
-                <span>功率利用率 / 负荷达成</span>
-                <span class="progress-percent">
-                  {{ powerRatioText }}
-                </span>
-              </div>
-              <div class="progress-bar-track">
-                <div
-                  class="progress-bar-fill"
-                  :style="{ width: powerRatioWidth }"
-                ></div>
-              </div>
-              <div class="power-delta">
-                <span>功率差值 (实际 - 目标):</span>
-                <span :class="powerDeltaClass">
-                  {{ powerDeltaText }}
-                </span>
-              </div>
-            </div>
           </section>
 
-          <!-- 电气特性与温度监控 -->
+          <!-- 电气特性与温度遥测 -->
           <section class="section-card metric-panel">
             <div class="section-header-title">
-              <span>电气特性与温度监控</span>
+              <span>电气与温度遥测</span>
             </div>
 
             <div class="electrical-grid">
@@ -308,89 +367,21 @@
               </div>
 
               <!-- 控制器温度 -->
-              <div class="stat-box">
-                <span class="stat-label">控制器温度</span>
+              <div class="stat-box full-width">
+                <span class="stat-label">控制器温度 (0-255, 偏差-45℃)</span>
                 <div class="stat-value-group">
                   <span class="stat-number">
                     {{ formatFixed(deiceData?.controllerTemp, 1) }}
                   </span>
                   <span class="stat-unit">℃</span>
-                </div>
-                <div class="stat-footer">
-                  {{ tempStatusText }}
-                </div>
-              </div>
-
-              <!-- 瞬时视在功率 -->
-              <div class="stat-box">
-                <span class="stat-label">计算母线负载功率</span>
-                <div class="stat-value-group">
-                  <span class="stat-number">
-                    {{ calculatedPowerText }}
+                  <span class="stat-temp-tag" :class="{ error: isTempHigh }">
+                    {{ tempStatusText }}
                   </span>
-                  <span class="stat-unit">W</span>
                 </div>
               </div>
             </div>
           </section>
         </div>
-
-        <!-- 协议与底层诊断 (链路与校验) -->
-        <section class="section-card" @mousedown.stop>
-          <div class="section-header-title">
-            <span>协议校验与底层帧诊断</span>
-          </div>
-
-          <div class="diagnostics-grid">
-            <div class="diag-item">
-              <span class="diag-label">帧同步码</span>
-              <div class="diag-val-row">
-                <span class="mono-code">{{ syncCodeText }}</span>
-                <span
-                  class="badge-pill"
-                  :class="{
-                    'pill-valid': deiceData?.syncValid,
-                    'pill-danger': hasData && !deiceData?.syncValid,
-                    'pill-invalid': !hasData,
-                  }"
-                >
-                  {{ deiceData?.syncValid ? '同步码正确' : (hasData ? '同步码异常' : '未同步') }}
-                </span>
-              </div>
-            </div>
-
-            <div class="diag-item">
-              <span class="diag-label">累加和校验</span>
-              <div class="diag-val-row">
-                <span class="mono-code">
-                  {{ formatHex(deiceData?.checksum) }}
-                </span>
-                <span
-                  class="badge-pill"
-                  :class="{
-                    'pill-valid': deiceData?.checksumValid,
-                    'pill-danger': hasData && !deiceData?.checksumValid,
-                    'pill-invalid': !hasData,
-                  }"
-                >
-                  {{ deiceData?.checksumValid ? '校验通过' : (hasData ? '校验和错误' : '待校验') }}
-                </span>
-              </div>
-            </div>
-
-            <div class="diag-item">
-              <span class="diag-label">状态码回读</span>
-              <div class="diag-val-row">
-                <span class="mono-code">
-                  状态1: {{ formatHex(deiceData?.rawStatus1) }}
-                </span>
-                <span class="mono-code">
-                  状态2: {{ formatHex(deiceData?.status2) }}
-                </span>
-              </div>
-            </div>
-          </div>
-        </section>
       </div>
     </n-config-provider>
   </div>
@@ -428,18 +419,97 @@ const propModes = [
   { mode: 3, name: '恒温模式' },
 ]
 const loadingPropMode = ref<number | null>(null)
+const selectedPropMode = ref<number>(2) // 默认恒功率模式
+const cmdTargetPower = ref<number>(2000) // 目标设定功率 (W)
+const cmdTargetTemp = ref<number>(15) // 目标温度 (℃)
+const isSendingCommand = ref(false)
+
+function syncFromTelemetry() {
+  if (deiceData.value) {
+    if (
+      typeof deiceData.value.targetPower === 'number' &&
+      Number.isFinite(deiceData.value.targetPower)
+    ) {
+      cmdTargetPower.value = deiceData.value.targetPower
+    }
+    if (typeof deiceData.value.workMode === 'number') {
+      selectedPropMode.value = deiceData.value.workMode
+    }
+    message.info('已同步当前遥测参数至输入框')
+  }
+}
+
+async function handleSendClosedMode() {
+  isSendingCommand.value = true
+  try {
+    await payloadStore.sendPropellerDeiceCommand(0, 0, 0)
+    message.success('已下发关闭模式指令 (停止加热)')
+  } catch (e: any) {
+    message.error(`下发关闭模式指令失败: ${e}`)
+  } finally {
+    isSendingCommand.value = false
+  }
+}
+
+async function handleSendAdjust(direction: 0 | 1) {
+  isSendingCommand.value = true
+  const dirName = direction === 1 ? '增大功率 (+1%)' : '减小功率 (-1%)'
+  try {
+    // 严格对应协议表 4：参数 0x00 减小，0x01 增大，功率每次变化 1%
+    await payloadStore.sendPropellerDeiceCommand(1, direction, 0)
+    message.success(`已下发指令调节: [${dirName}]`)
+  } catch (e: any) {
+    message.error(`下发指令调节失败: ${e}`)
+  } finally {
+    isSendingCommand.value = false
+  }
+}
+
+async function handleSendConstantPower() {
+  isSendingCommand.value = true
+  try {
+    const power = Number.isFinite(cmdTargetPower.value)
+      ? Math.max(0, Math.min(65535, Math.round(cmdTargetPower.value)))
+      : 2000
+    await payloadStore.sendPropellerDeiceCommand(2, power, 0)
+    message.success(`已下发恒功率指令: 目标功率=${power}W`)
+  } catch (e: any) {
+    message.error(`下发恒功率指令失败: ${e}`)
+  } finally {
+    isSendingCommand.value = false
+  }
+}
+
+async function handleSendConstantTemp() {
+  isSendingCommand.value = true
+  try {
+    const temp = Number.isFinite(cmdTargetTemp.value)
+      ? Math.round(cmdTargetTemp.value)
+      : 15
+    await payloadStore.sendPropellerDeiceCommand(3, 0, temp)
+    message.success(`已下发恒温指令: 目标温度=${temp}℃`)
+  } catch (e: any) {
+    message.error(`下发恒温指令失败: ${e}`)
+  } finally {
+    isSendingCommand.value = false
+  }
+}
+
+async function handleSendDeiceCommand() {
+  if (selectedPropMode.value === 0) {
+    await handleSendClosedMode()
+  } else if (selectedPropMode.value === 1) {
+    await handleSendAdjust(1)
+  } else if (selectedPropMode.value === 2) {
+    await handleSendConstantPower()
+  } else if (selectedPropMode.value === 3) {
+    await handleSendConstantTemp()
+  }
+}
 
 async function handleSendPropMode(mode: number, name: string) {
-  loadingPropMode.value = mode
-  try {
-    const targetPower = deiceData.value?.targetPower || 2500
-    await payloadStore.sendPropellerDeiceCommand(mode, targetPower, 15)
-    message.success(`已下发螺旋桨防除冰指令: [${name}]`)
-  } catch (e: any) {
-    message.error(`下发 [${name}] 指令失败: ${e}`)
-  } finally {
-    loadingPropMode.value = null
-  }
+  selectedPropMode.value = mode
+  await handleSendDeiceCommand()
 }
 
 const naiveThemeOverrides = {
@@ -492,9 +562,12 @@ function formatInt(val: unknown): string {
 }
 
 const syncCodeText = computed(() => {
-  if (Array.isArray(deiceData.value?.syncCode) && deiceData.value!.syncCode.length > 0) {
-    return deiceData.value!.syncCode
-      .map((b) =>
+  if (
+    Array.isArray(deiceData.value?.syncCode) &&
+    deiceData.value!.syncCode.length > 0
+  ) {
+    return deiceData
+      .value!.syncCode.map((b) =>
         typeof b === 'number' && Number.isFinite(b) && b >= 0
           ? `0x${Math.floor(b).toString(16).toUpperCase().padStart(2, '0')}`
           : '0x00',
@@ -598,7 +671,9 @@ onBeforeUnmount(() => {
   border-radius: 12px;
   box-shadow: 0 16px 36px rgb(0 0 0 / 48%);
   color: var(--text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial,
+    sans-serif;
   user-select: none;
   display: flex;
   flex-direction: column;
@@ -775,8 +850,13 @@ onBeforeUnmount(() => {
 }
 
 @keyframes pulse-danger {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
 }
 
 /* Window controls */
@@ -870,7 +950,215 @@ onBeforeUnmount(() => {
   letter-spacing: 0.5px;
 }
 
-/* Overview bar */
+/* Overview bar & Control Card */
+.cmd-control-card {
+  background: #1c1c1c;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.cmd-control-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cmd-form-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cmd-field-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cmd-mode-selector {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cmd-mode-option {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-default);
+  background: var(--surface-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cmd-mode-option:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.cmd-mode-option.active {
+  background: #2563eb !important;
+  border-color: #2563eb !important;
+  color: #ffffff !important;
+  font-weight: 600;
+}
+
+.cmd-mode-option .mode-hex {
+  font-size: 10px;
+  font-family: monospace;
+  opacity: 0.7;
+}
+
+.cmd-mode-option.active .mode-hex {
+  color: #ffffff;
+  opacity: 0.85;
+}
+
+.cmd-mode-content-area {
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+}
+
+.cmd-mode-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 16px;
+}
+
+.cmd-mode-tip {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.cmd-adjust-btns {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.btn-adjust {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid #1f87e8;
+  background: #2563eb;
+  color: #ffffff;
+  transition: all 0.15s ease;
+}
+
+.btn-adjust:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.btn-adjust-dec,
+.btn-adjust-inc {
+  background: #2563eb;
+  color: #ffffff;
+  border: 1px solid #1f87e8;
+}
+
+.btn-adjust-dec:hover:not(:disabled),
+.btn-adjust-inc:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.btn-adjust:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.adjust-symbol {
+  font-size: 14px;
+  font-weight: 700;
+  font-family: monospace;
+}
+
+.cmd-param-input-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cmd-input-box {
+  display: flex;
+  align-items: center;
+  background: var(--surface-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  padding: 4px 8px;
+  gap: 6px;
+}
+
+.cmd-input-box:focus-within {
+  border-color: #339cff;
+  box-shadow: 0 0 0 1px rgba(51, 156, 255, 0.3);
+}
+
+.param-input {
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-family: monospace;
+  font-size: 13px;
+  font-weight: 600;
+  width: 90px;
+  outline: none;
+}
+
+.param-unit {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-weight: 600;
+}
+
+.btn-send-cmd {
+  padding: 6px 18px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid #1f87e8;
+  background: #2563eb;
+  color: #ffffff;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-send-cmd:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.btn-send-cmd.btn-danger {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #1f87e8;
+}
+
+.btn-send-cmd.btn-danger:hover:not(:disabled) {
+  background: #1d4ed8;
+  color: #ffffff;
+}
+
+.btn-send-cmd:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .mode-overview-card {
   background: #1c1c1c;
   border-color: rgba(255, 255, 255, 0.08);
@@ -922,39 +1210,15 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border-heavy);
 }
 
-.mode-constant-power {
-  background: rgba(37, 99, 235, 0.15);
-  color: #60a5fa;
-  border-color: rgba(96, 165, 250, 0.3);
-}
-
-.mode-constant-temp {
-  background: rgba(16, 163, 127, 0.15);
-  color: #34d399;
-  border-color: rgba(52, 211, 153, 0.3);
-}
-
-.mode-command {
-  background: rgba(245, 158, 11, 0.15);
-  color: #fbbf24;
-  border-color: rgba(251, 191, 36, 0.3);
-}
-
-.mode-closed {
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-tertiary);
-}
-
-.mode-offline {
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-tertiary);
-  border-color: var(--border-light);
-}
-
+.mode-constant-power,
+.mode-constant-temp,
+.mode-command,
+.mode-closed,
+.mode-offline,
 .mode-default {
-  background: rgba(139, 92, 246, 0.15);
-  color: #a78bfa;
-  border-color: rgba(167, 139, 250, 0.3);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  border-color: var(--border-default);
 }
 
 .sub-code {
@@ -991,7 +1255,6 @@ onBeforeUnmount(() => {
   color: #38bdf8;
   border-color: rgba(56, 189, 248, 0.4);
 }
-
 
 .health-badge {
   display: inline-flex;
@@ -1193,12 +1456,9 @@ onBeforeUnmount(() => {
   gap: 4px;
 }
 
-.stat-box.primary {
-  border-left: 3px solid var(--focus-blue);
-}
-
+.stat-box.primary,
 .stat-box.secondary {
-  border-left: 3px solid var(--accent-green);
+  border-left: 1px solid var(--border-light);
 }
 
 .stat-label {
@@ -1298,6 +1558,25 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+}
+
+.stat-box.full-width {
+  grid-column: span 2;
+}
+
+.stat-temp-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(16, 163, 127, 0.15);
+  color: #34d399;
+  margin-left: 8px;
+}
+
+.stat-temp-tag.error {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
 }
 
 /* 诊断网格 */
