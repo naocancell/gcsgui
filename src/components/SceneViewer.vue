@@ -136,9 +136,12 @@ import { cacheCommonModelsToDisk } from '@/utils/model/modelCache'
 import { clearAdministrativeBoundaries } from '@/utils/map/viewSettings'
 import { clearGraticule, setGraticuleVisible } from '@/utils/map/graticule'
 import { useViewSettingsStore } from '@/store/viewSettingsStore'
+import { logger } from '@/utils/logger'
 
 const viewerDivRef = ref<HTMLDivElement>()
 let viewer: Viewer
+let renderErrorListener: ((scene: any, error: any) => void) | null = null
+let hasLoggedRenderError = false
 let onlineReloadInFlight = false
 let onlineReloadGeneration = 0
 let onlineReloadTimer: ReturnType<typeof setTimeout> | undefined
@@ -177,7 +180,7 @@ const locateAndShowMyLocation = async () => {
       message.success(`${SOURCE_LABEL[location.source]}：${where}`)
     }
   } catch (error: any) {
-    console.error('定位失败:', error)
+    logger.error('定位失败:', error)
     message.error(`定位失败：${error?.message ?? error}`)
   } finally {
     locating.value = false
@@ -362,7 +365,7 @@ async function loadOnlineTerrain(timeoutMs = 10000) {
     viewer.terrainProvider = terrainProvider
     viewer.scene.requestRender()
   } catch (error) {
-    console.warn('在线地形加载跳过或超时，降级为天地图地形晕渲:', error)
+    logger.warn('在线地形加载跳过或超时，降级为天地图地形晕渲:', error)
     fallbackToTiandituTerrain()
   } finally {
     if (timeoutTimer) clearTimeout(timeoutTimer)
@@ -411,7 +414,7 @@ async function reloadOnlineResources() {
     // 网络刚恢复时资源服务可能尚未完全可用，给地形请求更宽松的超时时间。
     await loadOnlineTerrain(10000)
   } catch (error) {
-    console.warn('网络恢复后重载影像或地形失败:', error)
+    logger.warn('网络恢复后重载影像或地形失败:', error)
   } finally {
     if (generation === onlineReloadGeneration) onlineReloadInFlight = false
   }
@@ -430,6 +433,15 @@ onMounted(async () => {
   try {
     //初始化
     viewer = await initViewer(viewerDivRef.value as HTMLElement)
+    // 监听 Cesium WebGL 场景渲染致命异常（防熔断：仅记录首发致命错误，避免 60Hz 刷屏冲垮 20MB 轮转日志）
+    renderErrorListener = (_scene: any, error: any) => {
+      if (!hasLoggedRenderError) {
+        hasLoggedRenderError = true
+        logger.error('Cesium WebGL 场景渲染异常 (显卡驱动重置或上下文丢失):', error)
+        message.error('三维地图渲染异常，显卡驱动可能重置或显存不足')
+      }
+    }
+    viewer.scene.renderError.addEventListener(renderErrorListener)
     // 显示帧率
     viewer.scene.debugShowFramesPerSecond = true
     //监听飞机模型数据
@@ -476,7 +488,7 @@ onMounted(async () => {
       if (!navigator.onLine) return
 
       void cacheCommonModelsToDisk().catch((error) => {
-        console.warn('常用模型磁盘缓存失败:', error)
+        logger.warn('常用模型磁盘缓存失败:', error)
       })
     }, 2000)
 
@@ -484,7 +496,7 @@ onMounted(async () => {
     //    避免 IP 城市级定位把视角拉到粗精度位置。
     void resolveMyLocation()
       .catch((error) => {
-        console.warn('启动时定位失败:', error)
+        logger.warn('启动时定位失败:', error)
       })
 
     const savedStartup = getStartupLocation()
@@ -519,7 +531,7 @@ onMounted(async () => {
       handleStartupLocationEvent,
     )
   } catch (err: any) {
-    console.error('SceneViewer onMounted 异常:', err)
+    logger.error('SceneViewer onMounted 异常:', err)
   }
 })
 
@@ -551,6 +563,15 @@ function handleStartupLocationEvent(e: Event) {
 onUnmounted(() => {
   cancelPickLocation()
   unbindTileProxyUrlListener()
+  if (viewer && viewer.scene && renderErrorListener) {
+    try {
+      viewer.scene.renderError.removeEventListener(renderErrorListener)
+    } catch {
+      // 忽略场景已销毁异常
+    }
+    renderErrorListener = null
+  }
+  hasLoggedRenderError = false
   if (viewer && viewer.scene && viewer.scene.canvas) {
     viewer.scene.canvas.removeEventListener('contextmenu', handleCanvasContextMenu)
   }

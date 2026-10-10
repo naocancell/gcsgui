@@ -699,6 +699,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useMessage } from 'naive-ui'
 import { usePayloadStore } from '@/store/payloadStore'
+import { logger } from '@/utils/logger'
 
 const payloadStore = usePayloadStore()
 const message = useMessage()
@@ -784,7 +785,9 @@ async function handleToggleRelay(index: number, enabled: boolean) {
     message.success(`已下发: ${name} [${enabled ? '通电' : '断开'}]`)
     // 进阶闭环方案：控制下发后延时 200ms 立即主动回读一次，快速确认状态
     setTimeout(() => {
-      payloadStore.queryRelayStatus().catch(() => {})
+      payloadStore.queryRelayStatus().catch((err) => {
+        logger.warn('继电器状态回读巡检异常:', err)
+      })
     }, 200)
   } catch (e: any) {
     message.error(`控制 ${name} 失败: ${e}`)
@@ -800,7 +803,9 @@ async function handleSetAll(enabled: boolean) {
     message.success(`已下发全部 [${enabled ? '通电' : '断开'}]`)
     // 进阶闭环方案：控制下发后延时 200ms 立即主动回读一次，快速确认状态
     setTimeout(() => {
-      payloadStore.queryRelayStatus().catch(() => {})
+      payloadStore.queryRelayStatus().catch((err) => {
+        logger.warn('批量继电器状态回读巡检异常:', err)
+      })
     }, 200)
   } catch (e: any) {
     message.error(`操作失败: ${e}`)
@@ -811,7 +816,9 @@ async function handleSetAll(enabled: boolean) {
 onMounted(() => {
   payloadStore.startListening()
   // 进入页面立即触发一次状态巡检进行初态同步
-  payloadStore.queryRelayStatus().catch(() => {})
+  payloadStore.queryRelayStatus().catch((err) => {
+    logger.warn('初态同步继电器状态巡检异常:', err)
+  })
 })
 
 onBeforeUnmount(() => {

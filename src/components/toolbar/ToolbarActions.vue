@@ -347,6 +347,7 @@
 import { ref, onBeforeUnmount } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { isTauri } from '@/utils/homeWindowData'
+import { logger } from '@/utils/logger'
 import {
   NSpace,
   NRow,
@@ -485,7 +486,7 @@ async function handleToolbarMouseDown(e: MouseEvent) {
   try {
     wasFullscreen = await invoke<boolean>('start_window_drag')
   } catch (err) {
-    console.error('准备窗口拖拽失败:', err)
+    logger.warn('准备窗口拖拽失败:', err)
   }
 
   window.addEventListener('mousemove', onGlobalMouseMove)

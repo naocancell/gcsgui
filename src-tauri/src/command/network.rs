@@ -1,3 +1,5 @@
+use crate::error::AppError;
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkInterfaceInfo {
@@ -6,7 +8,7 @@ pub struct NetworkInterfaceInfo {
 }
 
 #[tauri::command]
-pub fn get_network_interfaces() -> Result<Vec<NetworkInterfaceInfo>, String> {
+pub fn get_network_interfaces() -> Result<Vec<NetworkInterfaceInfo>, AppError> {
     let mut interfaces = Vec::new();
     match get_if_addrs::get_if_addrs() {
         Ok(if_addrs) => {
@@ -20,6 +22,6 @@ pub fn get_network_interfaces() -> Result<Vec<NetworkInterfaceInfo>, String> {
             }
             Ok(interfaces)
         }
-        Err(e) => Err(format!("获取网卡列表失败：{}", e)),
+        Err(e) => Err(AppError::system(10003, format!("获取网卡列表失败：{}", e))),
     }
 }

@@ -1,6 +1,7 @@
 import * as Cesium from 'cesium'
 import { invoke } from '@tauri-apps/api/core'
 import { resolveObstacleModelUri } from '@/utils/model/modelCache'
+import { logger } from '@/utils/logger'
 
 const obstacleSize: Record<string, number> = {
     lowPowerPole:0.8,
@@ -377,7 +378,7 @@ function createMarkObstacleManager() {
                         await resolveObstacleModelUri(obstacleType)
                     )
                 } catch (error) {
-                    console.error(`模型加载失败: ${obstacleType}`, error)
+                    logger.error(`模型加载失败: ${obstacleType}`, error)
                     modelUris.set(obstacleType, null)
                 }
             })

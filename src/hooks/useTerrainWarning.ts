@@ -2,6 +2,7 @@
 import * as Cesium from 'cesium'
 import { ref } from 'vue'
 import { getTerrainHeightsAtLevel } from '@/utils/map/terrainSampling'
+import { logger } from '@/utils/logger'
 //参数
 interface TerrainWarningOptions {
   distance?: number // 前视距离, 默认 1000 米
@@ -284,7 +285,7 @@ export function useTerrainWarning(
 
       viewer.scene.requestRender()
     } catch (error) {
-      console.error('高度预警地形计算失败：', error)
+      logger.error('高度预警地形计算失败：', error)
 
       /*
        * 发生异常时，不要显示错误的“正常”状态。

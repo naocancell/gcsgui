@@ -35,6 +35,7 @@ import {
   TDTProjectionType,
 } from './TDTProvider'
 import { getTileProxyUrl } from './tileConfig'
+import { logger } from '@/utils/logger'
 
 // 防御性保护：防止在时钟 tick 阶段因为生命周期/异步加载导致 _dataSourceDisplay 暂未就绪或已销毁时抛出异常导致红框
 if (typeof Viewer !== 'undefined' && Viewer.prototype && !(Viewer.prototype as any)._safeOnTickPatched) {
@@ -206,9 +207,9 @@ class TiandituGeocoderService {
           },
         ]
       }
-      console.warn('天地图地理编码失败:', msg)
+      logger.warn('天地图地理编码失败:', msg)
     } catch (error) {
-      console.warn('天地图地理编码请求失败:', error)
+      logger.warn('天地图地理编码请求失败:', error)
     }
 
     return this.searchPlaces(keyword)

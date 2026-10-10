@@ -13,6 +13,7 @@ import {
   getRoutePointCountWarning,
 } from '@/composables/useRouteFileIO'
 import { invoke } from '@tauri-apps/api/core'
+import { logger } from '@/utils/logger'
 import {
   PtOptions,
   routeCode,
@@ -211,7 +212,7 @@ export function useRouteEditor(callbacks?: {
       callbacks?.onRouteChanged?.()
       return true
     } catch (err) {
-      console.error('[saveRouteEdit] 保存编辑失败：', err)
+      logger.error('[saveRouteEdit] 保存编辑失败：', err)
       uiMsg.error('保存编辑失败')
       return false
     }

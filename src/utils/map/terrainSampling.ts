@@ -1,4 +1,5 @@
 import * as Cesium from 'cesium'
+import { logger } from '@/utils/logger'
 
 export interface TerrainSampleResult {
   heights: number[]
@@ -51,7 +52,7 @@ async function sampleTerrainAtExactLevel(
           break
         }
       } catch (error) {
-        console.warn(`固定 ${terrainLevel} 级地形采样异常：`, error)
+        logger.warn(`固定 ${terrainLevel} 级地形采样异常：`, error)
       }
 
       if (attempt < attemptsPerLevel && retryDelayMs > 0) {
@@ -60,7 +61,7 @@ async function sampleTerrainAtExactLevel(
     }
 
     if (!sampledBatch) {
-      console.warn(`固定 ${terrainLevel} 级地形采样失败：`, {
+      logger.warn(`固定 ${terrainLevel} 级地形采样失败：`, {
         start: batchStart,
         end: batchStart + sourceBatch.length - 1,
       })

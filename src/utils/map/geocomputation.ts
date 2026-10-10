@@ -81,7 +81,6 @@ function isOnLineSegment(
 
   // 判断共线
   const cross = Cartesian3.cross(startToEnd, startToPoint, new Cartesian3())
-  console.log('cross:' + Cartesian3.magnitude(cross).toString())
   // Math.EPSILON6 是一个非常小的值，用来防止浮点数计算的误差
   const isCollinear = Cartesian3.magnitude(cross) < tolerance
 

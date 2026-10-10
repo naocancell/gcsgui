@@ -20,6 +20,7 @@ import {
   hideLinkHealthWindow,
   preserveLinkHealthWindowOnClose,
 } from '@/utils/linkHealthWindow'
+import { logger } from '@/utils/logger'
 
 const uavStore = useUavStore()
 const staticStore = useStaticStore()
@@ -61,9 +62,13 @@ onMounted(async () => {
   try {
     // 跨窗口热同步：当主窗口点击启动或保存服务配置后，窗口实时重载监听
     configChangedUnlisten = await listen('comms-config-changed', async () => {
-      await uavStore.loadCommsConfig()
-      await uavStore.startListening()
-      await uavStore.syncProtocolListeners()
+      try {
+        await uavStore.loadCommsConfig()
+        await uavStore.startListening()
+        await uavStore.syncProtocolListeners()
+      } catch (err) {
+        logger.warn('链路状态窗口响应通信配置热变更失败:', err)
+      }
     })
 
     // 初始加载通信配置并同步后端全部监听服务

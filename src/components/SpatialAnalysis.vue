@@ -58,7 +58,6 @@ function executeTopographicAnalyse(polyline: Cartesian3[]) {
   }
   // 通视分析
   else if (store.analysisVars.analysisType === 2) {
-    console.log(store.analysisVars.analysisType)
     // 计算地形剖面
     let res = profileAnalyse(window.viewer, polyline, formParams.value.interval)
     // 计算视线起始点距离和高度
@@ -86,7 +85,6 @@ function executeTopographicAnalyse(polyline: Cartesian3[]) {
 watch(
   () => store.analysisVars.profilePts,
   (newValue, OldValue): void => {
-    console.log('数据变化了', newValue)
     if (newValue.length == 1) {
       message.error('请至少选择两个点')
       return
@@ -121,7 +119,6 @@ const onCreate = () => {
 
 //输入坐标结束之后，进行地形分析
 const afterCoordInput = () => {
-  console.log(pickedCoords.value)
   //关闭参数窗口
   showParamsDialog.value = false
 

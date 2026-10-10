@@ -1,4 +1,6 @@
-import { convertFileSrc, invoke } from '@tauri-apps/api/core'
+import { convertFileSrc } from '@tauri-apps/api/core'
+import { invokeSafe } from '@/utils/ipc'
+import { logger } from '@/utils/logger'
 
 const SERVICE_BASE = 'http://127.0.0.1:8890'
 
@@ -61,13 +63,16 @@ function ensureModelPath(model: ModelMeta): Promise<string> {
  // 检查本地是否存在模型  不存在就请求 存在返回系统绝对路径地址
  // pending promise对象 = 获取绝对路径的任务
  // await pending 最终拿到模型绝对路径
- //invoke 返回固定是promise
- const pending = invoke<string>('ensure_model_cached', {
-    modelId: model.id,
-    obstacleType: model.obstacle_type,
-    version,
-    downloadUrl: `${SERVICE_BASE}/api/models/${model.id}/file`,
-  })
+ const pending = invokeSafe<string>(
+    'ensure_model_cached',
+    {
+      modelId: model.id,
+      obstacleType: model.obstacle_type,
+      version,
+      downloadUrl: `${SERVICE_BASE}/api/models/${model.id}/file`,
+    },
+    { silent: true },
+  )
   //给promise执行成功和失败使用的回调函数
   const clearPending = () => {
     if (modelPathPromises.get(cacheKey) === pending) {
@@ -83,12 +88,12 @@ function ensureModelPath(model: ModelMeta): Promise<string> {
 
 async function resolveCachedModelPath(type: string): Promise<string | null> {
   try {
-    return await invoke<string | null>('resolve_cached_model', {
+    return await invokeSafe<string | null>('resolve_cached_model', {
       obstacleType: type,
-    })
+    }, { silent: true })
   } catch (error) {
     // 兼容旧版本后端没有该命令的情况，继续尝试服务目录解析。
-    console.warn(`本地模型缓存查询失败: ${type}`, error)
+    logger.warn(`本地模型缓存查询失败: ${type}`, error)
     return null
   }
 }
@@ -112,7 +117,7 @@ export async function cacheCommonModelsToDisk() {
     const model = catalog.find(item => item.obstacle_type === type)
 
     if (!model) {
-      console.warn(`服务端没有模型: ${type}`)
+      logger.warn(`服务端没有模型: ${type}`)
       continue
     }
 

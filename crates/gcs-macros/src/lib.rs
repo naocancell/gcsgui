@@ -191,9 +191,21 @@ pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
             compile_time_size_expr = quote! { #compile_time_size_expr + 1usize + #s };
 
             parse_quotes.push(quote! {
-                let sub_frame_id = *data.get(offset).ok_or_else(|| "读取子帧ID越界".to_string())?;
+                let sub_frame_id = *data.get(offset).ok_or_else(|| {
+                    format!(
+                        "[协议解包越界] 结构体: {}, 子帧ID偏移: {}, 所需字节: 1",
+                        stringify!(#struct_name),
+                        offset
+                    )
+                })?;
                 offset += 1;
-                let sub_slice = data.get(offset..).ok_or_else(|| "读取子帧内容越界".to_string())?;
+                let sub_slice = data.get(offset..).ok_or_else(|| {
+                    format!(
+                        "[协议解包越界] 结构体: {}, 子帧切片偏移越界: {}",
+                        stringify!(#struct_name),
+                        offset
+                    )
+                })?;
                 let #field_name = <#field_type>::from_bytes(sub_frame_id, sub_slice)?;
                 offset += #s;
             });
@@ -206,7 +218,15 @@ pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
 
             parse_quotes.push(quote! {
                 let slice = data.get(offset + #byte_index .. offset + #byte_index + #needed_bytes)
-                    .ok_or_else(|| format!("读取位域字段 {} 越界", stringify!(#field_name)))?;
+                    .ok_or_else(|| {
+                        format!(
+                            "[协议解包越界] 结构体: {}, 位域字段: {}, 偏移: {}, 所需字节: {}",
+                            stringify!(#struct_name),
+                            stringify!(#field_name),
+                            offset + #byte_index,
+                            #needed_bytes
+                        )
+                    })?;
                 let mut buf = [0u8; 8];
                 buf[..#needed_bytes].copy_from_slice(slice);
                 let raw_u64 = u64::from_le_bytes(buf);
@@ -237,7 +257,15 @@ pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
                 parse_quotes.push(quote! {
                     let size = std::mem::size_of::<#raw_type>();
                     let slice = data.get(offset..offset + size)
-                        .ok_or_else(|| format!("解析 {} 字段越界", stringify!(#field_name)))?;
+                        .ok_or_else(|| {
+                            format!(
+                                "[协议解包越界] 结构体: {}, 字段: {}, 偏移: {}, 所需字节: {}",
+                                stringify!(#struct_name),
+                                stringify!(#field_name),
+                                offset,
+                                size
+                            )
+                        })?;
                     let raw_val = <#raw_type>::from_le_bytes(slice.try_into().unwrap());
                     let #field_name = <#field_type>::from_raw(raw_val);
                     offset += size;
@@ -265,7 +293,15 @@ pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
                     parse_quotes.push(quote! {
                         let size = 3usize;
                         let slice = data.get(offset..offset + size)
-                            .ok_or_else(|| format!("解析 {} 字段越界", stringify!(#field_name)))?;
+                            .ok_or_else(|| {
+                                format!(
+                                    "[协议解包越界] 结构体: {}, 缩放字段: {}, 偏移: {}, 所需字节: {}",
+                                    stringify!(#struct_name),
+                                    stringify!(#field_name),
+                                    offset,
+                                    size
+                                )
+                            })?;
                         let raw_val = u32::from_le_bytes([slice[0], slice[1], slice[2], 0]);
                         let #field_name = ((raw_val as f64) * (#factor as f64) + (#offset_val as f64)) as #field_type;
                         offset += size;
@@ -279,7 +315,15 @@ pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
                     parse_quotes.push(quote! {
                         let size = std::mem::size_of::<#raw_type>();
                         let slice = data.get(offset..offset + size)
-                            .ok_or_else(|| format!("解析 {} 字段越界", stringify!(#field_name)))?;
+                            .ok_or_else(|| {
+                                format!(
+                                    "[协议解包越界] 结构体: {}, 缩放字段: {}, 偏移: {}, 所需字节: {}",
+                                    stringify!(#struct_name),
+                                    stringify!(#field_name),
+                                    offset,
+                                    size
+                                )
+                            })?;
                         let raw_val = <#raw_type>::from_le_bytes(slice.try_into().unwrap());
                         let #field_name = ((raw_val as f64) * (#factor as f64) + (#offset_val as f64)) as #field_type;
                         offset += size;
@@ -291,7 +335,15 @@ pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
                 parse_quotes.push(quote! {
                     let size = std::mem::size_of::<#field_type>();
                     let slice = data.get(offset..offset + size)
-                        .ok_or_else(|| format!("解析 {} 字段越界", stringify!(#field_name)))?;
+                        .ok_or_else(|| {
+                            format!(
+                                "[协议解包越界] 结构体: {}, 数组字段: {}, 偏移: {}, 所需字节: {}",
+                                stringify!(#struct_name),
+                                stringify!(#field_name),
+                                offset,
+                                size
+                            )
+                        })?;
                     let #field_name: #field_type = slice.try_into().unwrap();
                     offset += size;
                 });
@@ -302,7 +354,15 @@ pub fn derive_packet_parser(input: TokenStream) -> TokenStream {
                 parse_quotes.push(quote! {
                     let size = std::mem::size_of::<#field_type>();
                     let slice = data.get(offset..offset + size)
-                        .ok_or_else(|| format!("解析 {} 字段越界", stringify!(#field_name)))?;
+                        .ok_or_else(|| {
+                            format!(
+                                "[协议解包越界] 结构体: {}, 字段: {}, 偏移: {}, 所需字节: {}",
+                                stringify!(#struct_name),
+                                stringify!(#field_name),
+                                offset,
+                                size
+                            )
+                        })?;
                     let #field_name = <#field_type>::from_le_bytes(slice.try_into().unwrap());
                     offset += size;
                 });
@@ -448,7 +508,12 @@ pub fn derive_sub_frame(input: TokenStream) -> TokenStream {
             pub fn from_bytes(id: u8, data: &[u8]) -> Result<Self, String> {
                 match id {
                     #(#match_arms)*
-                    other => Err(format!("未知子帧编号: {}", other)),
+                    other => Err(format!(
+                        "[协议解包未知子帧] 枚举: {}, 子帧编号: 0x{:02X} ({})",
+                        stringify!(#enum_name),
+                        other,
+                        other
+                    )),
                 }
             }
         }

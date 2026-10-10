@@ -37,6 +37,26 @@ let missCount = 0
 // 正在请求中的瓦片 Promise 缓存，防止瞬间重复请求打到远程
 const inFlightRequests = new Map()
 
+// 瓦片网络失败防刷屏节流机制
+let lastTileErrSec = 0
+let tileErrSuppressedCount = 0
+
+function logThrottledTileError(msg) {
+  const nowSec = Math.floor(Date.now() / 1000)
+  if (nowSec > lastTileErrSec) {
+    if (tileErrSuppressedCount > 0) {
+      const timeDesc = (nowSec === lastTileErrSec + 1) ? '前 1 秒内' : '此前波动期'
+      console.error(`${msg} (${timeDesc}累计抑制了 ${tileErrSuppressedCount} 次连续失败)`)
+      tileErrSuppressedCount = 0
+    } else {
+      console.error(msg)
+    }
+    lastTileErrSec = nowSec
+  } else {
+    tileErrSuppressedCount++
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   // 跨域支持 (CORS)
   res.setHeader('Access-Control-Allow-Origin', '*')
@@ -160,7 +180,7 @@ const server = http.createServer(async (req, res) => {
     })
     res.end(buffer)
   } catch (err) {
-    console.error(`[瓦片获取失败] 类型:${type} 级别:${z} x:${x} y:${y}:`, err.message)
+    logThrottledTileError(`[瓦片获取失败] 类型:${type} 级别:${z} x:${x} y:${y}: ${err.message}`)
     res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' })
     res.end('瓦片获取失败')
   }

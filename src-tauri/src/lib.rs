@@ -15,6 +15,7 @@ pub mod router;
 pub mod state;
 pub mod uplink;
 pub mod encrypted_cache;
+pub mod error;
 
 pub static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
 
@@ -85,7 +86,7 @@ pub fn run() {
             crate::command::payload::start_relay_status_poller(app_state.clone());
 
             // 开启软件日志插件（强行创建目录并落盘）
-            use tauri_plugin_log::{Target, TargetKind};
+            use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
             let log_dir = app
                 .path()
                 .app_log_dir()
@@ -103,7 +104,16 @@ pub fn run() {
                         }),
                         Target::new(TargetKind::Webview),
                     ])
-                    .level(log::LevelFilter::Info)
+                    .max_file_size(20 * 1024 * 1024)
+                    .rotation_strategy(RotationStrategy::KeepSome(14))
+                    .timezone_strategy(TimezoneStrategy::UseLocal)
+                    .level(if cfg!(debug_assertions) {
+                        log::LevelFilter::Debug
+                    } else {
+                        log::LevelFilter::Info
+                    })
+                    .level_for("tao", log::LevelFilter::Warn)
+                    .level_for("wry", log::LevelFilter::Warn)
                     .build(),
             ) { Err(e) => {
                 eprintln!("初始化日志插件失败: {}", e);
@@ -195,6 +205,8 @@ pub fn run() {
             recorder::command::set_replay_speed,
             recorder::command::seek_replay,
             recorder::command::get_replay_status,
+            get_link_metrics,
+            export_diagnostic_bundle,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -9,8 +9,11 @@ use crate::uplink::{
 pub async fn configure_uplink(
     handle: tauri::State<'_, UplinkHandle>,
     context: UplinkFrameContext,
-) -> Result<(), String> {
-    handle.configure(context).await
+) -> Result<(), crate::error::AppError> {
+    handle
+        .configure(context)
+        .await
+        .map_err(|e| crate::error::AppError::uplink(40001, e))
 }
 
 #[tauri::command]

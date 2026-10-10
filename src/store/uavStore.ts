@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { computed, ref, shallowRef } from 'vue'
 import { listen, emit, type UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
+import { invokeSafe } from '@/utils/ipc'
+import { logger } from '@/utils/logger'
 import type {
   UAVInfo,
   FP95Aggregate,
@@ -133,7 +135,7 @@ export const useUavStore = defineStore('uav', () => {
     unlisten = await listen<UAVInfo[]>('uav-info-event', (event) => {
       updateUavInfoList(event.payload)
     })
-    console.log('前端已挂载 UAVInfo 数据监听服务')
+    logger.info('前端已挂载 UAVInfo 数据监听服务')
   }
 
   // 监听 fp95-event 事件
@@ -165,7 +167,7 @@ export const useUavStore = defineStore('uav', () => {
         needsFp95Listening()
       ) {
         fp95Unlisten = candidateUnlisten
-        console.log('前端已挂载 FP95 数据监听服务')
+        logger.info('前端已挂载 FP95 数据监听服务')
       } else {
         candidateUnlisten()
       }
@@ -205,7 +207,7 @@ export const useUavStore = defineStore('uav', () => {
         needsFp981cListening()
       ) {
         fp981cUnlisten = candidateUnlisten
-        console.log('前端已挂载 FP981C 数据监听服务')
+        logger.info('前端已挂载 FP981C 数据监听服务')
       } else {
         candidateUnlisten()
       }
@@ -251,7 +253,7 @@ export const useUavStore = defineStore('uav', () => {
       ) {
         //保存取消链路健康监听句柄到全局
         healthUnlisten = candidateUnlisten
-        console.log('前端已挂载链路健康监听服务')
+        logger.info('前端已挂载链路健康监听服务')
       } else {
         candidateUnlisten()
       }
@@ -268,7 +270,7 @@ export const useUavStore = defineStore('uav', () => {
     if (unlisten) {
       unlisten()
       unlisten = null
-      console.log('前端已取消挂载 UAVInfo 数据监听服务')
+      logger.info('前端已取消挂载 UAVInfo 数据监听服务')
     }
   }
 
@@ -276,7 +278,7 @@ export const useUavStore = defineStore('uav', () => {
     if (fp95Unlisten) {
       fp95Unlisten()
       fp95Unlisten = null
-      console.log('前端已取消挂载 FP95 数据监听服务')
+      logger.info('前端已取消挂载 FP95 数据监听服务')
     }
   }
 
@@ -284,7 +286,7 @@ export const useUavStore = defineStore('uav', () => {
     if (fp981cUnlisten) {
       fp981cUnlisten()
       fp981cUnlisten = null
-      console.log('前端已取消挂载 FP981C 数据监听服务')
+      logger.info('前端已取消挂载 FP981C 数据监听服务')
     }
   }
 
@@ -292,7 +294,7 @@ export const useUavStore = defineStore('uav', () => {
     if (healthUnlisten) {
       healthUnlisten()
       healthUnlisten = null
-      console.log('前端已取消挂载链路健康监听服务')
+      logger.info('前端已取消挂载链路健康监听服务')
     }
   }
 
@@ -358,11 +360,11 @@ export const useUavStore = defineStore('uav', () => {
     link.enabled = enabled
     try {
       const status = await saveCommsConfig()
-      console.log(status)
+      logger.debug('保存链路配置状态:', status)
     } catch (err) {
       link.enabled = previous
       deactivateUnusedProtocolListeners()
-      console.error(errorMessage, err)
+      logger.error(errorMessage, err)
       throw err
     }
   }
@@ -439,7 +441,7 @@ export const useUavStore = defineStore('uav', () => {
         fillEmptySerialPorts()
       }
     } catch (err) {
-      console.error('主动拉取串口列表失败:', err)
+      logger.error('主动拉取串口列表失败:', err)
     }
 
     if (portsUnlisten) return
@@ -448,7 +450,7 @@ export const useUavStore = defineStore('uav', () => {
       // 如果当前未选中串口，或者选中串口不再列表中且列表不为空，可选第一个默认填充
       fillEmptySerialPorts()
     })
-    console.log('前端已挂载串口热插拔监测服务并完成初始拉取')
+    logger.info('前端已挂载串口热插拔监测服务并完成初始拉取')
   }
 
   async function startMainSerialService() {
@@ -484,15 +486,10 @@ export const useUavStore = defineStore('uav', () => {
   }
 
   async function fetchNetworkInterfaces() {
-    try {
-      const list = await invoke<{ name: string; ip: string }[]>(
-        'get_network_interfaces',
-      )
-      networkInterfaces.value = list
-    } catch (err) {
-      console.error('获取网卡列表失败', err)
-      throw err
-    }
+    const list = await invokeSafe<{ name: string; ip: string }[]>(
+      'get_network_interfaces',
+    )
+    networkInterfaces.value = list
   }
 
   function addLink(kind: LinkKind = 'udp-multicast') {
@@ -525,54 +522,49 @@ export const useUavStore = defineStore('uav', () => {
   }
 
   async function loadCommsConfig() {
-    try {
-      //读取本地配置文件comms.js文件
-      const config = await invoke<PersistedCommsConfig>('get_comms_config')
-      console.log('读取到本地通信配置:', config)
-      if (config?.udp?.length || config?.serial?.length) {
-        // 读取并整理这个配置文件 输一个链路描述数组
-        links.value = fromCommsConfig(config)
-      } else {
-        links.value = createDefaultLinkDrafts()
-      }
-      // 统一启停各类协议监听服务，使实际运行的监听状态与业务需求保持同步
-      await syncProtocolListeners()
-      return config
-    } catch (err) {
-      console.error('从文件读取配置失败', err)
-      throw err
+    // 读取本地通信配置文件
+    const config = await invokeSafe<PersistedCommsConfig>('get_comms_config')
+    logger.info(
+      `读取到本地通信配置: UDP链路 ${config?.udp?.length || 0} 条, 串口链路 ${config?.serial?.length || 0} 条`,
+    )
+    if (config?.udp?.length || config?.serial?.length) {
+      links.value = fromCommsConfig(config)
+    } else {
+      links.value = createDefaultLinkDrafts()
     }
+    // 统一启停各类协议监听服务，使实际运行的监听状态与业务需求保持同步
+    await syncProtocolListeners()
+    return config
   }
 
   async function saveCommsConfig() {
-    try {
-      const validationError = validateLinkDrafts(links.value)
-      if (validationError) throw new Error(validationError)
+    const validationError = validateLinkDrafts(links.value)
+    if (validationError) throw new Error(validationError)
 
-      const config = toCommsConfig(links.value)
-      const res = await invoke<string>('save_comms_config', { config })
-      await syncProtocolListeners()
-      await emit('comms-config-changed')
-      // 保存配置并启动链路后，同步上行配置上下文（设置机号）
-      const aircraftId = currentFp95AircraftId() ?? 0
-      try {
-        await invoke('configure_uplink', {
+    const config = toCommsConfig(links.value)
+    const res = await invokeSafe<string>('save_comms_config', { config })
+    await syncProtocolListeners()
+    await emit('comms-config-changed')
+    // 保存配置并启动链路后，同步上行配置上下文（设置机号）
+    const aircraftId = currentFp95AircraftId() ?? 0
+    try {
+      await invokeSafe(
+        'configure_uplink',
+        {
           context: {
             destination: 0x02,
             source: 0x01,
             aircraftId,
             dataSource: 0xaa,
           },
-        })
-      } catch (err) {
-        console.warn('同步上行上下文失败:', err)
-      }
-      console.log('保存配置成功:', res)
-      return res
+        },
+        { silent: true },
+      )
     } catch (err) {
-      console.error('保存通信配置失败', err)
-      throw err
+      logger.warn('同步上行上下文失败:', err)
     }
+    logger.info('保存配置成功:', res)
+    return res
   }
 
   // uavInfo无人机数据的map（key 是飞机id 唯一标识）
@@ -723,7 +715,7 @@ export const useUavStore = defineStore('uav', () => {
     const aggregate = fp95Aggregate.value
     const aircraftId = aggregate?.uavId ?? currentFp95AircraftId() ?? 0
 
-    await invoke('submit_flight_switch_command', {
+    await invokeSafe('submit_flight_switch_command', {
       aircraftId,
       command: getFp95FlightSwitchCommand(device, enabled),
     })
@@ -807,7 +799,7 @@ export const useUavStore = defineStore('uav', () => {
   async function bindTransponderSwitches(config: TransponderSwitchConfig) {
     const aircraftId = currentFp95AircraftId()
     await runTransponderOperation(async () => {
-      await invoke('bind_transponder_switches', { aircraftId, config })
+      await invokeSafe('bind_transponder_switches', { aircraftId, config })
     })
     transponderSwitchConfig.value = { ...config }
   }
@@ -815,7 +807,7 @@ export const useUavStore = defineStore('uav', () => {
   async function queryTransponderSwitches() {
     const aircraftId = currentFp95AircraftId()
     return runTransponderOperation(async () => {
-      const res = await invoke<TransponderSwitchReadback>(
+      const res = await invokeSafe<TransponderSwitchReadback>(
         'query_transponder_switches',
         { aircraftId },
       )
@@ -827,7 +819,7 @@ export const useUavStore = defineStore('uav', () => {
   async function bindTransponderParams(config: TransponderParamConfig) {
     const aircraftId = currentFp95AircraftId()
     await runTransponderOperation(async () => {
-      await invoke('bind_air_traffic_params', { aircraftId, config })
+      await invokeSafe('bind_air_traffic_params', { aircraftId, config })
     })
     transponderParamConfig.value = {
       ...config,
@@ -839,7 +831,7 @@ export const useUavStore = defineStore('uav', () => {
   async function queryTransponderParams() {
     const aircraftId = currentFp95AircraftId()
     return runTransponderOperation(async () => {
-      const res = await invoke<TransponderParamReadback>(
+      const res = await invokeSafe<TransponderParamReadback>(
         'query_air_traffic_params',
         { aircraftId },
       )
@@ -851,7 +843,7 @@ export const useUavStore = defineStore('uav', () => {
   async function bindWeightParams(config: WeightBindingConfig) {
     const aircraftId = currentFp95AircraftId()
     await runTransponderOperation(async () => {
-      await invoke('bind_weight_params', { aircraftId, config })
+      await invokeSafe('bind_weight_params', { aircraftId, config })
     })
     weightBindingConfig.value = { ...config }
   }
@@ -859,7 +851,7 @@ export const useUavStore = defineStore('uav', () => {
   async function queryWeightParams() {
     const aircraftId = currentFp95AircraftId()
     return runTransponderOperation(async () => {
-      const res = await invoke<WeightReadback>('query_weight_params', {
+      const res = await invokeSafe<WeightReadback>('query_weight_params', {
         aircraftId,
       })
       weightReadback.value = res
@@ -1027,7 +1019,7 @@ export const useUavStore = defineStore('uav', () => {
 
       updateUavInfoList(mockUavList.map((item) => ({ ...item })))
     }, 20)
-    console.log('已启动 UAVInfo 模拟数据服务')
+    logger.info('已启动 UAVInfo 模拟数据服务')
   }
 
   function stopMockUavInfoService() {
@@ -1043,7 +1035,7 @@ export const useUavStore = defineStore('uav', () => {
       uavWatchdog = null
     }
     uavInfoMap.value = new Map()
-    console.log('已停止 UAVInfo 模拟数据服务')
+    logger.info('已停止 UAVInfo 模拟数据服务')
   }
 
   return {

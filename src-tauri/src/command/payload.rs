@@ -5,7 +5,7 @@ use crate::protocol::payload::{
     RelayStatus, CODE_UPLINK, PAYLOAD_ID_RELAY,
 };
 use crate::state::AppState;
-use crate::uplink::dispatcher::broadcast_raw_payload;
+use crate::uplink::dispatcher::{broadcast_raw_payload, broadcast_raw_payload_poll};
 
 /// 单路继电器开关控制（继电器序号 1~16）
 #[tauri::command]
@@ -91,7 +91,7 @@ pub fn start_relay_status_poller(state: AppState) {
             if has_active_uplink && !state.replay_active() {
                 let inner_cmd = build_read_coils_cmd();
                 let frame = pack_payload_frame(CODE_UPLINK, PAYLOAD_ID_RELAY, 0, &inner_cmd);
-                let _ = broadcast_raw_payload(&state, &frame).await;
+                let _ = broadcast_raw_payload_poll(&state, &frame).await;
             }
         }
     });

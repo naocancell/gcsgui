@@ -51,6 +51,18 @@ pub(crate) async fn broadcast_frame(state: &AppState, frame: [u8; 32]) {
 }
 
 pub async fn broadcast_raw_payload(state: &AppState, bytes: &[u8]) -> Result<(), String> {
+    broadcast_raw_payload_internal(state, bytes, true).await
+}
+
+pub async fn broadcast_raw_payload_poll(state: &AppState, bytes: &[u8]) -> Result<(), String> {
+    broadcast_raw_payload_internal(state, bytes, false).await
+}
+
+async fn broadcast_raw_payload_internal(
+    state: &AppState,
+    bytes: &[u8],
+    log_errors: bool,
+) -> Result<(), String> {
     // 回放安全围栏：回放会话存在时禁止一切上行发送（防误触真实设备）
     if state.replay_active() {
         return Err("回放会话进行中，已禁止上行发送".to_string());
@@ -77,20 +89,36 @@ pub async fn broadcast_raw_payload(state: &AppState, bytes: &[u8]) -> Result<(),
         });
     }
 
+    let mut success_count = 0usize;
+    let mut failed_details = Vec::new();
+
     while let Some(result) = sends.join_next().await {
         match result {
-            Ok((_name, Ok(Ok(_)))) => {}
+            Ok((_name, Ok(Ok(_)))) => {
+                success_count += 1;
+            }
             Ok((name, Ok(Err(error)))) => {
-                log::warn!("上行链路 {name} 发送载荷失败: {error}");
+                failed_details.push(format!("{name}: {error}"));
             }
             Ok((name, Err(_))) => {
-                log::warn!("上行链路 {name} 发送载荷超时");
+                failed_details.push(format!("{name}: 发送超时"));
             }
             Err(error) => {
-                log::warn!("上行广播载荷任务异常结束: {error}");
+                failed_details.push(format!("广播任务异常: {error}"));
             }
         }
     }
+
+    if success_count == 0 {
+        let err_msg = format!("所有上行链路均发送失败或响应超时 [{}]", failed_details.join("; "));
+        if log_errors {
+            log::error!("{err_msg}");
+        }
+        return Err(err_msg);
+    } else if !failed_details.is_empty() && log_errors {
+        log::warn!("部分上行链路发送异常 [{}]", failed_details.join("; "));
+    }
+
     Ok(())
 }
 

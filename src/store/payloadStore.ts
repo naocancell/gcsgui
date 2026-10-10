@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
+import { logger } from '@/utils/logger'
 
 export interface RelayStatus {
   mask: number
@@ -204,9 +205,9 @@ export const usePayloadStore = defineStore('payloadStore', () => {
           payloadMap.value[item.uavId] = item
         }
       })
-      console.log('前端已挂载 MissionPayload 载荷数据监听服务')
+      logger.info('前端已挂载 MissionPayload 载荷数据监听服务')
     } catch (e) {
-      console.error('挂载 MissionPayload 监听失败:', e)
+      logger.error('挂载 MissionPayload 监听失败:', e)
     }
   }
 

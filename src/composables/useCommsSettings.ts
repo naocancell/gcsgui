@@ -78,8 +78,9 @@ export function useCommsSettings() {
       await uavStore.fetchNetworkInterfaces()
       await uavStore.loadCommsConfig()
       await uavStore.startPortsMonitoring()
-    } catch (err) {
-      message.error('获取本地网卡或读取配置失败: ' + err)
+    } catch (err: any) {
+      const msg = err?.message || String(err)
+      message.error(`获取本地网卡或读取配置失败: ${msg}`)
     }
   }
 
@@ -93,8 +94,9 @@ export function useCommsSettings() {
       applyTileProxyUrlIfChanged(tileProxyUrlInput.value)
       message.success('配置已保存并成功应用热重载！')
       showUdpModal.value = false
-    } catch (err) {
-      message.error('保存配置失败: ' + err)
+    } catch (err: any) {
+      const msg = err?.message || String(err)
+      message.error(`保存配置失败: ${msg}`)
     }
   }
 

@@ -10,6 +10,7 @@ import * as echarts from 'echarts'
 import { EChartsType } from 'echarts'
 import { Airline } from '@/types/entityoptions.ts'
 import { getTerrainHeightsAtLevel } from '@/utils/map/terrainSampling'
+import { logger } from '@/utils/logger'
 type ProfileResult = {
   distanceArray: number[]
   elevationArray: number[]
@@ -232,11 +233,11 @@ export function visibilityAnalyse(
   let viewpointH = getElevation(viewer, viewpoint) + h1
   let targetH = getElevation(viewer, target) + h2
   if (viewpointH === -9999.2024 + h1) {
-    console.log('无法获取视点海拔高度！')
+    logger.warn('无法获取视点海拔高度！')
     return undefined
   }
   if (targetH === -9999.2024 + h2) {
-    console.log('无法获取目标点海拔高度！')
+    logger.warn('无法获取目标点海拔高度！')
     return undefined
   }
   // 计算首尾点距离 m

@@ -156,9 +156,13 @@ pub async fn save_comms_config(
     state: tauri::State<'_, state::AppState>,
     router_tx: tauri::State<'_, crate::comms::RouterTx>,
     mut config: CommsConfig,
-) -> Result<String, String> {
+) -> Result<String, crate::error::AppError> {
     config.normalize();
-    config.save(&app)?;
-    apply_comms_hot_reload(&app, &state, &router_tx, &config).await?;
+    config
+        .save(&app)
+        .map_err(|e| crate::error::AppError::system(10002, format!("保存通信配置文件失败: {}", e)))?;
+    apply_comms_hot_reload(&app, &state, &router_tx, &config)
+        .await
+        .map_err(|e| crate::error::AppError::comms(20001, e))?;
     Ok("配置保存并成功应用热重载！".to_string())
 }

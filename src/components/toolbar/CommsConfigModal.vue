@@ -150,7 +150,9 @@
             <n-alert type="info" :bordered="false" class="tile-info-alert">
               适用场景：局域网或离线设备加载卫星影像切片。在局域网内任意联网电脑运行
               <code class="code-inline">pnpm tile-server</code>
-              后，在此填入该电脑的 IP 地址与端口。请求过的切片会自动持久化缓存，<strong>IP 变动无需重新打包</strong>。
+              后，在此填入该电脑的 IP 地址与端口。请求过的切片会自动持久化缓存，
+              <strong>IP 变动无需重新打包</strong>
+              。
             </n-alert>
 
             <div class="tile-card">
@@ -184,23 +186,36 @@
                   :title="tileTestResult.ok ? '服务连通正常' : '连接失败'"
                   :bordered="false"
                 >
-                  <div class="tile-feedback-msg">{{ tileTestResult.message }}</div>
+                  <div class="tile-feedback-msg">
+                    {{ tileTestResult.message }}
+                  </div>
                   <div v-if="tileTestResult.details" class="tile-details-grid">
                     <div>
                       <span class="detail-label">服务状态:</span>
-                      <span class="detail-val">{{ tileTestResult.details.status }}</span>
+                      <span class="detail-val">
+                        {{ tileTestResult.details.status }}
+                      </span>
                     </div>
                     <div>
                       <span class="detail-label">命中缓存:</span>
-                      <span class="detail-val">{{ tileTestResult.details.hitCount }} 次</span>
+                      <span class="detail-val">
+                        {{ tileTestResult.details.hitCount }} 次
+                      </span>
                     </div>
                     <div>
                       <span class="detail-label">在线下载:</span>
-                      <span class="detail-val">{{ tileTestResult.details.missCount }} 次</span>
+                      <span class="detail-val">
+                        {{ tileTestResult.details.missCount }} 次
+                      </span>
                     </div>
-                    <div v-if="tileTestResult.details.cacheRoot" class="detail-full">
+                    <div
+                      v-if="tileTestResult.details.cacheRoot"
+                      class="detail-full"
+                    >
                       <span class="detail-label">缓存存储目录:</span>
-                      <span class="detail-val">{{ tileTestResult.details.cacheRoot }}</span>
+                      <span class="detail-val">
+                        {{ tileTestResult.details.cacheRoot }}
+                      </span>
                     </div>
                   </div>
                 </n-alert>
@@ -211,20 +226,26 @@
                 <div class="tile-tips-title">💡 局域网配置指引：</div>
                 <ol class="tile-tips-list">
                   <li>
-                    <strong>单机开发调试：</strong>若瓦片服务在本机运行，可填入
-                    <code class="code-inline">http://127.0.0.1:8088</code>。
+                    <strong>单机开发调试：</strong>
+                    若瓦片服务在本机运行，可填入
+                    <code class="code-inline">http://127.0.0.1:8088</code>
+                    。
                   </li>
                   <li>
-                    <strong>局域网跨机器使用：</strong>若瓦片服务在电脑 A 运行，请在电脑 A 执行
+                    <strong>局域网跨机器使用：</strong>
+                    若瓦片服务在电脑 A 运行，请在电脑 A 执行
                     <code class="code-inline">ipconfig</code>
                     获取 IPv4 地址（如 192.168.2.104），并在本页面输入
-                    <code class="code-inline">http://192.168.2.104:8088</code>。
+                    <code class="code-inline">http://192.168.2.104:8088</code>
+                    。
                   </li>
                   <li>
-                    <strong>防火墙与网络：</strong>请确保运行瓦片服务的电脑已在防火墙放行 8088 端口。
+                    <strong>防火墙与网络：</strong>
+                    请确保运行瓦片服务的电脑已在防火墙放行 8088 端口。
                   </li>
                   <li>
-                    <strong>生效机制：</strong>点击右下方「保存配置」后自动持久化到当前设备，切换底图至「局域网/离线缓存影像」时立即生效。
+                    <strong>生效机制：</strong>
+                    点击右下方「保存配置」后自动持久化到当前设备，切换底图至「局域网/离线缓存影像」时立即生效。
                   </li>
                 </ol>
               </div>
@@ -235,13 +256,24 @@
     </div>
 
     <template #action>
-      <n-space justify="end">
-        <n-button size="small" @click="$emit('update:show', false)">
-          取消
+      <n-space justify="space-between" align="center" style="width: 100%">
+        <n-button
+          secondary
+          type="info"
+          size="small"
+          :loading="exportingDiagnostic"
+          @click="handleExportDiagnostic"
+        >
+          导出日志
         </n-button>
-        <n-button type="success" size="small" @click="$emit('saveConfig')">
-          保存配置
-        </n-button>
+        <n-space justify="end">
+          <n-button size="small" @click="$emit('update:show', false)">
+            取消
+          </n-button>
+          <n-button type="success" size="small" @click="$emit('saveConfig')">
+            保存配置
+          </n-button>
+        </n-space>
       </n-space>
     </template>
   </n-modal>
@@ -266,9 +298,28 @@ import {
   NTabs,
   NTabPane,
   NAlert,
+  useMessage,
 } from 'naive-ui'
+import { invokeSafe } from '@/utils/ipc'
 import type { LinkDraft, LinkKind } from '@/store/commsConfig'
 import type { TileTestResult } from '@/utils/map/tileConfig'
+
+const message = useMessage()
+const exportingDiagnostic = ref(false)
+
+async function handleExportDiagnostic() {
+  exportingDiagnostic.value = true
+  try {
+    const exportPath = await invokeSafe<string>('export_diagnostic_bundle')
+    message.success(`日志已成功生成导出:\n${exportPath}`, {
+      duration: 6000,
+    })
+  } catch (err: any) {
+    message.error(`导出日志失败: ${err.message || err}`)
+  } finally {
+    exportingDiagnostic.value = false
+  }
+}
 import {
   baudRateOptions,
   serialProtocolOptions,

@@ -11,6 +11,7 @@ pub mod encrypted_cache;
 pub mod model_cache;
 pub mod tiles;
 pub mod payload;
+pub mod diagnostic;
 
 pub use config::*;
 pub use network::*;
@@ -25,3 +26,4 @@ pub use encrypted_cache::*;
 pub use model_cache::*;
 pub use tiles::*;
 pub use payload::*;
+pub use diagnostic::*;

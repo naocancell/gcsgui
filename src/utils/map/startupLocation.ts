@@ -17,6 +17,7 @@ import {
 import type { Viewer } from 'cesium'
 import { getMapAssetsFile } from '@/utils/getAssets'
 import { setStartupLocationPicking } from '@/utils/map/mapPicking'
+import { logger } from '@/utils/logger'
 
 export const STARTUP_LOCATION_STORAGE_KEY = 'GCS_STARTUP_LOCATION'
 export const STARTUP_LOCATION_CHANGED_EVENT = 'gcs-startup-location-changed'
@@ -75,7 +76,7 @@ export function getStartupLocation(): StartupLocation | null {
       return data
     }
   } catch (err) {
-    console.warn('[startupLocation] 解析存储的启动点位失败，已忽略:', err)
+    logger.warn('[startupLocation] 解析存储的启动点位失败，已忽略:', err)
   }
   return null
 }
@@ -85,7 +86,7 @@ export function getStartupLocation(): StartupLocation | null {
  */
 export function setStartupLocation(loc: StartupLocation): boolean {
   if (!isValidCoordinate(loc.longitude, loc.latitude)) {
-    console.warn('[startupLocation] 尝试保存非法的坐标:', loc)
+    logger.warn('[startupLocation] 尝试保存非法的坐标:', loc)
     return false
   }
 

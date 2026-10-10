@@ -11,6 +11,7 @@ import {
   normalizeTransponder,
 } from '@/utils/plane/planeAdapter'
 import { altitudeAligner } from '@/utils/plane/altitudeAligner'
+import { logger } from '@/utils/logger'
 
 export function useLoadPlane() {
   //获取飞机的状态管理store
@@ -281,7 +282,7 @@ export function useLoadPlane() {
       // 请求 Cesium 重新渲染一帧
       viewer.scene.requestRender()
     } catch (e) {
-      console.error('模型加载失败', key, e)
+      logger.error('模型加载失败', key, e)
     } finally {
       // 不管加载成功还是失败，都取消 loading 标记
       loadingSet.delete(key)

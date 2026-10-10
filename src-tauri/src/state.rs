@@ -1,5 +1,5 @@
 use dashmap::DashMap;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::{Mutex, RwLock};
 use std::time::Instant;
@@ -41,6 +41,21 @@ pub struct ActiveLink {
 }
 
 use std::sync::atomic::{AtomicU64, Ordering};
+
+/// 链路质量与解析指标只读快照（支持 IPC 传输与日志打印）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkMetricsSnapshot {
+    pub frames_ok: u64,
+    pub frames_crc_fail: u64,
+    pub dedup_hit: u64,
+    pub buffer_overflow: u64,
+    pub parse_err: u64,
+    pub stale_frame: u64,
+    pub conflict_frame: u64,
+    pub recovery_buffered: u64,
+    pub all_links_missing: u64,
+}
 
 /// 后端全链路遥测监控统计指标埋点
 #[derive(Debug, Default)]
@@ -84,6 +99,21 @@ impl LinkMetrics {
     pub fn add_all_links_missing(&self, count: u8) {
         self.all_links_missing
             .fetch_add(u64::from(count), Ordering::Relaxed);
+    }
+
+    /// 获取当前全链路埋点指标的原子瞬时快照
+    pub fn snapshot(&self) -> LinkMetricsSnapshot {
+        LinkMetricsSnapshot {
+            frames_ok: self.frames_ok.load(Ordering::Relaxed),
+            frames_crc_fail: self.frames_crc_fail.load(Ordering::Relaxed),
+            dedup_hit: self.dedup_hit.load(Ordering::Relaxed),
+            buffer_overflow: self.buffer_overflow.load(Ordering::Relaxed),
+            parse_err: self.parse_err.load(Ordering::Relaxed),
+            stale_frame: self.stale_frame.load(Ordering::Relaxed),
+            conflict_frame: self.conflict_frame.load(Ordering::Relaxed),
+            recovery_buffered: self.recovery_buffered.load(Ordering::Relaxed),
+            all_links_missing: self.all_links_missing.load(Ordering::Relaxed),
+        }
     }
 }
 

@@ -23,6 +23,7 @@ import {
   hidePodWindow,
   preservePodWindowOnClose,
 } from '@/utils/podWindow'
+import { logger } from '@/utils/logger'
 
 const uavStore = useUavStore()
 const podStore = usePodStore()
@@ -85,9 +86,13 @@ onMounted(async () => {
 
     // 跨窗口热同步：主窗口保存服务配置后，吊舱窗口实时重载监听
     configChangedUnlisten = await listen('comms-config-changed', async () => {
-      await uavStore.loadCommsConfig()
-      await uavStore.startListening()
-      await uavStore.syncProtocolListeners()
+      try {
+        await uavStore.loadCommsConfig()
+        await uavStore.startListening()
+        await uavStore.syncProtocolListeners()
+      } catch (err) {
+        logger.warn('吊舱窗口响应通信配置热变更失败:', err)
+      }
     })
 
     // 初始加载通信配置并同步后端全部监听服务（获取 FP95 遥测与飞机 ID）

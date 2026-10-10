@@ -23,6 +23,7 @@ import {
   preserveDeiceWindowOnClose,
 } from '@/utils/deiceWindow'
 import { isTauri } from '@/utils/homeWindowData'
+import { logger } from '@/utils/logger'
 
 const uavStore = useUavStore()
 const staticStore = useStaticStore()
@@ -130,9 +131,13 @@ onMounted(async () => {
     try {
       // 跨窗口热同步：当主窗口点击启动或保存服务配置后，防除冰窗口实时重载监听
       const unlistenConfig = await listen('comms-config-changed', async () => {
-        await uavStore.loadCommsConfig()
-        await uavStore.startListening()
-        await uavStore.syncProtocolListeners()
+        try {
+          await uavStore.loadCommsConfig()
+          await uavStore.startListening()
+          await uavStore.syncProtocolListeners()
+        } catch (err) {
+          logger.warn('防除冰窗口响应通信配置热变更失败:', err)
+        }
       })
       if (!isMounted) {
         unlistenConfig()

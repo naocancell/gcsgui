@@ -4,6 +4,7 @@
  */
 import axios from 'axios'
 import { reverseGeocoder } from './TDTProvider'
+import { logger } from '@/utils/logger'
 
 export type MyLocationSource = 'ip' | 'cache' | 'fallback'
 
@@ -164,7 +165,7 @@ export async function resolveByIp(
       const parsed = provider.parse(response?.data)
       if (parsed) return parsed
     } catch (error) {
-      console.warn(`[myLocation] IP 定位失败（${provider.name}）:`, error)
+      logger.warn(`[myLocation] IP 定位失败（${provider.name}）:`, error)
     }
   }
   return null

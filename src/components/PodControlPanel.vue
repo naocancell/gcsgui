@@ -518,7 +518,7 @@
                 active: podStore.vmcActiveKey === cmd.key,
               }"
               :title="cmd.hint"
-              @click="podStore.sendVmc(cmd)"
+              @click="handleSendVmc(cmd)"
             >
               {{ cmd.label }}
             </button>
@@ -537,7 +537,7 @@
                 active: podStore.vmcActiveKey === cmd.key,
               }"
               :title="cmd.hint"
-              @click="podStore.sendVmc(cmd)"
+              @click="handleSendVmc(cmd)"
             >
               {{ cmd.label }}
             </button>
@@ -556,7 +556,7 @@
                 active: podStore.vmcActiveKey === cmd.key,
               }"
               :title="cmd.hint"
-              @click="podStore.sendVmc(cmd)"
+              @click="handleSendVmc(cmd)"
             >
               {{ cmd.label }}
             </button>
@@ -595,7 +595,7 @@
                 active: podStore.vmcActiveKey === cmd.key,
               }"
               :title="cmd.hint"
-              @click="podStore.sendVmc(cmd)"
+              @click="handleSendVmc(cmd)"
             >
               {{ cmd.label }}
             </button>
@@ -616,6 +616,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { useUavStore } from '@/store/uavStore'
 import { usePodStore } from '@/store/podStore'
+import { logger } from '@/utils/logger'
 import {
   POD_DEFOG_COMMANDS,
   POD_DRIFT_COMMANDS,
@@ -744,9 +745,24 @@ function isLaserActive(key: string): boolean {
 }
 
 function onVmc(command: VmcCommandDef) {
-  if (command.key === 'vmc-record') vmcRecording.value = true
-  if (command.key === 'vmc-record-stop') vmcRecording.value = false
-  void podStore.sendVmc(command).catch(() => {})
+  podStore
+    .sendVmc(command)
+    .then(() => {
+      if (command.key === 'vmc-record') {
+        vmcRecording.value = true
+      } else if (command.key === 'vmc-record-stop') {
+        vmcRecording.value = false
+      }
+    })
+    .catch((err) => {
+      logger.warn(`VMC指令 [${command.label || command.key}] 下发失败:`, err)
+    })
+}
+
+function handleSendVmc(command: VmcCommandDef) {
+  podStore.sendVmc(command).catch((err) => {
+    logger.warn(`VMC指令 [${command.label || command.key}] 下发失败:`, err)
+  })
 }
 
 // ==================== 长按（连续）指令 ====================
