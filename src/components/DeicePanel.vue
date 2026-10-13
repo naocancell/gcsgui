@@ -1,50 +1,94 @@
 <template>
-  <div
-    class="avionics-panel deice-panel"
-    :style="panelStyle"
-    @mousedown="startDrag"
-  >
+  <div class="avionics-panel deice-panel deice-dashboard" :style="panelStyle">
     <n-config-provider
       :abstract="true"
       :theme="darkTheme"
       :theme-overrides="naiveThemeOverrides"
     >
-      <!-- Header -->
-      <div
-        class="panel-header"
-        :data-tauri-drag-region="props.standalone ? '' : undefined"
+      <!-- ================= 顶栏：标题 / 状态摘要 / 回路总控 / 窗口控制 ================= -->
+      <header
+        class="panel-header dash-header"
+        :data-tauri-drag-region="dragRegion"
+        @mousedown="startDrag"
         @dblclick="onHeaderDblClick"
       >
-        <div
-          class="title"
-          :data-tauri-drag-region="props.standalone ? '' : undefined"
-        >
-          <span :data-tauri-drag-region="props.standalone ? '' : undefined">
+        <div class="brand" :data-tauri-drag-region="dragRegion">
+          <span
+            class="brand-bar"
+            :class="{
+              online: hasData && !headerAlarm,
+              warning: hasData && headerAlarm,
+              offline: !hasData,
+            }"
+          ></span>
+          <span class="brand-title" :data-tauri-drag-region="dragRegion">
             防除冰与载荷控制系统
+          </span>
+          <span class="brand-sub" :data-tauri-drag-region="dragRegion">
+            ANTI-ICE · PAYLOAD CONTROL · GCS LINK
           </span>
         </div>
 
-        <div class="header-meta">
-          <div
+        <div class="header-chips" :data-tauri-drag-region="dragRegion">
+          <span class="chip chip-green">
+            目标功率 {{ formatInt(deiceData?.targetPower) }}W
+          </span>
+          <span class="chip" :class="modeBadgeClass">
+            防除冰 ·
+            {{ deiceData?.workModeDesc || (hasData ? '未知' : '待机') }}
+          </span>
+          <span class="chip chip-blue">
+            链路 · 防除冰{{ hasData ? '在线' : '离线' }} · 载荷{{
+              hasPayload ? '在线' : '离线'
+            }}
+          </span>
+          <span class="chip chip-plain">继电器 {{ closedRelayCount }}/16</span>
+          <span
             class="status"
             :class="{
-              online: hasData && !hasAnyAlarm,
-              warning: hasData && hasAnyAlarm,
+              online: hasData && !headerAlarm,
+              warning: hasData && headerAlarm,
               offline: !hasData,
             }"
           >
             <span class="status-dot"></span>
             <span v-if="!hasData">离线</span>
-            <span v-else-if="hasAnyAlarm">告警</span>
+            <span v-else-if="headerAlarm">告警</span>
             <span v-else>正常</span>
-          </div>
+          </span>
+        </div>
 
-          <div
-            v-if="props.standalone"
-            class="window-controls"
-            @mousedown.stop
-            @dblclick.stop
+        <div class="header-actions" @mousedown.stop @dblclick.stop>
+          <span class="min-temp-label">最低膜温</span>
+          <span
+            class="min-temp-value dd-mono"
+            :title="payloadStore.minHeatingMat.location"
           >
+            {{ formatFixed(payloadStore.minHeatingMat.temp, 1) }}
+            <template v-if="payloadStore.minHeatingMat.temp !== null">
+              °C
+            </template>
+          </span>
+          <span class="loop-label">回路总控</span>
+          <button
+            class="hdr-btn hdr-btn-on"
+            type="button"
+            :disabled="loadingBatch"
+            @click="handleSetAll(true)"
+          >
+            全部通电
+          </button>
+          <button
+            class="hdr-btn hdr-btn-off"
+            type="button"
+            :disabled="loadingBatch"
+            @click="handleSetAll(false)"
+          >
+            全部断开
+          </button>
+          <span class="clock dd-mono">{{ clockText }}</span>
+
+          <div v-if="props.standalone" class="window-controls">
             <button
               class="window-control"
               type="button"
@@ -88,299 +132,263 @@
             </button>
           </div>
         </div>
-      </div>
+      </header>
 
-      <!-- 模式导航条 -->
-      <div class="avionics-subnav" @mousedown.stop>
-        <div class="subnav-container">
-          <button
-            class="subnav-btn"
-            :class="{ active: activeTab === 'deice' }"
-            type="button"
-            @click="activeTab = 'deice'"
-          >
-            <span class="subnav-title">防除冰监控</span>
-            <span
-              class="subnav-status"
-              :class="{
-                ok: hasData && !hasAnyAlarm,
-                alarm: hasData && hasAnyAlarm,
-                idle: !hasData,
-              }"
-            ></span>
-          </button>
-
-          <button
-            class="subnav-btn"
-            :class="{ active: activeTab === 'payload' }"
-            type="button"
-            @click="activeTab = 'payload'"
-          >
-            <span class="subnav-title">载荷与加热控制</span>
-            <span class="subnav-status ok"></span>
-          </button>
-        </div>
-      </div>
-
-      <!-- Main Body: 载荷控制面板 -->
-      <div v-if="activeTab === 'payload'" class="panel-body payload-tab-body">
-        <PayloadControlPanel />
-      </div>
-
-      <!-- Main Body: 防除冰监控 -->
-      <div v-else class="panel-body">
-        <!-- 1. 控制指令配置与下发 (严格对应协议表 3 / 表 4) -->
-        <section class="section-card cmd-control-card" @mousedown.stop>
-          <div class="section-header-title">
-            <span>防除冰工作模式与控制指令</span>
-            <span class="section-sub">
-              当前运行:
-              {{ deiceData?.workModeDesc || (hasData ? '未知' : '待机') }} ({{
-                formatHex(deiceData?.workMode)
-              }})
-            </span>
-          </div>
-
-          <div class="cmd-control-body">
-            <!-- 模式选择行 -->
-            <div class="cmd-form-row">
-              <span class="cmd-field-label">工作模式:</span>
-              <div class="cmd-mode-selector">
-                <button
-                  v-for="m in propModes"
-                  :key="m.mode"
-                  type="button"
-                  class="cmd-mode-option"
-                  :class="{ active: selectedPropMode === m.mode }"
-                  @click="selectedPropMode = m.mode"
-                >
-                  <span class="mode-name">{{ m.name }}</span>
-                  <span class="mode-hex">
-                    0x{{ m.mode.toString(16).toUpperCase().padStart(2, '0') }}
-                  </span>
-                </button>
-              </div>
+      <!-- ================= 主体：三栏大屏 ================= -->
+      <div ref="bodyEl" class="panel-body dash-grid">
+        <!-- 左栏：功率 / 电气 / 电源总线 -->
+        <div class="dash-col col-left">
+          <!-- 功率监测 (协议表 1) -->
+          <section class="dd-card power-card">
+            <div class="dd-card-head">
+              <span class="dd-card-title">功率监测</span>
+              <span class="dd-card-sub c-blue">
+                目标 / 实际 · 最近 {{ powerSamples.length }} 帧
+              </span>
             </div>
-
-            <!-- 根据选中的模式动态展示对应操作区 -->
-            <div class="cmd-mode-content-area">
-              <!-- 0x00: 关闭模式 -->
-              <div v-if="selectedPropMode === 0" class="cmd-mode-action-row">
-                <span class="cmd-mode-tip">停止防除冰电加热输出</span>
-                <button
-                  type="button"
-                  class="btn-send-cmd btn-danger"
-                  :disabled="isSendingCommand"
-                  @click="handleSendClosedMode"
-                >
-                  {{ isSendingCommand ? '下发中...' : '下发关闭指令' }}
-                </button>
-              </div>
-
-              <!-- 0x01: 指令调节 -->
-              <div
-                v-else-if="selectedPropMode === 1"
-                class="cmd-mode-action-row"
-              >
-                <span class="cmd-mode-tip">
-                  以每次 1% 步长动态微调输出功率:
+            <div class="dd-grid-2">
+              <div class="dd-tile">
+                <span class="dd-tile-label">目标设定功率</span>
+                <span class="dd-tile-value big c-amber">
+                  {{ formatInt(deiceData?.targetPower) }}
+                  <span class="dd-unit">W</span>
                 </span>
-                <div class="cmd-adjust-btns">
-                  <button
-                    type="button"
-                    class="btn-adjust btn-adjust-dec"
-                    :disabled="isSendingCommand"
-                    @click="handleSendAdjust(0)"
-                  >
-                    <span class="adjust-symbol">−</span>
-                    <span>减小功率 (-1%)</span>
-                  </button>
-                  <button
-                    type="button"
-                    class="btn-adjust btn-adjust-inc"
-                    :disabled="isSendingCommand"
-                    @click="handleSendAdjust(1)"
-                  >
-                    <span class="adjust-symbol">+</span>
-                    <span>增大功率 (+1%)</span>
-                  </button>
-                </div>
               </div>
-
-              <!-- 0x02: 恒功率模式 -->
-              <div
-                v-else-if="selectedPropMode === 2"
-                class="cmd-mode-action-row"
-              >
-                <div class="cmd-param-input-group">
-                  <label class="cmd-field-label">设定目标功率</label>
-                  <div class="cmd-input-box">
-                    <input
-                      v-model.number="cmdTargetPower"
-                      type="number"
-                      min="0"
-                      max="65535"
-                      step="50"
-                      class="param-input"
-                      placeholder="0~65535"
-                    />
-                    <span class="param-unit">W</span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  class="btn-send-cmd"
-                  :disabled="isSendingCommand"
-                  @click="handleSendConstantPower"
-                >
-                  {{ isSendingCommand ? '下发中...' : '下发恒功率指令' }}
-                </button>
-              </div>
-
-              <!-- 0x03: 恒温模式 -->
-              <div
-                v-else-if="selectedPropMode === 3"
-                class="cmd-mode-action-row"
-              >
-                <div class="cmd-param-input-group">
-                  <label class="cmd-field-label">设定目标温度</label>
-                  <div class="cmd-input-box">
-                    <input
-                      v-model.number="cmdTargetTemp"
-                      type="number"
-                      min="-40"
-                      max="100"
-                      step="1"
-                      class="param-input"
-                      placeholder="-40~100"
-                    />
-                    <span class="param-unit">℃</span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  class="btn-send-cmd"
-                  :disabled="isSendingCommand"
-                  @click="handleSendConstantTemp"
-                >
-                  {{ isSendingCommand ? '下发中...' : '下发恒温指令' }}
-                </button>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- 2. 7 项健康与故障告警矩阵 (严格对应协议表 2) -->
-        <section class="section-card" @mousedown.stop>
-          <div class="section-header-title">
-            <span>控制器故障与状态告警矩阵</span>
-          </div>
-
-          <div class="alarm-grid">
-            <div
-              v-for="alarm in alarmItems"
-              :key="alarm.key"
-              class="alarm-card"
-              :title="alarm.desc"
-              :class="{
-                'alarm-active': hasData && alarm.active,
-                'alarm-normal': hasData && !alarm.active,
-                'alarm-offline': !hasData,
-              }"
-            >
-              <div class="alarm-indicator">
-                <span class="indicator-dot"></span>
-              </div>
-              <div class="alarm-info">
-                <div class="alarm-name">{{ alarm.name }}</div>
-                <div class="alarm-code">{{ alarm.code }}</div>
-              </div>
-              <div class="alarm-status-pill">
-                <span v-if="!hasData" class="pill pill-offline">待机</span>
-                <span v-else-if="alarm.active" class="pill pill-danger">
-                  异常告警
+              <div class="dd-tile">
+                <span class="dd-tile-label">
+                  当前实际输出功率
+                  <span class="dd-mono c-muted">{{ powerDeviationText }}</span>
                 </span>
-                <span v-else class="pill pill-normal">正常</span>
+                <span class="dd-tile-value big c-green">
+                  {{ formatInt(deiceData?.currentPower) }}
+                  <span class="dd-unit">W</span>
+                </span>
               </div>
             </div>
-          </div>
-        </section>
-
-        <!-- 3. 协议度量指标监控 (严格对应协议表 1) -->
-        <div class="metrics-two-column" @mousedown.stop>
-          <!-- 功率遥测 -->
-          <section class="section-card metric-panel">
-            <div class="section-header-title">
-              <span>功率遥测</span>
-            </div>
-
-            <div class="power-stats-layout">
-              <div class="stat-box primary">
-                <span class="stat-label">目标设定功率</span>
-                <div class="stat-value-group">
-                  <span class="stat-number">
-                    {{ formatInt(deiceData?.targetPower) }}
-                  </span>
-                  <span class="stat-unit">W</span>
-                </div>
-              </div>
-
-              <div class="stat-box secondary">
-                <span class="stat-label">当前实际输出功率</span>
-                <div class="stat-value-group">
-                  <span class="stat-number">
-                    {{ formatInt(deiceData?.currentPower) }}
-                  </span>
-                  <span class="stat-unit">W</span>
-                </div>
-              </div>
+            <div class="power-trend">
+              <PowerTrendChart :samples="powerSamples" />
             </div>
           </section>
 
-          <!-- 电气特性与温度遥测 -->
-          <section class="section-card metric-panel">
-            <div class="section-header-title">
-              <span>电气与温度遥测</span>
+          <!-- 电气与温度遥测 (协议表 1) -->
+          <section class="dd-card">
+            <div class="dd-card-head">
+              <span class="dd-card-title">电气与温度遥测</span>
+              <span class="dd-card-sub" :title="`同步码 ${syncCodeText}`">
+                控制器 · {{ syncCodeText }}
+              </span>
             </div>
-
-            <div class="electrical-grid">
-              <!-- 母线电压 -->
-              <div class="stat-box">
-                <span class="stat-label">母线电压</span>
-                <div class="stat-value-group">
-                  <span class="stat-number">
-                    {{ formatFixed(deiceData?.voltage, 1) }}
-                  </span>
-                  <span class="stat-unit">V</span>
-                </div>
+            <div class="dd-grid-3">
+              <div class="dd-tile">
+                <span class="dd-tile-label">母线电压</span>
+                <span class="dd-tile-value c-cyan">
+                  {{ formatFixed(deiceData?.voltage, 1) }}
+                  <span class="dd-unit">V</span>
+                </span>
               </div>
-
-              <!-- 工作电流 -->
-              <div class="stat-box">
-                <span class="stat-label">工作电流</span>
-                <div class="stat-value-group">
-                  <span class="stat-number">
-                    {{ formatFixed(deiceData?.current, 1) }}
-                  </span>
-                  <span class="stat-unit">A</span>
-                </div>
+              <div class="dd-tile">
+                <span class="dd-tile-label">工作电流</span>
+                <span class="dd-tile-value c-cyan">
+                  {{ formatFixed(deiceData?.current, 1) }}
+                  <span class="dd-unit">A</span>
+                </span>
               </div>
-
-              <!-- 控制器温度 -->
-              <div class="stat-box full-width">
-                <span class="stat-label">控制器温度 (0-255, 偏差-45℃)</span>
-                <div class="stat-value-group">
-                  <span class="stat-number">
+              <div class="dd-tile" title="控制器温度 (0-255, 偏差-45℃)">
+                <span class="dd-tile-label">控制器温度</span>
+                <span class="dd-tile-value temp-row c-green">
+                  <span>
                     {{ formatFixed(deiceData?.controllerTemp, 1) }}
+                    <span class="dd-unit">°C</span>
                   </span>
-                  <span class="stat-unit">℃</span>
                   <span class="stat-temp-tag" :class="{ error: isTempHigh }">
                     {{ tempStatusText }}
                   </span>
-                </div>
+                </span>
               </div>
             </div>
           </section>
+
+          <PowerBusPanel class="fill-card" />
+        </div>
+
+        <!-- 中栏：机体示意图 + 电池温度 -->
+        <div class="dash-col col-center">
+          <AirframeHeatMap />
+          <BatteryTempStrip />
+        </div>
+
+        <!-- 右栏：模式控制 / 回路控制 / 温压流矩阵 / 告警 / 结冰环境 -->
+        <div class="dash-col col-right">
+          <!-- 防除冰工作模式与控制指令 (协议表 3 / 表 4) -->
+          <section class="dd-card cmd-control-card">
+            <div class="dd-card-head">
+              <span class="dd-card-title">防除冰工作模式与控制指令</span>
+              <span class="dd-card-sub mode-run" :class="modeBadgeClass">
+                当前运行 ·
+                {{ deiceData?.workModeDesc || (hasData ? '未知' : '待机') }}
+                ({{ formatHex(deiceData?.workMode) }})
+              </span>
+            </div>
+
+            <div class="mode-grid">
+              <button
+                v-for="m in propModes"
+                :key="m.mode"
+                type="button"
+                class="mode-option"
+                :class="{
+                  selected: selectedPropMode === m.mode,
+                  running: hasData && deiceData?.workMode === m.mode,
+                }"
+                @click="selectedPropMode = m.mode"
+              >
+                <span class="mode-name">{{ m.name }}</span>
+                <span class="mode-hex dd-mono">
+                  {{ formatHex(m.mode) }} ·
+                  {{
+                    hasData && deiceData?.workMode === m.mode
+                      ? '已激活'
+                      : '待命'
+                  }}
+                </span>
+              </button>
+            </div>
+
+            <!-- 0x00: 关闭模式 -->
+            <div v-if="selectedPropMode === 0" class="cmd-row">
+              <span class="cmd-tip">停止防除冰电加热输出</span>
+              <button
+                type="button"
+                class="btn-send-cmd btn-danger"
+                :disabled="isSendingCommand"
+                @click="handleSendClosedMode"
+              >
+                {{ isSendingCommand ? '下发中...' : '下发关闭指令' }}
+              </button>
+            </div>
+
+            <!-- 0x01: 指令调节 -->
+            <div v-else-if="selectedPropMode === 1" class="cmd-row">
+              <span class="cmd-tip">每次 1% 步长微调输出功率</span>
+              <div class="adjust-btns">
+                <button
+                  type="button"
+                  class="btn-adjust"
+                  :disabled="isSendingCommand"
+                  @click="handleSendAdjust(0)"
+                >
+                  − 减小 1%
+                </button>
+                <button
+                  type="button"
+                  class="btn-adjust"
+                  :disabled="isSendingCommand"
+                  @click="handleSendAdjust(1)"
+                >
+                  + 增大 1%
+                </button>
+              </div>
+            </div>
+
+            <!-- 0x02: 恒功率模式 -->
+            <div v-else-if="selectedPropMode === 2" class="cmd-row">
+              <label class="cmd-field">
+                <span class="cmd-label">设定目标功率</span>
+                <span class="cmd-input-box">
+                  <input
+                    v-model.number="cmdTargetPower"
+                    type="number"
+                    min="0"
+                    max="65535"
+                    step="50"
+                    class="param-input dd-mono"
+                    placeholder="0~65535"
+                  />
+                  <span class="param-unit">W</span>
+                </span>
+              </label>
+              <button
+                type="button"
+                class="btn-send-cmd"
+                :disabled="isSendingCommand"
+                @click="handleSendConstantPower"
+              >
+                {{ isSendingCommand ? '下发中...' : '下发恒功率指令' }}
+              </button>
+            </div>
+
+            <!-- 0x03: 恒温模式 -->
+            <div v-else-if="selectedPropMode === 3" class="cmd-row">
+              <label class="cmd-field">
+                <span class="cmd-label">设定目标温度</span>
+                <span class="cmd-input-box">
+                  <input
+                    v-model.number="cmdTargetTemp"
+                    type="number"
+                    min="-40"
+                    max="100"
+                    step="1"
+                    class="param-input dd-mono"
+                    placeholder="-40~100"
+                  />
+                  <span class="param-unit">℃</span>
+                </span>
+              </label>
+              <button
+                type="button"
+                class="btn-send-cmd"
+                :disabled="isSendingCommand"
+                @click="handleSendConstantTemp"
+              >
+                {{ isSendingCommand ? '下发中...' : '下发恒温指令' }}
+              </button>
+            </div>
+          </section>
+
+          <RelayCircuitPanel />
+
+          <HeatingMatrixPanel />
+
+          <!-- 控制故障与状态告警矩阵 (协议表 2 + 0xC5 结冰) -->
+          <section class="dd-card">
+            <div class="dd-card-head">
+              <span class="dd-card-title">控制故障与状态告警矩阵</span>
+              <span
+                class="dd-card-sub"
+                :class="activeAlarmCount > 0 ? 'c-red' : 'c-green'"
+              >
+                {{ activeAlarmCount }} 告警 · {{ alarmSummaryText }}
+              </span>
+            </div>
+            <div class="alarm-grid">
+              <div
+                v-for="alarm in dashboardAlarms"
+                :key="alarm.key"
+                class="alarm-card"
+                :title="alarm.desc"
+                :class="{
+                  'alarm-active': alarm.online && alarm.active,
+                  'alarm-normal': alarm.online && !alarm.active,
+                  'alarm-offline': !alarm.online,
+                }"
+              >
+                <div class="alarm-top">
+                  <span class="indicator-dot"></span>
+                  <span class="alarm-name">{{ alarm.name }}</span>
+                  <span v-if="!alarm.online" class="pill pill-offline">
+                    待机
+                  </span>
+                  <span v-else-if="alarm.active" class="pill pill-danger">
+                    告警
+                  </span>
+                  <span v-else class="pill pill-normal">正常</span>
+                </div>
+                <div class="alarm-code dd-mono">{{ alarm.code }}</div>
+              </div>
+            </div>
+          </section>
+
+          <IcingEnvironmentPanel />
         </div>
       </div>
     </n-config-provider>
@@ -393,7 +401,22 @@ import { NConfigProvider, darkTheme, useMessage } from 'naive-ui'
 import { useUavStore } from '@/store/uavStore'
 import { usePayloadStore } from '@/store/payloadStore'
 import { useDeiceMonitor } from '@/composables/useDeiceMonitor'
-import PayloadControlPanel from '@/components/PayloadControlPanel.vue'
+import {
+  useDashboardFit,
+  useDeicePowerHistory,
+  usePayloadLink,
+  usePayloadRelayControl,
+  useWallClock,
+} from '@/composables/useDeiceDashboard'
+import { powerDeviationPercent } from '@/utils/deice/dashboardModel'
+import AirframeHeatMap from '@/components/deice/AirframeHeatMap.vue'
+import BatteryTempStrip from '@/components/deice/BatteryTempStrip.vue'
+import HeatingMatrixPanel from '@/components/deice/HeatingMatrixPanel.vue'
+import IcingEnvironmentPanel from '@/components/deice/IcingEnvironmentPanel.vue'
+import PowerBusPanel from '@/components/deice/PowerBusPanel.vue'
+import PowerTrendChart from '@/components/deice/PowerTrendChart.vue'
+import RelayCircuitPanel from '@/components/deice/RelayCircuitPanel.vue'
+import './deice/dashboard.css'
 
 const props = defineProps<{
   standalone?: boolean
@@ -407,9 +430,18 @@ const emit = defineEmits<{
 }>()
 
 const uavStore = useUavStore()
-const payloadStore = usePayloadStore()
 const message = useMessage()
-const activeTab = ref<'deice' | 'payload'>('deice')
+// 挂载载荷遥测监听（含继电器初态巡检），并获取载荷 store
+const payloadStore: ReturnType<typeof usePayloadStore> = usePayloadLink()
+const { closedRelayCount, loadingBatch, handleSetAll } =
+  usePayloadRelayControl()
+const { samples: powerSamples } = useDeicePowerHistory(uavStore)
+const { clockText } = useWallClock()
+// 大屏自适应：窗口高度不足时整体等比缩放三栏内容，尽量免滚动完整呈现
+const bodyEl = ref<HTMLElement | null>(null)
+useDashboardFit(bodyEl)
+
+const dragRegion = computed(() => (props.standalone ? '' : undefined))
 
 // 螺旋桨防除冰工作模式指令列表 (严格对应需求规范)
 const propModes = [
@@ -418,26 +450,10 @@ const propModes = [
   { mode: 2, name: '恒功率' },
   { mode: 3, name: '恒温模式' },
 ]
-const loadingPropMode = ref<number | null>(null)
 const selectedPropMode = ref<number>(2) // 默认恒功率模式
 const cmdTargetPower = ref<number>(2000) // 目标设定功率 (W)
 const cmdTargetTemp = ref<number>(15) // 目标温度 (℃)
 const isSendingCommand = ref(false)
-
-function syncFromTelemetry() {
-  if (deiceData.value) {
-    if (
-      typeof deiceData.value.targetPower === 'number' &&
-      Number.isFinite(deiceData.value.targetPower)
-    ) {
-      cmdTargetPower.value = deiceData.value.targetPower
-    }
-    if (typeof deiceData.value.workMode === 'number') {
-      selectedPropMode.value = deiceData.value.workMode
-    }
-    message.info('已同步当前遥测参数至输入框')
-  }
-}
 
 async function handleSendClosedMode() {
   isSendingCommand.value = true
@@ -495,23 +511,6 @@ async function handleSendConstantTemp() {
   }
 }
 
-async function handleSendDeiceCommand() {
-  if (selectedPropMode.value === 0) {
-    await handleSendClosedMode()
-  } else if (selectedPropMode.value === 1) {
-    await handleSendAdjust(1)
-  } else if (selectedPropMode.value === 2) {
-    await handleSendConstantPower()
-  } else if (selectedPropMode.value === 3) {
-    await handleSendConstantTemp()
-  }
-}
-
-async function handleSendPropMode(mode: number, name: string) {
-  selectedPropMode.value = mode
-  await handleSendDeiceCommand()
-}
-
 const naiveThemeOverrides = {
   common: {
     primaryColor: '#339cff',
@@ -531,14 +530,69 @@ const {
   alarmItems,
   hasAnyAlarm,
   modeBadgeClass,
-  powerRatioText,
-  powerRatioWidth,
-  powerDeltaText,
-  powerDeltaClass,
-  calculatedPowerText,
   isTempHigh,
   tempStatusText,
 } = useDeiceMonitor(uavStore)
+
+const hasPayload = computed(() => payloadStore.currentPayload !== null)
+
+const powerDeviationText = computed(() => {
+  const pct = powerDeviationPercent(
+    deiceData.value?.targetPower,
+    deiceData.value?.currentPower,
+  )
+  if (pct === null) return ''
+  return `${pct > 0 ? '+' : ''}${pct.toFixed(1)}%`
+})
+
+// 告警矩阵：协议表 2 的 7 项控制器告警 + 0xC5 结冰告警
+const ICING_ALERT_LEVELS = [
+  'AlertCalculating',
+  'Light',
+  'Moderate',
+  'Severe',
+  'Extreme',
+]
+
+const iceAlarmActive = computed(() => {
+  const ice = payloadStore.currentPayload?.icingSensor
+  return Boolean(ice && ICING_ALERT_LEVELS.includes(ice.icingSeverity))
+})
+
+// 大屏紧凑显示名（完整协议名称见悬停提示）
+const ALARM_SHORT_NAME: Record<string, string> = {
+  targetPowerOverflow: '功率超范围',
+  targetPowerTimeout: '功率调节超时',
+}
+
+const dashboardAlarms = computed(() => [
+  ...alarmItems.value.map((a) => ({
+    ...a,
+    name: ALARM_SHORT_NAME[a.key] ?? a.name,
+    desc: `${a.name}：${a.desc}`,
+    online: hasData.value,
+  })),
+  {
+    key: 'icingWarning',
+    name: '结冰告警',
+    code: 'ICE_WARNING',
+    active: iceAlarmActive.value,
+    online: Boolean(payloadStore.currentPayload?.icingSensor),
+    desc: '0xC5 结冰探测器上报结冰（含解算中告警）',
+  },
+])
+
+const activeAlarmCount = computed(
+  () => dashboardAlarms.value.filter((a) => a.online && a.active).length,
+)
+
+const alarmSummaryText = computed(() => {
+  const anyOnline = dashboardAlarms.value.some((a) => a.online)
+  if (!anyOnline) return '全部待机'
+  return activeAlarmCount.value > 0 ? '请及时处置' : '全部正常'
+})
+
+const headerAlarm = computed(() => hasAnyAlarm.value || iceAlarmActive.value)
 
 function formatFixed(val: unknown, digits = 1): string {
   if (typeof val === 'number' && Number.isFinite(val)) {
@@ -577,8 +631,8 @@ const syncCodeText = computed(() => {
   return '0xEB 0x90'
 })
 
-// 拖拽窗口与布局 (非独立窗口时支持内部平移)
-const panelPosition = ref({ x: 28, y: 56 })
+// 拖拽窗口与布局 (非独立窗口时支持通过顶栏内部平移)
+const panelPosition = ref({ x: 20, y: 48 })
 const panelStyle = computed(() => {
   if (props.standalone) {
     return {
@@ -627,7 +681,7 @@ function onDrag(e: MouseEvent) {
   }
   let x = originX + e.clientX - startX
   let y = originY + e.clientY - startY
-  x = Math.max(0, Math.min(Math.max(0, window.innerWidth - 920), x))
+  x = Math.max(0, Math.min(Math.max(0, window.innerWidth - 400), x))
   y = Math.max(0, Math.min(window.innerHeight - 300, y))
   panelPosition.value.x = x
   panelPosition.value.y = y
@@ -646,720 +700,553 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .avionics-panel {
-  --surface-primary: #212121;
-  --surface-under: #181818;
-  --surface-secondary: #282828;
-  --text-primary: rgb(255 255 255 / 90%);
-  --text-secondary: rgb(255 255 255 / 65%);
-  --text-tertiary: rgb(255 255 255 / 45%);
-  --border-light: rgb(255 255 255 / 4%);
-  --border-default: rgb(255 255 255 / 8%);
-  --border-heavy: rgb(255 255 255 / 14%);
-  --focus-blue: #339cff;
-  --accent-blue: #2563eb;
-  --accent-green: #10a37f;
-  --accent-red: #ef4444;
-  --accent-amber: #f59e0b;
-  --accent-purple: #8b5cf6;
-
-  width: 920px;
+  width: min(1600px, calc(100vw - 40px));
+  height: min(920px, calc(100vh - 64px));
   max-width: 100vw;
   position: fixed;
   z-index: 2000;
-  background: var(--surface-primary);
-  border: 1px solid var(--border-default);
-  border-radius: 12px;
+  border: 1px solid var(--dd-card-border);
+  border-radius: 10px;
   box-shadow: 0 16px 36px rgb(0 0 0 / 48%);
-  color: var(--text-primary);
-  font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial,
-    sans-serif;
   user-select: none;
   display: flex;
   flex-direction: column;
+  gap: 10px;
+  padding: 10px;
   box-sizing: border-box;
+  overflow: hidden;
 }
 
-/* Header */
-.panel-header {
+/* ================= 顶栏 ================= */
+.dash-header {
+  flex-shrink: 0;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 10px 18px;
-  border-bottom: 1px solid var(--border-default);
-  background: var(--surface-under);
-  border-top-left-radius: inherit;
-  border-top-right-radius: inherit;
+  gap: 16px;
+  height: 46px;
+  padding: 0 12px 0 14px;
+  background: var(--dd-card);
+  border: 1px solid var(--dd-card-border);
+  border-radius: 8px;
   cursor: default;
 }
 
-.title {
+.brand {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.brand-bar {
+  width: 6px;
+  height: 20px;
+  border-radius: 2px;
+  background: var(--dd-gray);
+  flex-shrink: 0;
+}
+
+.brand-bar.online {
+  background: var(--dd-green);
+}
+
+.brand-bar.warning {
+  background: var(--dd-red);
+}
+
+.brand-title {
+  font-size: 15px;
   font-weight: 700;
   letter-spacing: 0.5px;
-}
-
-.title span:first-child {
-  color: var(--text-primary);
-  font-size: 14px;
-}
-
-.sub-title {
-  font-size: 12px;
-  color: var(--text-secondary);
-  font-weight: 500;
-}
-
-/* 航电系统模式软键导航条 (Avionics Sub-System Softkeys) */
-.avionics-subnav {
-  background: #1a1a1a;
-  border-bottom: 1px solid var(--border-default);
-  padding: 0 16px;
-  display: flex;
-  align-items: center;
-}
-
-.subnav-container {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.subnav-btn {
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--text-secondary);
-  padding: 8px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.subnav-btn:hover {
-  color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.subnav-btn.active {
-  color: #38bdf8;
-  border-bottom-color: #38bdf8;
-  background: rgba(56, 189, 248, 0.06);
-}
-
-.subnav-tag {
-  font-size: 10px;
-  font-family: monospace;
-  font-weight: 700;
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text-tertiary);
-}
-
-.subnav-btn.active .subnav-tag {
-  background: rgba(56, 189, 248, 0.2);
-  color: #38bdf8;
-}
-
-.subnav-title {
-  letter-spacing: 0.3px;
-}
-
-.subnav-status {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-tertiary);
-}
-
-.subnav-status.ok {
-  background: var(--accent-green);
-  box-shadow: 0 0 6px rgba(16, 163, 127, 0.6);
-}
-
-.subnav-status.alarm {
-  background: var(--accent-red);
-  box-shadow: 0 0 6px rgba(239, 68, 68, 0.6);
-}
-
-.subnav-status.idle {
-  background: var(--text-tertiary);
-}
-
-.payload-tab-body {
-  padding: 14px 18px 20px !important;
-}
-
-.header-meta {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-/* Status Pill */
-.status {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 3px 8px;
-  border-radius: 9999px;
-  border: 1px solid transparent;
-}
-
-.status .status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-}
-
-.status.online {
-  color: var(--accent-green);
-  background: rgba(16, 163, 127, 0.1);
-  border-color: rgba(16, 163, 127, 0.25);
-}
-.status.online .status-dot {
-  background: var(--accent-green);
-}
-
-.status.warning {
-  color: var(--accent-red);
-  background: rgba(239, 68, 68, 0.15);
-  border-color: rgba(239, 68, 68, 0.4);
-  animation: pulse-danger 1.5s infinite;
-}
-.status.warning .status-dot {
-  background: var(--accent-red);
-}
-
-.status.offline {
-  color: var(--text-tertiary);
-  background: rgba(255, 255, 255, 0.05);
-  border-color: var(--border-light);
-}
-.status.offline .status-dot {
-  background: var(--text-tertiary);
-}
-
-@keyframes pulse-danger {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.6;
-  }
-}
-
-/* Window controls */
-.window-controls {
-  display: flex;
-  gap: 6px;
-}
-
-.window-control {
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  border: 1px solid var(--border-light);
-  background: var(--surface-secondary);
-  color: var(--text-secondary);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  padding: 0;
-  transition: all 0.15s ease;
-}
-
-.window-control:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--text-primary);
-}
-
-.window-control-close:hover {
-  background: var(--accent-red);
-  color: white;
-  border-color: var(--accent-red);
-}
-
-.window-control svg {
-  width: 11px;
-  height: 11px;
-  stroke: currentColor;
-  stroke-width: 1.5;
-  fill: none;
-}
-
-/* Body */
-.panel-body {
-  padding: 14px 18px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
-  flex: 1;
-}
-
-.panel-body::-webkit-scrollbar {
-  width: 6px;
-}
-.panel-body::-webkit-scrollbar-track {
-  background: transparent;
-}
-.panel-body::-webkit-scrollbar-thumb {
-  background: rgb(255 255 255 / 15%);
-  border-radius: 3px;
-}
-.panel-body::-webkit-scrollbar-thumb:hover {
-  background: rgb(255 255 255 / 25%);
-}
-
-/* Common Section Card */
-.section-card {
-  padding: 12px 16px;
-  background: var(--surface-under);
-  border: 1px solid var(--border-default);
-  border-radius: 10px;
-}
-
-.section-header-title {
-  display: flex;
-  align-items: baseline;
-  margin-bottom: 10px;
-  padding-bottom: 6px;
-  color: var(--text-primary);
-  border-bottom: 1px solid var(--border-light);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.section-sub {
-  margin-left: 8px;
-  color: var(--text-tertiary);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.5px;
-}
-
-/* Overview bar & Control Card */
-.cmd-control-card {
-  background: #1c1c1c;
-  border-color: rgba(255, 255, 255, 0.08);
-}
-
-.cmd-control-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.cmd-form-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.cmd-field-label {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  font-weight: 600;
   white-space: nowrap;
 }
 
-.cmd-mode-selector {
+.brand-sub {
+  font-family: var(--dd-mono);
+  font-size: 9.5px;
+  letter-spacing: 2.5px;
+  color: var(--dd-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.header-chips {
+  flex: 1;
   display: flex;
+  align-items: center;
+  justify-content: center;
   gap: 6px;
-  flex-wrap: wrap;
+  min-width: 0;
+  overflow: hidden;
 }
 
-.cmd-mode-option {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 6px 12px;
-  border-radius: 6px;
-  border: 1px solid var(--border-default);
-  background: var(--surface-secondary);
-  color: var(--text-secondary);
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.15s ease;
+@media (max-width: 1760px) {
+  .brand-sub {
+    display: none;
+  }
 }
 
-.cmd-mode-option:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text-primary);
+@media (max-width: 1500px) {
+  .chip-blue,
+  .clock {
+    display: none;
+  }
 }
 
-.cmd-mode-option.active {
-  background: #2563eb !important;
-  border-color: #2563eb !important;
-  color: #ffffff !important;
-  font-weight: 600;
+.chip {
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgb(148 163 184 / 6%);
+  color: var(--dd-text-2);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
-.cmd-mode-option .mode-hex {
-  font-size: 10px;
-  font-family: monospace;
-  opacity: 0.7;
+.chip-green {
+  color: var(--dd-green);
 }
 
-.cmd-mode-option.active .mode-hex {
-  color: #ffffff;
-  opacity: 0.85;
+.chip-blue {
+  color: var(--dd-blue-text);
 }
 
-.cmd-mode-content-area {
-  padding: 10px 14px;
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid var(--border-light);
-  border-radius: 8px;
-  min-height: 48px;
-  display: flex;
-  align-items: center;
+.chip-plain {
+  color: var(--dd-text);
 }
 
-.cmd-mode-action-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  gap: 16px;
-}
-
-.cmd-mode-tip {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.cmd-adjust-btns {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.btn-adjust {
+.status {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 16px;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  border: 1px solid #1f87e8;
-  background: #2563eb;
-  color: #ffffff;
-  transition: all 0.15s ease;
+  font-size: 11px;
+  padding: 4px 9px;
+  border-radius: 4px;
+  white-space: nowrap;
+  background: rgb(148 163 184 / 6%);
+  color: var(--dd-text-3);
 }
 
-.btn-adjust:hover:not(:disabled) {
-  background: #1d4ed8;
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentcolor;
 }
 
-.btn-adjust-dec,
-.btn-adjust-inc {
-  background: #2563eb;
-  color: #ffffff;
-  border: 1px solid #1f87e8;
+.status.online {
+  color: var(--dd-green);
 }
 
-.btn-adjust-dec:hover:not(:disabled),
-.btn-adjust-inc:hover:not(:disabled) {
-  background: #1d4ed8;
+.status.warning {
+  color: var(--dd-red);
 }
 
-.btn-adjust:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.adjust-symbol {
-  font-size: 14px;
-  font-weight: 700;
-  font-family: monospace;
-}
-
-.cmd-param-input-group {
+.header-actions {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-shrink: 0;
+}
+
+.min-temp-label,
+.loop-label {
+  font-size: 11.5px;
+  color: var(--dd-text-2);
+  white-space: nowrap;
+}
+
+.min-temp-value {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--dd-green);
+  white-space: nowrap;
+  margin-right: 4px;
+}
+
+.hdr-btn {
+  height: 28px;
+  padding: 0 16px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: filter 0.15s ease;
+}
+
+.hdr-btn:hover:not(:disabled) {
+  filter: brightness(1.25);
+}
+
+.hdr-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.hdr-btn-on {
+  background: rgb(22 101 52 / 35%);
+  border-color: rgb(74 222 128 / 18%);
+  color: var(--dd-green);
+}
+
+.hdr-btn-off {
+  background: rgb(127 29 29 / 40%);
+  border-color: rgb(248 113 113 / 18%);
+  color: var(--dd-red);
+}
+
+.clock {
+  font-size: 11.5px;
+  color: var(--dd-text-2);
+  white-space: nowrap;
+}
+
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+  padding-left: 10px;
+  border-left: 1px solid var(--dd-card-border);
+}
+
+.window-control {
+  width: 28px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--dd-text-2);
+  cursor: pointer;
+}
+
+.window-control svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 1.2;
+}
+
+.window-control:hover {
+  background: rgb(148 163 184 / 12%);
+  color: var(--dd-text);
+}
+
+.window-control-close:hover {
+  background: #dc2626;
+  color: #fff;
+}
+
+/* ================= 三栏主体 ================= */
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.panel-body::-webkit-scrollbar,
+.dash-col::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.panel-body::-webkit-scrollbar-thumb,
+.dash-col::-webkit-scrollbar-thumb {
+  background: rgb(148 163 184 / 18%);
+  border-radius: 3px;
+}
+
+.panel-body::-webkit-scrollbar-track,
+.dash-col::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dash-grid {
+  display: grid;
+  grid-template-columns:
+    minmax(300px, 1fr)
+    minmax(480px, 2.05fr)
+    minmax(360px, 1.05fr);
+  gap: 10px;
+}
+
+.dash-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.col-center {
+  overflow: hidden;
+}
+
+.fill-card {
+  flex: 1 0 auto;
+}
+
+/* 功率监测 */
+.power-card {
+  flex-shrink: 0;
+}
+
+.dd-tile-value.big {
+  font-size: 20px;
+}
+
+.power-trend {
+  height: 64px;
+}
+
+.temp-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.stat-temp-tag {
+  font-family: var(--dd-sans);
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--dd-green);
+}
+
+.stat-temp-tag.error {
+  color: var(--dd-red);
+}
+
+/* 模式运行文字配色 */
+.mode-offline {
+  color: var(--dd-text-3);
+}
+
+.mode-closed {
+  color: var(--dd-text-2);
+}
+
+.mode-command {
+  color: var(--dd-blue-text);
+}
+
+.mode-constant-power {
+  color: var(--dd-amber);
+}
+
+.mode-constant-temp {
+  color: var(--dd-cyan);
+}
+
+.mode-default {
+  color: var(--dd-text-2);
+}
+
+.mode-run {
+  font-family: var(--dd-sans);
+  font-size: 11px;
+}
+
+/* 模式控制 */
+.mode-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.mode-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 4px;
+  border-radius: 6px;
+  border: 1px solid var(--dd-tile-border);
+  background: var(--dd-tile);
+  color: var(--dd-text);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.mode-option:hover {
+  border-color: rgb(148 163 184 / 22%);
+}
+
+.mode-name {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.mode-hex {
+  font-size: 9.5px;
+  color: var(--dd-text-3);
+}
+
+.mode-option.running .mode-hex {
+  color: var(--dd-green);
+}
+
+.mode-option.selected {
+  background: rgb(22 101 52 / 32%);
+  border-color: rgb(74 222 128 / 30%);
+}
+
+.mode-option.selected .mode-name {
+  color: var(--dd-green);
+}
+
+.cmd-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 32px;
+}
+
+.cmd-tip {
+  font-size: 11.5px;
+  color: var(--dd-text-2);
+}
+
+.cmd-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cmd-label {
+  font-size: 11.5px;
+  color: var(--dd-text-2);
+  white-space: nowrap;
 }
 
 .cmd-input-box {
   display: flex;
   align-items: center;
-  background: var(--surface-secondary);
-  border: 1px solid var(--border-default);
-  border-radius: 6px;
-  padding: 4px 8px;
-  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 5px;
+  background: var(--dd-tile);
+  border: 1px solid var(--dd-tile-border);
 }
 
 .cmd-input-box:focus-within {
-  border-color: #339cff;
-  box-shadow: 0 0 0 1px rgba(51, 156, 255, 0.3);
+  border-color: rgb(96 165 250 / 55%);
 }
 
 .param-input {
+  width: 92px;
   background: transparent;
   border: none;
-  color: var(--text-primary);
-  font-family: monospace;
-  font-size: 13px;
-  font-weight: 600;
-  width: 90px;
   outline: none;
+  color: var(--dd-text);
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .param-unit {
   font-size: 11px;
-  color: var(--text-tertiary);
-  font-weight: 600;
+  color: var(--dd-text-3);
 }
 
 .btn-send-cmd {
-  padding: 6px 18px;
-  font-size: 12px;
+  height: 30px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 5px;
+  background: var(--dd-blue);
+  color: #fff;
+  font-size: 12.5px;
   font-weight: 600;
-  border-radius: 6px;
-  border: 1px solid #1f87e8;
-  background: #2563eb;
-  color: #ffffff;
   cursor: pointer;
-  transition: all 0.15s ease;
+  white-space: nowrap;
+  transition: filter 0.15s ease;
 }
 
 .btn-send-cmd:hover:not(:disabled) {
-  background: #1d4ed8;
+  filter: brightness(1.15);
 }
 
-.btn-send-cmd.btn-danger {
-  background: #2563eb;
-  color: #ffffff;
-  border-color: #1f87e8;
-}
-
-.btn-send-cmd.btn-danger:hover:not(:disabled) {
-  background: #1d4ed8;
-  color: #ffffff;
-}
-
-.btn-send-cmd:disabled {
+.btn-send-cmd:disabled,
+.btn-adjust:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
-.mode-overview-card {
-  background: #1c1c1c;
-  border-color: rgba(255, 255, 255, 0.08);
+.btn-send-cmd.btn-danger {
+  background: #dc2626;
 }
 
-.overview-grid {
-  display: grid;
-  grid-template-columns: 1.2fr 1.5fr 1.1fr;
-  align-items: center;
-  gap: 16px;
-}
-
-.overview-item {
+.adjust-btns {
   display: flex;
-  flex-direction: column;
   gap: 6px;
 }
 
-.overview-label {
-  font-size: 10px;
-  color: var(--text-tertiary);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.overview-value-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.justify-end {
-  justify-content: flex-end;
-}
-
-.text-right {
-  text-align: right;
-}
-
-.mode-badge {
-  display: inline-block;
-  font-size: 13px;
-  font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 6px;
-  background: var(--surface-secondary);
-  color: var(--text-primary);
-  border: 1px solid var(--border-heavy);
-}
-
-.mode-constant-power,
-.mode-constant-temp,
-.mode-command,
-.mode-closed,
-.mode-offline,
-.mode-default {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-primary);
-  border-color: var(--border-default);
-}
-
-.sub-code {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  font-family: monospace;
-}
-
-.mode-cmd-btns {
-  display: flex;
-  gap: 4px;
-  margin-top: 4px;
-}
-
-.mode-cmd-btn {
-  padding: 3px 8px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid var(--border-default);
-  color: var(--text-secondary);
-  transition: all 0.15s ease;
-}
-
-.mode-cmd-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: var(--text-primary);
-}
-
-.mode-cmd-btn.active {
-  background: rgba(56, 189, 248, 0.2);
-  color: #38bdf8;
-  border-color: rgba(56, 189, 248, 0.4);
-}
-
-.health-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.btn-adjust {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 5px;
+  border: 1px solid var(--dd-tile-border);
+  background: rgb(148 163 184 / 10%);
+  color: var(--dd-text);
   font-size: 12px;
   font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 6px;
+  cursor: pointer;
 }
 
-.health-badge .dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
+.btn-adjust:hover:not(:disabled) {
+  background: rgb(148 163 184 / 18%);
 }
 
-.health-badge.healthy {
-  background: rgba(16, 163, 127, 0.12);
-  color: var(--accent-green);
-  border: 1px solid rgba(16, 163, 127, 0.3);
-}
-.health-badge.healthy .dot {
-  background: var(--accent-green);
-}
-
-.health-badge.danger {
-  background: rgba(239, 68, 68, 0.2);
-  color: #f87171;
-  border: 1px solid rgba(239, 68, 68, 0.5);
-  animation: pulse-danger 1.5s infinite;
-}
-.health-badge.danger .dot {
-  background: var(--accent-red);
-}
-
-.health-badge.idle {
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-tertiary);
-  border: 1px solid var(--border-light);
-}
-.health-badge.idle .dot {
-  background: var(--text-tertiary);
-}
-
-.frame-tag,
-.sync-tag {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-weight: 500;
-  background: var(--surface-secondary);
-}
-
-.sync-tag.valid {
-  color: var(--accent-green);
-  border: 1px solid rgba(16, 163, 127, 0.3);
-}
-
-.sync-tag.invalid {
-  color: var(--accent-red);
-  background: rgba(239, 68, 68, 0.15);
-  border: 1px solid rgba(239, 68, 68, 0.4);
-}
-
-/* 7 项告警矩阵 */
+/* 告警矩阵 */
 .alarm-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
-}
-
-@media (max-width: 860px) {
-  .alarm-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .alarm-card {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--surface-secondary);
-  border: 1px solid var(--border-light);
-  transition: all 0.2s ease;
-}
-
-.alarm-indicator .indicator-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  display: block;
-}
-
-.alarm-info {
-  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--dd-tile);
+  border: 1px solid var(--dd-tile-border);
   min-width: 0;
 }
 
+.alarm-top {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.indicator-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--dd-gray);
+  flex-shrink: 0;
+}
+
 .alarm-name {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-primary);
+  flex: 1;
+  font-size: 10.5px;
+  color: var(--dd-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1367,280 +1254,42 @@ onBeforeUnmount(() => {
 
 .alarm-code {
   font-size: 9px;
-  font-family: monospace;
-  color: var(--text-tertiary);
-}
-
-.alarm-status-pill .pill {
-  font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-weight: 600;
+  color: var(--dd-text-3);
+  text-align: center;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.pill-normal {
-  background: rgba(16, 163, 127, 0.12);
-  color: #34d399;
-}
-
-.pill-danger {
-  background: rgba(239, 68, 68, 0.3);
-  color: #fca5a5;
-  animation: pulse-danger 1s infinite;
+.pill {
+  font-size: 10px;
+  flex-shrink: 0;
 }
 
 .pill-offline {
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-tertiary);
+  color: var(--dd-text-3);
 }
 
-/* 告警状态高亮 */
-.alarm-card.alarm-normal .indicator-dot {
-  background: var(--accent-green);
-  box-shadow: 0 0 6px rgba(16, 163, 127, 0.5);
-}
-
-.alarm-card.alarm-active {
-  background: rgba(239, 68, 68, 0.16);
-  border-color: rgba(239, 68, 68, 0.5);
-  box-shadow: 0 0 12px rgba(239, 68, 68, 0.3);
-}
-
-.alarm-card.alarm-active .indicator-dot {
-  background: var(--accent-red);
-  box-shadow: 0 0 8px #ef4444;
-}
-
-.alarm-card.alarm-active .alarm-name {
-  color: #f87171;
-}
-
-.alarm-card.alarm-offline .indicator-dot {
-  background: var(--text-tertiary);
-}
-
-/* 双列网格 */
-.metrics-two-column {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-@media (max-width: 800px) {
-  .metrics-two-column {
-    grid-template-columns: 1fr;
-  }
-}
-
-.metric-panel {
-  display: flex;
-  flex-direction: column;
-}
-
-/* 功率卡片统计 */
-.power-stats-layout {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
-.stat-box {
-  background: var(--surface-secondary);
-  border: 1px solid var(--border-light);
-  border-radius: 8px;
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.stat-box.primary,
-.stat-box.secondary {
-  border-left: 1px solid var(--border-light);
-}
-
-.stat-label {
-  font-size: 11px;
-  color: var(--text-secondary);
-  font-weight: 500;
-}
-
-.stat-value-group {
-  display: flex;
-  align-items: baseline;
-  gap: 4px;
-}
-
-.stat-number {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--text-primary);
-  letter-spacing: -0.5px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
-}
-
-.stat-unit {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  font-weight: 600;
-}
-
-.stat-footer {
-  font-size: 9px;
-  color: var(--text-tertiary);
-  letter-spacing: 0.2px;
-}
-
-.power-progress-section {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-light);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.progress-info {
-  display: flex;
-  justify-content: space-between;
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-.progress-percent {
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.progress-bar-track {
-  width: 100%;
-  height: 6px;
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.progress-bar-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #3b82f6, #10b981);
-  border-radius: 3px;
-  transition: width 0.3s ease;
-}
-
-.power-delta {
-  display: flex;
-  justify-content: space-between;
-  font-size: 11px;
-  color: var(--text-tertiary);
-  margin-top: 2px;
-}
-
-.delta-good {
-  color: var(--accent-green);
-  font-weight: 600;
-}
-
-.delta-warning {
-  color: var(--accent-amber);
-  font-weight: 600;
-}
-
-.delta-danger {
-  color: var(--accent-red);
-  font-weight: 600;
-}
-
-/* 电气网格 */
-.electrical-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
-.stat-box.full-width {
-  grid-column: span 2;
-}
-
-.stat-temp-tag {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: rgba(16, 163, 127, 0.15);
-  color: #34d399;
-  margin-left: 8px;
-}
-
-.stat-temp-tag.error {
-  background: rgba(239, 68, 68, 0.2);
-  color: #f87171;
-}
-
-/* 诊断网格 */
-.diagnostics-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-}
-
-@media (max-width: 800px) {
-  .diagnostics-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-.diag-item {
-  background: var(--surface-secondary);
-  border: 1px solid var(--border-light);
-  border-radius: 8px;
-  padding: 8px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.diag-label {
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-
-.diag-val-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.mono-code {
-  font-family: monospace;
-  font-size: 12px;
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.badge-pill {
-  font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-weight: 600;
-}
-
-.pill-valid {
-  background: rgba(16, 163, 127, 0.15);
-  color: #34d399;
-}
-
-.pill-invalid {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-tertiary);
+.pill-normal {
+  color: var(--dd-green);
 }
 
 .pill-danger {
-  background: rgba(239, 68, 68, 0.2);
-  color: #f87171;
-  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: var(--dd-red);
+  font-weight: 700;
+}
+
+.alarm-normal .indicator-dot {
+  background: var(--dd-green);
+}
+
+.alarm-active {
+  background: var(--dd-red-dim);
+  border-color: rgb(248 113 113 / 35%);
+}
+
+.alarm-active .indicator-dot {
+  background: var(--dd-red);
+  box-shadow: 0 0 6px var(--dd-red);
 }
 </style>

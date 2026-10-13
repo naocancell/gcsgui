@@ -177,7 +177,7 @@ onBeforeUnmount(() => {
   width: 100vw;
   height: 100vh;
   min-height: 100vh;
-  background: #181818;
+  background: #0a0f1a;
   overflow: hidden;
   display: flex;
   box-sizing: border-box;
