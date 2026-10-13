@@ -1,0 +1,165 @@
+/* 防除冰与载荷控制大屏：共享设计令牌与基础组件样式（作用域限定在 .deice-dashboard 内） */
+.deice-dashboard {
+  --dd-bg: #0a0f1a;
+  --dd-card: #0e1626;
+  --dd-card-border: rgb(148 163 184 / 8%);
+  --dd-tile: #0a111e;
+  --dd-tile-border: rgb(148 163 184 / 6%);
+  --dd-text: #e2e8f0;
+  --dd-text-2: #94a3b8;
+  --dd-text-3: #5b6b85;
+  --dd-green: #4ade80;
+  --dd-green-dim: rgb(74 222 128 / 12%);
+  --dd-amber: #f5a524;
+  --dd-amber-dim: rgb(245 165 36 / 12%);
+  --dd-cyan: #38bdf8;
+  --dd-blue: #2563eb;
+  --dd-blue-text: #60a5fa;
+  --dd-red: #f87171;
+  --dd-red-dim: rgb(248 113 113 / 12%);
+  --dd-gray: #475569;
+  --dd-mono:
+    'JetBrains Mono', 'SFMono-Regular', 'Cascadia Mono', Consolas,
+    'Liberation Mono', Menlo, monospace;
+  --dd-sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', 'Noto Sans SC', Roboto, Helvetica, Arial, sans-serif;
+
+  background: var(--dd-bg);
+  color: var(--dd-text);
+  font-family: var(--dd-sans);
+  font-size: 12px;
+}
+
+.deice-dashboard .dd-mono {
+  font-family: var(--dd-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.deice-dashboard .dd-card {
+  background: var(--dd-card);
+  border: 1px solid var(--dd-card-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.deice-dashboard .dd-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 18px;
+}
+
+.deice-dashboard .dd-card-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--dd-text);
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+.deice-dashboard .dd-card-sub {
+  font-family: var(--dd-mono);
+  font-size: 10.5px;
+  color: var(--dd-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.deice-dashboard .dd-section-label {
+  font-size: 10.5px;
+  color: var(--dd-text-3);
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.deice-dashboard .dd-tile {
+  background: var(--dd-tile);
+  border: 1px solid var(--dd-tile-border);
+  border-radius: 6px;
+  padding: 5px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.deice-dashboard .dd-tile-label {
+  font-size: 11px;
+  color: var(--dd-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.deice-dashboard .dd-tile-value {
+  font-family: var(--dd-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--dd-text);
+  white-space: nowrap;
+}
+
+.deice-dashboard .dd-tile-value .dd-unit {
+  font-size: 0.85em;
+  margin-left: 4px;
+}
+
+.deice-dashboard .dd-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.deice-dashboard .dd-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.deice-dashboard .dd-span-2 {
+  grid-column: span 2;
+}
+
+.deice-dashboard .c-green {
+  color: var(--dd-green);
+}
+
+.deice-dashboard .c-amber {
+  color: var(--dd-amber);
+}
+
+.deice-dashboard .c-cyan {
+  color: var(--dd-cyan);
+}
+
+.deice-dashboard .c-blue {
+  color: var(--dd-blue-text);
+}
+
+.deice-dashboard .c-red {
+  color: var(--dd-red);
+}
+
+.deice-dashboard .c-muted {
+  color: var(--dd-text-3);
+}
+
+.deice-dashboard .c-text {
+  color: var(--dd-text);
+}
+
+.deice-dashboard button {
+  font-family: inherit;
+}
