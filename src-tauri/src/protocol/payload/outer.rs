@@ -21,12 +21,13 @@ pub const PAYLOAD_ID_CLOUD_DROP: u8 = 0xC2; // 人影云滴探测
 pub const PAYLOAD_ID_RELAY: u8 = 0xC3; // 继电器控制器
 pub const PAYLOAD_ID_BUS_SENSORS: u8 = 0xC4; // 1-3总线挂载设备
 pub const PAYLOAD_ID_ICING: u8 = 0xC5; // 结冰传感器
+pub const PAYLOAD_ID_DEICE: u8 = 0xC6; // 电防冰控制器
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PayloadOuterFrame {
     pub direction_code: u8, // 0x0A 上行 / 0x0B 下行
-    pub payload_id: u8,     // 0xC0 ~ 0xC5
+    pub payload_id: u8,     // 0xC0 ~ 0xC6
     pub seq_num: u8,        // 帧计数
     pub data: Vec<u8>,      // 有效数据内容
 }

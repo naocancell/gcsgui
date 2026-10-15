@@ -3,6 +3,7 @@ pub mod outer;
 pub mod relay_c3;
 pub mod sensors_c4;
 
+pub use crate::protocol::fp95::FP95Frame94Sub2;
 pub use ice_c5::*;
 pub use outer::*;
 pub use relay_c3::*;
@@ -25,6 +26,7 @@ pub struct MissionPayloadAggregate {
     pub current_sensor2: Option<CurrentSensorGroup2Data>,
     pub environment_sensor: Option<EnvironmentSensorData>,
     pub icing_sensor: Option<IcingSensorData>,
+    pub deice: Option<FP95Frame94Sub2>,
     pub last_updated_ms: u64,
 }
 
@@ -186,6 +188,31 @@ impl PayloadStreamReassembler {
                     }
                 }
             }
+            PAYLOAD_ID_DEICE => {
+                // 0xC6 电防冰控制器：14 字节定长，0xEB 0x90 开头，14字节累加和 MOD 256 = 0
+                while buf.len() >= 14 {
+                    if buf[0] != 0xEB || buf[1] != 0x90 {
+                        buf.remove(0);
+                        continue;
+                    }
+                    let sum: u32 = buf[..14].iter().map(|&b| b as u32).sum();
+                    if (sum % 256) != 0 {
+                        buf.remove(0);
+                        continue;
+                    }
+                    let frame = &buf[..14];
+                    match FP95Frame94Sub2::from_bytes(frame) {
+                        Ok(data) => {
+                            aggregate.deice = Some(data);
+                            aggregate.last_updated_ms = now_ms;
+                            buf.drain(..14);
+                        }
+                        Err(_) => {
+                            buf.remove(0);
+                        }
+                    }
+                }
+            }
             _ => {
                 // 透传载荷 (0xC0, 0xC1, 0xC2 等)，暂不作内层拼包，直接消费
                 buf.clear();
@@ -216,5 +243,33 @@ mod tests {
         reassembler.feed_payload(PAYLOAD_ID_BUS_SENSORS, chunk2, &mut agg, 1001);
         assert!(agg.boost_module.is_some(), "拼包后应成功解析升压模块");
         assert_eq!(agg.boost_module.unwrap().input_voltage, 28.0);
+    }
+
+    #[test]
+    fn test_reassembler_deice_payload() {
+        let mut reassembler = PayloadStreamReassembler::new();
+        let mut agg = MissionPayloadAggregate::new(95);
+
+        // 构造一包合法的 14 字节防除冰控制器数据 (恒功率模式 2000W)
+        // 0: EB 1: 90 2..3: 07 D0 (2000) 4..5: 07 D0 (2000) 6: 02 (恒功率)
+        // 7: 00 8: 00 9: 32 (50 - 45 = 5℃) 10: 8C (140 * 0.2 = 28V) 11: 18 (24 * 0.2 = 4.8A) 12: 01 (帧计数)
+        let mut deice_frame = [
+            0xEB, 0x90, 0xD0, 0x07, 0xD0, 0x07, 0x02, 0x00, 0x00, 0x32, 0x8C, 0x18, 0x01, 0x00,
+        ];
+        let sum: u32 = deice_frame[..13].iter().map(|&b| b as u32).sum();
+        deice_frame[13] = ((256 - (sum % 256)) % 256) as u8;
+
+        // 分两片传入
+        reassembler.feed_payload(PAYLOAD_ID_DEICE, &deice_frame[..8], &mut agg, 2000);
+        assert!(agg.deice.is_none(), "半包不应解析");
+
+        reassembler.feed_payload(PAYLOAD_ID_DEICE, &deice_frame[8..], &mut agg, 2001);
+        assert!(agg.deice.is_some(), "拼包后应成功解析防冰数据");
+        let d = agg.deice.as_ref().unwrap();
+        assert_eq!(d.work_mode, 0x02);
+        assert_eq!(d.work_mode_desc, "恒功率模式");
+        assert_eq!(d.target_power, 2000);
+        assert_eq!(d.current_power, 2000);
+        assert!(d.checksum_valid);
     }
 }

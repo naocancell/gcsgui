@@ -2,7 +2,7 @@
 
 use crate::protocol::payload::{
     build_read_coils_cmd, build_write_coils_cmd, pack_payload_frame, MissionPayloadAggregate,
-    RelayStatus, CODE_UPLINK, PAYLOAD_ID_RELAY,
+    RelayStatus, CODE_UPLINK, PAYLOAD_ID_DEICE, PAYLOAD_ID_RELAY,
 };
 use crate::state::AppState;
 use crate::uplink::dispatcher::{broadcast_raw_payload, broadcast_raw_payload_poll};
@@ -117,28 +117,8 @@ pub async fn get_mission_payload_snapshot(
     Ok(state.mission_payload_pool.get(&uav_id).map(|kv| kv.value().clone()))
 }
 
-use crate::protocol::uplink::{NoAckCommand, UplinkFrameContext};
-use crate::uplink::{CommandSendPolicy, UplinkCommandError, UplinkHandle};
-
-/// 电防冰功能码（测控上行链路，指令码 0x77）
+/// 电防冰功能码（旧测控上行链路常发帧指令码，保留常量定义兼容）
 pub const PROPELLER_DEICE_FUNCTION_CODE: u8 = 0x77;
-
-fn deice_command_context(aircraft_id: u8) -> UplinkFrameContext {
-    UplinkFrameContext {
-        destination: 0x02,
-        source: 0x01,
-        aircraft_id,
-        data_source: 0xAA,
-    }
-}
-
-fn uplink_error_message(error: UplinkCommandError) -> String {
-    match error {
-        UplinkCommandError::Conflict { message, .. }
-        | UplinkCommandError::InvalidPolicy { message }
-        | UplinkCommandError::ServiceUnavailable { message } => message,
-    }
-}
 
 /// 构建电防冰控制器 (DFB-2000-48-A) 接收控制帧（标准 12 字节）
 ///
@@ -188,15 +168,30 @@ pub fn build_propeller_deice_uplink_payload(work_mode: u8, param: u16) -> [u8; 1
     payload
 }
 
+/// 构建电防冰控制器 AA 55 外层上行透传报文（总长 20 字节）
+///
+/// 外层结构（符合《任管-载荷上下行协议》）：
+/// - 帧头：0xAA 0x55 (2B)
+/// - 协议识别码：0x0A (1B, CODE_UPLINK 上行)
+/// - 载荷ID：0xC6 (1B, PAYLOAD_ID_DEICE 电防冰控制器)
+/// - 数据长度：12 (2B, u16 LE)
+/// - 帧计数：0 (1B)
+/// - 有效数据内容：12 字节标准控制帧 (DFB-2000-48-A 规范)
+/// - 和校验：帧头至有效数据内容所有字节累加和取低8位 (1B)
+pub fn build_propeller_deice_outer_frame(work_mode: u8, param: u16) -> Vec<u8> {
+    let inner_cmd = build_propeller_deice_cmd(work_mode, param);
+    pack_payload_frame(CODE_UPLINK, PAYLOAD_ID_DEICE, 0, &inner_cmd)
+}
+
 /// 螺旋桨加热模式与功率/温度控制指令
 ///
-/// 外层采用 0xEB 0x90 开头的 32 字节测控上行帧，指令码 (功能码) 为 0x77；
-/// 内层控制帧固定 12 字节（DFB-2000-48-A 规范），置于 15 字节业务区前部，尾部 3 字节补 0；
-/// 下发策略为单次触发发送 (CommandSendPolicy::Once)。
+/// 最新协议架构：外层采用 0xAA 0x55 统一任务管理器-载荷透传帧结构，载荷ID为 0xC6；
+/// 内层控制帧固定 12 字节（DFB-2000-48-A 规范）；
+/// 通过当前活动通信链路广播发送。
 #[tauri::command]
 pub async fn send_propeller_deice_command(
-    handle: tauri::State<'_, UplinkHandle>,
-    uav_id: u8,
+    state: tauri::State<'_, AppState>,
+    _uav_id: u8,
     work_mode: u8,
     target_power: u16,
     target_temp: i16,
@@ -209,30 +204,16 @@ pub async fn send_propeller_deice_command(
         _ => target_power,
     };
 
-    let payload_15 = build_propeller_deice_uplink_payload(work_mode, param);
-
-    handle
-        .configure(deice_command_context(uav_id))
-        .await
-        .map_err(|e| e.to_string())?;
-
-    handle
-        .submit_command(
-            NoAckCommand {
-                function_code: PROPELLER_DEICE_FUNCTION_CODE,
-                payload: payload_15,
-            },
-            CommandSendPolicy::Once,
-        )
-        .await
-        .map_err(uplink_error_message)
+    let frame = build_propeller_deice_outer_frame(work_mode, param);
+    broadcast_raw_payload(&state, &frame).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::protocol::uplink::{
-        encode_uplink_frame, UplinkControlState, UplinkPayload, UPLINK_FRAME_LEN,
+        encode_uplink_frame, NoAckCommand, UplinkControlState, UplinkFrameContext, UplinkPayload,
+        UPLINK_FRAME_LEN,
     };
 
     #[test]
@@ -306,6 +287,28 @@ mod tests {
         assert_eq!(frame[29], 0xAA); // 数据来源
         // 验证尾部 2 字节 FKD-CRC 校验码正确
         assert!(crate::protocol::fkd_crc::verify_fkd_crc(&frame, 0xEB, 0x90));
+    }
+
+    #[test]
+    fn test_build_propeller_deice_outer_frame() {
+        use crate::protocol::payload::unpack_payload_frame;
+
+        // 构造恒功率模式 2000W 控制帧
+        let frame = build_propeller_deice_outer_frame(0x02, 2000);
+        assert_eq!(frame.len(), 20, "AA55外层帧头8字节 + 12字节内层控制帧 = 20字节");
+        assert_eq!(&frame[0..2], &[0xAA, 0x55]);
+        assert_eq!(frame[2], CODE_UPLINK);
+        assert_eq!(frame[3], PAYLOAD_ID_DEICE);
+        assert_eq!(u16::from_le_bytes([frame[4], frame[5]]), 12);
+        assert_eq!(frame[6], 0); // 帧计数
+
+        let unpacked = unpack_payload_frame(&frame).expect("AA55外层解包成功");
+        assert_eq!(unpacked.direction_code, CODE_UPLINK);
+        assert_eq!(unpacked.payload_id, PAYLOAD_ID_DEICE);
+        assert_eq!(unpacked.data.len(), 12);
+        assert_eq!(&unpacked.data[0..2], &[0xEB, 0x90]); // 内层引导头
+        assert_eq!(&unpacked.data[2..5], &[0x02, 0x02, 0x02]); // 模式重复3次
+        assert_eq!(&unpacked.data[5..7], &[0xD0, 0x07]); // 参数低字节在前
     }
 }
 

@@ -101,6 +101,9 @@ pub fn protocol_to_u8(p: ProtocolType) -> u8 {
         ProtocolType::UAVInfo => 1,
         ProtocolType::FP95 => 2,
         ProtocolType::ServoTurntable => 3,
+        ProtocolType::PassthroughC0 => 4,
+        ProtocolType::PassthroughC1 => 5,
+        ProtocolType::PassthroughC2 => 6,
     }
 }
 
@@ -111,6 +114,9 @@ pub fn protocol_from_u8(v: u8) -> Option<ProtocolType> {
         1 => Some(ProtocolType::UAVInfo),
         2 => Some(ProtocolType::FP95),
         3 => Some(ProtocolType::ServoTurntable),
+        4 => Some(ProtocolType::PassthroughC0),
+        5 => Some(ProtocolType::PassthroughC1),
+        6 => Some(ProtocolType::PassthroughC2),
         _ => None,
     }
 }
@@ -505,6 +511,9 @@ mod tests {
             ProtocolType::UAVInfo,
             ProtocolType::FP95,
             ProtocolType::ServoTurntable,
+            ProtocolType::PassthroughC0,
+            ProtocolType::PassthroughC1,
+            ProtocolType::PassthroughC2,
         ] {
             assert_eq!(decode_protocol(encode_protocol(p)), Some(p));
         }

@@ -14,6 +14,12 @@ pub enum ProtocolType {
     FP95,
     /// 伺服天线转台转发，32 字节帧，EB90 包头，单播发送
     ServoTurntable,
+    /// 人影大气数据测量 (HY-AIMS24-W, 0xC0) 透传链路
+    PassthroughC0,
+    /// 人影焰条 (BF-05, 0xC1) 透传链路
+    PassthroughC1,
+    /// 人影云滴探测分析系统 (SCDP-200, 0xC2) 透传链路
+    PassthroughC2,
 }
 
 /// 传输层产出的原始数据，不含任何协议信息

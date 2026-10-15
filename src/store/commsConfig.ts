@@ -1,4 +1,11 @@
-export type ProtocolType = 'FP981C' | 'FP95' | 'UAVInfo' | 'ServoTurntable'
+export type ProtocolType =
+  | 'FP981C'
+  | 'FP95'
+  | 'UAVInfo'
+  | 'ServoTurntable'
+  | 'PassthroughC0'
+  | 'PassthroughC1'
+  | 'PassthroughC2'
 export type LinkKind = 'udp-unicast' | 'udp-multicast' | 'serial'
 
 export interface LinkDraft {
@@ -113,6 +120,39 @@ export function createDefaultLinkDrafts(): LinkDraft[] {
       targetPort: 6000,
       interfaceIp: '0.0.0.0',
     },
+    {
+      ...createLinkDraft('udp-unicast', 6),
+      name: '人影大气测量透传(0xC0)',
+      protocol: 'PassthroughC0',
+      enabled: false,
+      autoConnect: false,
+      ip: '127.0.0.1',
+      localPort: 9100,
+      targetPort: 9100,
+      interfaceIp: '0.0.0.0',
+    },
+    {
+      ...createLinkDraft('udp-unicast', 7),
+      name: '人影焰条透传(0xC1)',
+      protocol: 'PassthroughC1',
+      enabled: false,
+      autoConnect: false,
+      ip: '127.0.0.1',
+      localPort: 9101,
+      targetPort: 9101,
+      interfaceIp: '0.0.0.0',
+    },
+    {
+      ...createLinkDraft('udp-unicast', 8),
+      name: '人影云滴透传(0xC2)',
+      protocol: 'PassthroughC2',
+      enabled: false,
+      autoConnect: false,
+      ip: '127.0.0.1',
+      localPort: 9102,
+      targetPort: 9102,
+      interfaceIp: '0.0.0.0',
+    },
   ]
 }
 
@@ -152,6 +192,54 @@ export function fromCommsConfig(config: PersistedCommsConfig): LinkDraft[] {
       ip: '192.168.1.100',
       localPort: 6001,
       targetPort: 6000,
+      interfaceIp: '0.0.0.0',
+    })
+  }
+
+  // 保证 3 个人影载荷透传链路存在（若当前尚未配置）
+  const allExistingProtocols = new Set([
+    ...udpLinks.map((l) => l.protocol),
+    ...(config.serial ?? []).map((s) => s.protocol),
+  ])
+
+  if (!allExistingProtocols.has('PassthroughC0')) {
+    udpLinks.push({
+      ...createLinkDraft('udp-unicast', 6),
+      name: '人影大气测量透传(0xC0)',
+      protocol: 'PassthroughC0',
+      enabled: false,
+      autoConnect: false,
+      ip: '127.0.0.1',
+      localPort: 9100,
+      targetPort: 9100,
+      interfaceIp: '0.0.0.0',
+    })
+  }
+
+  if (!allExistingProtocols.has('PassthroughC1')) {
+    udpLinks.push({
+      ...createLinkDraft('udp-unicast', 7),
+      name: '人影焰条透传(0xC1)',
+      protocol: 'PassthroughC1',
+      enabled: false,
+      autoConnect: false,
+      ip: '127.0.0.1',
+      localPort: 9101,
+      targetPort: 9101,
+      interfaceIp: '0.0.0.0',
+    })
+  }
+
+  if (!allExistingProtocols.has('PassthroughC2')) {
+    udpLinks.push({
+      ...createLinkDraft('udp-unicast', 8),
+      name: '人影云滴透传(0xC2)',
+      protocol: 'PassthroughC2',
+      enabled: false,
+      autoConnect: false,
+      ip: '127.0.0.1',
+      localPort: 9102,
+      targetPort: 9102,
       interfaceIp: '0.0.0.0',
     })
   }
