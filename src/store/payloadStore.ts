@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { logger } from '@/utils/logger'
+import type { FP95Frame94Sub2 } from '@/types/entityoptions'
 
 export interface RelayStatus {
   mask: number
@@ -108,6 +109,7 @@ export interface MissionPayloadAggregate {
   currentSensor2: CurrentSensorGroup2Data | null
   environmentSensor: EnvironmentSensorData | null
   icingSensor: IcingSensorData | null
+  deice?: FP95Frame94Sub2 | null
   lastUpdatedMs: number
 }
 
@@ -123,6 +125,11 @@ export const usePayloadStore = defineStore('payloadStore', () => {
   // 继电器快捷状态
   const relayStatus = computed<RelayStatus | null>(() => {
     return currentPayload.value?.relay || null
+  })
+
+  // 电防冰控制器遥测数据 (0xC6 透传)
+  const deiceStatus = computed<FP95Frame94Sub2 | null>(() => {
+    return currentPayload.value?.deice || null
   })
 
   // 结冰告警描述 (0xC5 探测器真实遥测)
@@ -255,6 +262,7 @@ export const usePayloadStore = defineStore('payloadStore', () => {
     activeUavId,
     currentPayload,
     relayStatus,
+    deiceStatus,
     icingDesc,
     minHeatingMat,
     startListening,

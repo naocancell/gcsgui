@@ -26,6 +26,9 @@ export const baudRateOptions = [
 export const serialProtocolOptions = [
   { label: 'FP981C', value: 'FP981C' },
   { label: 'FP95', value: 'FP95' },
+  { label: '人影大气测量透传(0xC0)', value: 'PassthroughC0' },
+  { label: '人影焰条透传(0xC1)', value: 'PassthroughC1' },
+  { label: '人影云滴透传(0xC2)', value: 'PassthroughC2' },
 ]
 
 export const linkKindOptions = [
@@ -39,6 +42,9 @@ export const udpProtocolOptions = [
   { label: 'FP95', value: 'FP95' },
   { label: 'UAVInfo', value: 'UAVInfo' },
   { label: '伺服转台', value: 'ServoTurntable' },
+  { label: '人影大气测量透传(0xC0)', value: 'PassthroughC0' },
+  { label: '人影焰条透传(0xC1)', value: 'PassthroughC1' },
+  { label: '人影云滴透传(0xC2)', value: 'PassthroughC2' },
 ]
 
 export function useCommsSettings() {

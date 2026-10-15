@@ -1,5 +1,5 @@
 use gcs_macros::{FPBitFlags, FPPacketParser};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// 94帧子帧1传输层原始结构。
 #[derive(FPPacketParser, Debug, Clone, Serialize)]
@@ -113,7 +113,7 @@ impl From<FP95Frame94Sub1Raw> for FP95Frame94Sub1 {
 }
 
 /// 防除冰状态信息1（表2 状态信息表1），对应字节7的Bit0~Bit6。
-#[derive(FPBitFlags, Debug, Clone, Serialize, Default, PartialEq, Eq)]
+#[derive(FPBitFlags, Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FP95DeiceStatus1 {
     /// D0: 控制器输出电流超过设定值，持续超过1秒（1为异常，0为正常）
@@ -157,7 +157,7 @@ pub struct FP95Frame94Sub2Raw {
 }
 
 /// 94帧子帧2业务消费结构，包含工程量转换、模式语义说明与零和校验验证。
-#[derive(Debug, Default, Clone, Serialize, PartialEq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FP95Frame94Sub2 {
     pub sync_code: [u8; 2],
@@ -181,10 +181,19 @@ pub struct FP95Frame94Sub2 {
 
 impl FP95Frame94Sub2 {
     pub fn from_bytes(data: &[u8]) -> Result<Self, String> {
-        if data.len() < 24 {
-            return Err(format!("94帧子帧2长度不足: 期望24字节，实际{}字节", data.len()));
+        if data.len() < 14 {
+            return Err(format!("防除冰数据长度不足: 期望至少14字节，实际{}字节", data.len()));
         }
-        let raw = FP95Frame94Sub2Raw::from_bytes(data)?;
+        let (raw, reserved) = if data.len() >= 24 {
+            let raw = FP95Frame94Sub2Raw::from_bytes(&data[..24])?;
+            let res = raw.reserved;
+            (raw, res)
+        } else {
+            let mut padded = [0u8; 24];
+            padded[..14].copy_from_slice(&data[..14]);
+            let raw = FP95Frame94Sub2Raw::from_bytes(&padded)?;
+            (raw, [0u8; 10])
+        };
         let raw_bytes: [u8; 14] = data[..14]
             .try_into()
             .map_err(|_| "提取防除冰14字节失败".to_string())?;
@@ -221,7 +230,7 @@ impl FP95Frame94Sub2 {
             checksum: raw.checksum,
             checksum_valid,
             raw_bytes,
-            reserved: raw.reserved,
+            reserved,
         })
     }
 }

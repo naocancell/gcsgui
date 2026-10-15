@@ -115,6 +115,30 @@ impl RouterCore {
                 // 伺服转台链路为下行单播转发链路，忽略接收缓冲区中的数据
                 buffer.data.clear();
             }
+            ProtocolType::PassthroughC0 => {
+                process_passthrough_uplink(
+                    &raw.data,
+                    crate::protocol::payload::PAYLOAD_ID_ATMOSPHERE,
+                    app_state,
+                );
+                buffer.data.clear();
+            }
+            ProtocolType::PassthroughC1 => {
+                process_passthrough_uplink(
+                    &raw.data,
+                    crate::protocol::payload::PAYLOAD_ID_FLARE,
+                    app_state,
+                );
+                buffer.data.clear();
+            }
+            ProtocolType::PassthroughC2 => {
+                process_passthrough_uplink(
+                    &raw.data,
+                    crate::protocol::payload::PAYLOAD_ID_CLOUD_DROP,
+                    app_state,
+                );
+                buffer.data.clear();
+            }
         }
 
         if buffer.data.len() > 4096 {
@@ -443,6 +467,24 @@ fn process_payload_frame(
                 .or_insert_with(|| crate::protocol::payload::MissionPayloadAggregate::new(uav_id));
 
             reassembler.feed_payload(outer.payload_id, &outer.data, &mut agg, now_ms);
+            if outer.payload_id == crate::protocol::payload::PAYLOAD_ID_DEICE {
+                if let Some(deice) = &agg.deice {
+                    app_state.merge_fp95(
+                        uav_id,
+                        crate::protocol::fp95::ParsedSubFrame::Frame94(
+                            crate::protocol::fp95::FP95Frame94::Sub2(deice.clone()),
+                        ),
+                        received_at,
+                    );
+                }
+            } else if matches!(
+                outer.payload_id,
+                crate::protocol::payload::PAYLOAD_ID_ATMOSPHERE
+                    | crate::protocol::payload::PAYLOAD_ID_FLARE
+                    | crate::protocol::payload::PAYLOAD_ID_CLOUD_DROP
+            ) {
+                forward_to_passthrough(app_state, outer.payload_id, &outer.data);
+            }
             app_state.mission_payload_seen.insert(uav_id, received_at);
         }
         Err(_err) => {
@@ -580,6 +622,88 @@ fn forward_to_servo_turntable(
     }
 }
 
+/// 将解包出的透传载荷有效数据直接转发给对应的外部透传链路（UDP 或串口）
+fn forward_to_passthrough(app_state: &AppState, payload_id: u8, data: &[u8]) {
+    if data.is_empty() {
+        return;
+    }
+    // 回放安全围栏：回放会话存在时禁止向外部真实设备发送
+    if app_state.replay_active() {
+        return;
+    }
+
+    let target_protocol = match payload_id {
+        crate::protocol::payload::PAYLOAD_ID_ATMOSPHERE => ProtocolType::PassthroughC0,
+        crate::protocol::payload::PAYLOAD_ID_FLARE => ProtocolType::PassthroughC1,
+        crate::protocol::payload::PAYLOAD_ID_CLOUD_DROP => ProtocolType::PassthroughC2,
+        _ => return,
+    };
+
+    let transports: Vec<_> = app_state
+        .active_links
+        .iter()
+        .filter(|entry| entry.value().protocol == target_protocol)
+        .map(|entry| entry.value().transport.clone())
+        .collect();
+
+    if transports.is_empty() {
+        return;
+    }
+
+    let payload = data.to_vec();
+    for transport in transports {
+        let p = payload.clone();
+        tokio::spawn(async move {
+            if let Err(e) = transport.send(&p).await {
+                log::warn!("透传载荷 0x{:02X} 转发至外部链路失败: {}", payload_id, e);
+            }
+        });
+    }
+}
+
+/// 处理透传链路接收到的外部数据，自动封装为 0xAA 0x55 (0x0A) 上行透传帧并广播发送给飞机
+fn process_passthrough_uplink(data: &[u8], payload_id: u8, app_state: &AppState) {
+    if data.is_empty() {
+        return;
+    }
+    // 回放安全围栏：回放进行中禁止上行发送
+    if app_state.replay_active() {
+        log::warn!("[Replay] 回放进行中，已拦截透传载荷 0x{:02X} 上行发送", payload_id);
+        return;
+    }
+
+    static SEQ_C0: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+    static SEQ_C1: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+    static SEQ_C2: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+    let seq = match payload_id {
+        crate::protocol::payload::PAYLOAD_ID_ATMOSPHERE => {
+            SEQ_C0.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        }
+        crate::protocol::payload::PAYLOAD_ID_FLARE => {
+            SEQ_C1.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        }
+        crate::protocol::payload::PAYLOAD_ID_CLOUD_DROP => {
+            SEQ_C2.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        }
+        _ => 0,
+    };
+
+    let frame = crate::protocol::payload::pack_payload_frame(
+        crate::protocol::payload::CODE_UPLINK,
+        payload_id,
+        seq,
+        data,
+    );
+
+    let state_clone = app_state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = crate::uplink::dispatcher::broadcast_raw_payload(&state_clone, &frame).await {
+            log::warn!("透传载荷 0x{:02X} 上行广播失败: {}", payload_id, e);
+        }
+    });
+}
+
 fn accept_decision(decision: RxDecision, app_state: &AppState) -> bool {
     match decision {
         RxDecision::Accept { missing_before, .. } => {
@@ -662,5 +786,95 @@ mod tests {
         let payload_data = agg.unwrap();
         assert!(payload_data.relay.is_some());
         assert_eq!(payload_data.relay.unwrap().mask, 0xF00F);
+    }
+
+    #[tokio::test]
+    async fn test_passthrough_downlink_forward() {
+        use std::any::Any;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use comms_core::{CommsError, TransportLink};
+
+        #[derive(Default, Clone)]
+        struct MockTransport {
+            sent: Arc<Mutex<Vec<Vec<u8>>>>,
+        }
+        #[async_trait::async_trait]
+        impl TransportLink for MockTransport {
+            fn name(&self) -> &str {
+                "passthrough_c0"
+            }
+            fn link_type(&self) -> &str {
+                "UDP"
+            }
+            async fn send(&self, payload: &[u8]) -> Result<usize, CommsError> {
+                self.sent.lock().await.push(payload.to_vec());
+                Ok(payload.len())
+            }
+            fn stop(&self) {}
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+        }
+
+        let app_state = AppState::new();
+        let mock_transport = Arc::new(MockTransport::default());
+        app_state.active_links.insert(
+            "passthrough_c0".to_string(),
+            crate::state::ActiveLink {
+                link_type: "UDP".to_string(),
+                name: "passthrough_c0".to_string(),
+                generation: 1,
+                endpoint_info: "127.0.0.1:9100".to_string(),
+                protocol: ProtocolType::PassthroughC0,
+                transport: mock_transport.clone(),
+                last_raw_rx: Arc::new(std::sync::Mutex::new(Instant::now())),
+            },
+        );
+
+        let raw_c0_data = vec![0x12, 0x34, 0x56, 0x78];
+        forward_to_passthrough(
+            &app_state,
+            crate::protocol::payload::PAYLOAD_ID_ATMOSPHERE,
+            &raw_c0_data,
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let sent = mock_transport.sent.lock().await;
+        assert_eq!(sent.len(), 1, "应成功转发一帧数据至 PassthroughC0 链路");
+        assert_eq!(sent[0], raw_c0_data);
+    }
+
+    #[test]
+    fn test_process_payload_frame_deice_c6() {
+        use crate::protocol::payload::{pack_payload_frame, CODE_DOWNLINK, PAYLOAD_ID_DEICE, PayloadStreamReassembler};
+
+        let app_state = AppState::new();
+        let mut reassembler = PayloadStreamReassembler::new();
+
+        // 构造合法 14 字节防除冰控制器数据
+        let mut deice_data = [
+            0xEB, 0x90, 0xD0, 0x07, 0xD0, 0x07, 0x02, 0x00, 0x00, 0x32, 0x8C, 0x18, 0x01, 0x00,
+        ];
+        let sum: u32 = deice_data[..13].iter().map(|&b| b as u32).sum();
+        deice_data[13] = ((256 - (sum % 256)) % 256) as u8;
+
+        // 打包为 AA55 外层帧
+        let frame = pack_payload_frame(CODE_DOWNLINK, PAYLOAD_ID_DEICE, 1, &deice_data);
+        assert_eq!(&frame[0..2], &[0xAA, 0x55]);
+        assert_eq!(frame[3], 0xC6);
+
+        // 处理该帧（验证正常解包并合入状态）
+        process_payload_frame(&frame, &mut reassembler, &app_state, Instant::now());
+
+        let agg = app_state.mission_payload_pool.get(&95);
+        assert!(agg.is_some(), "应成功存入 95 号机载荷状态");
+        assert!(agg.unwrap().deice.is_some(), "应成功解析防除冰状态");
+
+        // 构造损坏校验和的错误帧测试容错分支
+        let mut corrupt_frame = frame.clone();
+        let last_idx = corrupt_frame.len() - 1;
+        corrupt_frame[last_idx] ^= 0xFF;
+        process_payload_frame(&corrupt_frame, &mut reassembler, &app_state, Instant::now());
     }
 }
