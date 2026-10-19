@@ -13,7 +13,7 @@
         <img
           class="airframe-img"
           :src="airframeImg"
-          alt="双尾蝎无人机俯视图"
+          alt="双尾蝎无人机透视图"
           draggable="false"
         />
 
@@ -23,30 +23,63 @@
           preserveAspectRatio="xMidYMid meet"
           aria-hidden="true"
         >
-          <line
-            v-for="s in strips"
-            :key="s.key"
-            :x1="s.x1"
-            :y1="s.y1"
-            :x2="s.x2"
-            :y2="s.y2"
-            class="heat-strip"
-            :class="`state-${stateOf(s.key)}`"
+          <defs>
+            <filter
+              id="airframe-heat-glow"
+              x="-20%"
+              y="-20%"
+              width="140%"
+              height="140%"
+            >
+              <feGaussianBlur stdDeviation="7" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+
+          <polygon
+            v-for="band in bands"
+            :key="band.key"
+            :points="band.points"
+            class="heat-band"
+            :class="[`kind-${band.kind}`, `state-${bandState(band)}`]"
+            :filter="
+              bandState(band) === 'heating'
+                ? 'url(#airframe-heat-glow)'
+                : undefined
+            "
           />
         </svg>
 
         <div
-          v-for="seg in labeledSegments"
+          v-for="seg in segments"
           :key="seg.key"
           class="seg-label"
           :class="`state-${stateOf(seg.key)}`"
-          :style="labelStyle(seg.key)"
+          :style="labelStyle(LABEL_POS[seg.key])"
           :title="`${seg.name} · CH${String(seg.relayId).padStart(2, '0')} · 电压 ${fmtFixed(seg.voltage, 1)}V · 电流 ${fmtFixed(seg.current, 2)}A`"
         >
+          <i class="seg-dot"></i>
           <span class="seg-name">{{ LABEL_TEXT[seg.key] }}</span>
           <span class="seg-temp dd-mono">
             {{ fmtFixed(seg.temp, 1) }}
             <template v-if="seg.temp !== null">°C</template>
+          </span>
+        </div>
+
+        <div
+          class="seg-label kind-const"
+          :class="`state-${constState}`"
+          :style="labelStyle(CONST_LABEL_POS)"
+          :title="constTitle"
+        >
+          <i class="seg-dot"></i>
+          <span class="seg-name">机翼常加热</span>
+          <span class="seg-temp dd-mono">
+            {{ fmtFixed(constTempAvg, 1) }}
+            <template v-if="constTempAvg !== null">°C</template>
           </span>
         </div>
       </div>
@@ -55,8 +88,12 @@
     <div class="airframe-foot">
       <div class="legend">
         <span class="legend-item">
-          <i class="swatch state-heating"></i>
-          加热中（回路闭合）
+          <i class="swatch kind-segment state-heating"></i>
+          分段加热中（回路闭合）
+        </span>
+        <span class="legend-item">
+          <i class="swatch kind-const state-heating"></i>
+          常加热膜通电（CH08）
         </span>
         <span class="legend-item">
           <i class="swatch state-off"></i>
@@ -77,7 +114,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import airframeImg from '@/assets/deice/twin-tail-scorpion.webp'
+import airframeImg from '@/assets/deice/twin-tail-scorpion-perspective.webp'
 import { usePayloadStore } from '@/store/payloadStore'
 import { usePayloadRelayControl } from '@/composables/useDeiceDashboard'
 import {
@@ -87,43 +124,184 @@ import {
 } from '@/utils/deice/dashboardModel'
 
 /**
- * 舞台坐标系：飞机俯视图原图 1479×827，底部额外预留尾翼标注区域。
- * 加热条坐标取自原图机翼前缘 / 尾撑轮廓的像素位置。
+ * 舞台坐标系 = 透视原图像素坐标（2319×1627）。
+ * 机头朝左下，故画面右下方机翼为飞机左翼、左上方机翼为右翼；
+ * 近处（画面右侧）垂尾为左垂尾。
+ * 色带多边形取自原图示意色带（左翼）并按同一透视关系推算其余翼面。
  */
-const STAGE_W = 1479
-const STAGE_H = 990
+const STAGE_W = 2319
+const STAGE_H = 1627
 
-const strips: {
-  key: HeatSegmentKey
-  x1: number
-  y1: number
-  x2: number
-  y2: number
-}[] = [
-  { key: 'leftOuter', x1: 60, y1: 360, x2: 328, y2: 338 },
-  { key: 'leftMid', x1: 336, y1: 337, x2: 498, y2: 324 },
-  { key: 'leftInner', x1: 506, y1: 323, x2: 666, y2: 311 },
-  { key: 'rightInner', x1: 813, y1: 311, x2: 973, y2: 323 },
-  { key: 'rightMid', x1: 981, y1: 324, x2: 1143, y2: 337 },
-  { key: 'rightOuter', x1: 1151, y1: 338, x2: 1419, y2: 360 },
-  { key: 'leftHTail', x1: 584, y1: 699, x2: 712, y2: 699 },
-  { key: 'rightHTail', x1: 767, y1: 699, x2: 895, y2: 699 },
-  { key: 'leftVTail', x1: 517, y1: 694, x2: 517, y2: 814 },
-  { key: 'rightVTail', x1: 952, y1: 694, x2: 952, y2: 814 },
+type BandKind = 'segment' | 'const'
+type BandState = 'heating' | 'off' | 'nodata'
+
+interface Band {
+  key: string
+  kind: BandKind
+  /** 分段加热带对应的热区 key；常加热带为 null（统一由 CH08 控制） */
+  segKey: HeatSegmentKey | null
+  points: string
+}
+
+function pts(list: [number, number][]): string {
+  return list.map(([x, y]) => `${x},${y}`).join(' ')
+}
+
+const bands: Band[] = [
+  // 常加热膜（CH08，左右机翼前缘后方连续带）——先绘制，位于下层
+  {
+    key: 'leftConst',
+    kind: 'const',
+    segKey: null,
+    points: pts([
+      [1031, 1005],
+      [2054, 1536],
+      [2096, 1505],
+      [1100, 978],
+    ]),
+  },
+  {
+    key: 'rightConst',
+    kind: 'const',
+    segKey: null,
+    points: pts([
+      [743, 836],
+      [274, 499],
+      [302, 485],
+      [788, 814],
+    ]),
+  },
+  // 左翼前缘三段（画面右下）
+  {
+    key: 'leftInner',
+    kind: 'segment',
+    segKey: 'leftInner',
+    points: pts([
+      [990, 1031],
+      [1276, 1190],
+      [1290, 1159],
+      [1014, 1010],
+    ]),
+  },
+  {
+    key: 'leftMid',
+    kind: 'segment',
+    segKey: 'leftMid',
+    points: pts([
+      [1321, 1208],
+      [1609, 1365],
+      [1620, 1336],
+      [1343, 1192],
+    ]),
+  },
+  {
+    key: 'leftOuter',
+    kind: 'segment',
+    segKey: 'leftOuter',
+    points: pts([
+      [1654, 1375],
+      [1941, 1533],
+      [1949, 1507],
+      [1670, 1362],
+    ]),
+  },
+  // 右翼前缘三段（画面左上）
+  {
+    key: 'rightInner',
+    kind: 'segment',
+    segKey: 'rightInner',
+    points: pts([
+      [717, 863],
+      [577, 756],
+      [600, 744],
+      [745, 849],
+    ]),
+  },
+  {
+    key: 'rightMid',
+    kind: 'segment',
+    segKey: 'rightMid',
+    points: pts([
+      [568, 749],
+      [427, 643],
+      [447, 633],
+      [592, 738],
+    ]),
+  },
+  {
+    key: 'rightOuter',
+    kind: 'segment',
+    segKey: 'rightOuter',
+    points: pts([
+      [418, 636],
+      [277, 530],
+      [294, 521],
+      [439, 626],
+    ]),
+  },
+  // H 形平尾前缘（左右两半）
+  {
+    key: 'rightHTail',
+    kind: 'segment',
+    segKey: 'rightHTail',
+    points: pts([
+      [1562, 505],
+      [1762, 605],
+      [1762, 591],
+      [1562, 491],
+    ]),
+  },
+  {
+    key: 'leftHTail',
+    kind: 'segment',
+    segKey: 'leftHTail',
+    points: pts([
+      [1776, 612],
+      [1972, 710],
+      [1972, 696],
+      [1776, 598],
+    ]),
+  },
+  // 垂尾前缘
+  {
+    key: 'rightVTail',
+    kind: 'segment',
+    segKey: 'rightVTail',
+    points: pts([
+      [1649, 186],
+      [1539, 462],
+      [1552, 462],
+      [1662, 186],
+    ]),
+  },
+  {
+    key: 'leftVTail',
+    kind: 'segment',
+    segKey: 'leftVTail',
+    points: pts([
+      [2053, 368],
+      [1998, 600],
+      [2011, 600],
+      [2066, 368],
+    ]),
+  },
 ]
 
+/** 温度标签中心点（舞台坐标），均落在翼面外侧的背景区域 */
 const LABEL_POS: Record<HeatSegmentKey, { x: number; y: number }> = {
-  leftOuter: { x: 195, y: 250 },
-  leftMid: { x: 417, y: 250 },
-  leftInner: { x: 586, y: 250 },
-  rightInner: { x: 893, y: 250 },
-  rightMid: { x: 1062, y: 250 },
-  rightOuter: { x: 1284, y: 250 },
-  leftVTail: { x: 550, y: 872 },
-  rightVTail: { x: 920, y: 872 },
-  leftHTail: { x: 652, y: 948 },
-  rightHTail: { x: 828, y: 948 },
+  leftInner: { x: 1060, y: 1236 },
+  leftMid: { x: 1392, y: 1412 },
+  leftOuter: { x: 1748, y: 1566 },
+  rightInner: { x: 600, y: 884 },
+  rightMid: { x: 446, y: 772 },
+  rightOuter: { x: 292, y: 662 },
+  rightVTail: { x: 1450, y: 300 },
+  leftVTail: { x: 1900, y: 380 },
+  rightHTail: { x: 1700, y: 660 },
+  leftHTail: { x: 1900, y: 500 },
 }
+
+const CONST_LABEL_POS = { x: 1640, y: 1150 }
 
 const LABEL_TEXT: Record<HeatSegmentKey, string> = {
   leftOuter: '左翼外侧',
@@ -142,7 +320,6 @@ const payloadStore = usePayloadStore()
 const { isRelayClosed, relayStatus } = usePayloadRelayControl()
 
 const segments = computed(() => buildHeatSegments(payloadStore.currentPayload))
-const labeledSegments = segments
 const hasRelay = computed(() => Boolean(relayStatus.value?.channels))
 const constHeatOn = computed(() => isRelayClosed(8))
 
@@ -150,15 +327,42 @@ const heatingCount = computed(
   () => segments.value.filter((s) => isRelayClosed(s.relayId)).length,
 )
 
-function stateOf(key: HeatSegmentKey): 'heating' | 'off' | 'nodata' {
+const constState = computed<BandState>(() => {
+  if (!hasRelay.value) return 'nodata'
+  return constHeatOn.value ? 'heating' : 'off'
+})
+
+const constTemps = computed(() =>
+  segments.value
+    .filter((s) => s.constTemp !== null)
+    .map((s) => ({ name: s.name, temp: s.constTemp as number })),
+)
+
+const constTempAvg = computed<number | null>(() => {
+  const list = constTemps.value
+  if (!list.length) return null
+  return list.reduce((sum, t) => sum + t.temp, 0) / list.length
+})
+
+const constTitle = computed(() => {
+  const detail = constTemps.value
+    .map((t) => `${t.name} ${fmtFixed(t.temp, 1)}°C`)
+    .join(' / ')
+  return `机翼常加热膜 · CH08 · 平均温度 ${fmtFixed(constTempAvg.value, 1)}°C${detail ? ` · ${detail}` : ''}`
+})
+
+function stateOf(key: HeatSegmentKey): BandState {
   if (!hasRelay.value) return 'nodata'
   const seg = segments.value.find((s) => s.key === key)
   if (!seg) return 'nodata'
   return isRelayClosed(seg.relayId) ? 'heating' : 'off'
 }
 
-function labelStyle(key: HeatSegmentKey) {
-  const p = LABEL_POS[key]
+function bandState(band: Band): BandState {
+  return band.segKey ? stateOf(band.segKey) : constState.value
+}
+
+function labelStyle(p: { x: number; y: number }) {
   return {
     left: `${(p.x / STAGE_W) * 100}%`,
     top: `${(p.y / STAGE_H) * 100}%`,
@@ -179,12 +383,8 @@ function labelStyle(key: HeatSegmentKey) {
   display: flex;
   align-items: center;
   justify-content: center;
-  background:
-    radial-gradient(ellipse at 50% 45%, rgb(56 189 248 / 6%), transparent 65%),
-    linear-gradient(rgb(148 163 184 / 3%) 1px, transparent 1px) 0 0 / 40px 40px,
-    linear-gradient(90deg, rgb(148 163 184 / 3%) 1px, transparent 1px) 0 0 /
-      40px 40px,
-    var(--dd-tile);
+  /* 与透视底图边缘色一致（上 #0c1a40 → 下 #132450），羽化后无明显接缝 */
+  background: linear-gradient(to bottom, #0c1a40, #132450);
   border: 1px solid var(--dd-tile-border);
   border-radius: 6px;
   overflow: hidden;
@@ -192,20 +392,25 @@ function labelStyle(key: HeatSegmentKey) {
 
 .airframe-stage {
   position: relative;
-  width: 92%;
-  width: min(92cqw, calc(92cqh * 1479 / 990));
-  aspect-ratio: 1479 / 990;
+  width: 100%;
+  width: min(100cqw, calc(100cqh * 2319 / 1627));
+  aspect-ratio: 2319 / 1627;
 }
 
 .airframe-img {
   position: absolute;
-  top: 0;
-  left: 0;
+  inset: 0;
   width: 100%;
-  height: auto;
+  height: 100%;
   user-select: none;
   pointer-events: none;
-  filter: drop-shadow(0 18px 30px rgb(0 0 0 / 45%));
+
+  /* 四周羽化，使原图深蓝背景自然过渡到卡片底色 */
+  mask-image:
+    linear-gradient(to right, transparent, #000 5%, #000 95%, transparent),
+    linear-gradient(to bottom, transparent, #000 5%, #000 95%, transparent);
+  mask-composite: intersect;
+  -webkit-mask-composite: source-in;
 }
 
 .airframe-overlay {
@@ -216,35 +421,80 @@ function labelStyle(key: HeatSegmentKey) {
   pointer-events: none;
 }
 
-.heat-strip {
-  stroke-width: 11;
-  stroke-linecap: round;
-  transition: stroke 0.2s ease;
+.heat-band {
+  stroke-width: 2;
+  stroke-linejoin: round;
+  transition:
+    fill 0.25s ease,
+    stroke 0.25s ease,
+    opacity 0.25s ease;
 }
 
-.heat-strip.state-heating {
-  stroke: var(--dd-green);
-  filter: drop-shadow(0 0 6px rgb(74 222 128 / 55%));
+.heat-band.kind-segment.state-heating {
+  fill: var(--dd-green);
+  stroke: rgb(187 247 208 / 70%);
+  opacity: 0.9;
+  animation: heat-pulse 2.4s ease-in-out infinite;
 }
 
-.heat-strip.state-off {
-  stroke: var(--dd-amber);
+.heat-band.kind-const.state-heating {
+  fill: #e11d1d;
+  stroke: rgb(254 202 202 / 45%);
+  opacity: 0.86;
+  animation: heat-pulse 2.4s ease-in-out infinite;
 }
 
-.heat-strip.state-nodata {
-  stroke: var(--dd-gray);
+.heat-band.state-off {
+  fill: var(--dd-amber);
+  stroke: rgb(253 230 138 / 45%);
+  opacity: 0.62;
+}
+
+.heat-band.state-nodata {
+  fill: rgb(148 163 184 / 32%);
+  stroke: rgb(203 213 225 / 60%);
+  stroke-dasharray: 8 6;
+  opacity: 1;
+}
+
+@keyframes heat-pulse {
+  0%,
+  100% {
+    opacity: 0.92;
+  }
+
+  50% {
+    opacity: 0.68;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .heat-band {
+    animation: none !important;
+  }
 }
 
 .seg-label {
   position: absolute;
   transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: column;
+  display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 5px;
+  padding: 2px 7px;
   white-space: nowrap;
+  border-radius: 4px;
+  border: 1px solid rgb(148 163 184 / 22%);
+  background: rgb(7 12 26 / 72%);
+  backdrop-filter: blur(2px);
   pointer-events: auto;
   cursor: default;
+}
+
+.seg-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dd-gray);
 }
 
 .seg-name {
@@ -253,13 +503,43 @@ function labelStyle(key: HeatSegmentKey) {
 }
 
 .seg-temp {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--dd-text-3);
 }
 
+.seg-label.state-heating {
+  border-color: rgb(74 222 128 / 45%);
+}
+
+.seg-label.state-heating .seg-dot {
+  background: var(--dd-green);
+  box-shadow: 0 0 6px rgb(74 222 128 / 80%);
+}
+
 .seg-label.state-heating .seg-temp {
   color: var(--dd-green);
+}
+
+.seg-label.kind-const.state-heating {
+  border-color: rgb(239 68 68 / 50%);
+}
+
+.seg-label.kind-const.state-heating .seg-dot {
+  background: #ef4444;
+  box-shadow: 0 0 6px rgb(239 68 68 / 80%);
+}
+
+.seg-label.kind-const.state-heating .seg-temp {
+  color: #fca5a5;
+}
+
+.seg-label.state-off {
+  border-color: rgb(245 165 36 / 40%);
+}
+
+.seg-label.state-off .seg-dot {
+  background: var(--dd-amber);
 }
 
 .seg-label.state-off .seg-temp {
@@ -275,7 +555,7 @@ function labelStyle(key: HeatSegmentKey) {
 .legend {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 16px;
   font-size: 11px;
   color: var(--dd-text-2);
   flex-wrap: wrap;
@@ -293,8 +573,12 @@ function labelStyle(key: HeatSegmentKey) {
   border-radius: 3px;
 }
 
-.swatch.state-heating {
+.swatch.kind-segment.state-heating {
   background: var(--dd-green);
+}
+
+.swatch.kind-const.state-heating {
+  background: #e11d1d;
 }
 
 .swatch.state-off {
@@ -302,11 +586,12 @@ function labelStyle(key: HeatSegmentKey) {
 }
 
 .swatch.state-nodata {
-  background: var(--dd-gray);
+  background: rgb(148 163 184 / 22%);
+  border: 1px dashed rgb(148 163 184 / 55%);
 }
 
 .legend-note {
-  margin-left: 12px;
+  margin-left: 8px;
   color: var(--dd-text-3);
 }
 
