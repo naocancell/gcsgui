@@ -120,9 +120,10 @@ import {
 
 /**
  * 舞台坐标系 = 透视原图像素坐标（2319×1627）。
- * 机头朝左下，画面右下方机翼为飞机左翼：
- * 前缘三段绿色带 = 左翼外/中/内段加热膜（CH11/CH10/CH09），
- * 其后红色连续带 = 机翼常加热膜（CH08）。
+ * 机头朝左下，画面右下方机翼为飞机左翼、左上方机翼为右翼：
+ * 机翼前缘三段带 = 外/中/内段加热膜（左 CH11/10/09，右 CH05/04/03），
+ * 其后红色连续带 = 机翼常加热膜（CH08）；
+ * 平尾、垂尾前缘带 = 左/右平尾（CH07/CH01）、左/右垂尾（CH06/CH02）。
  */
 const STAGE_W = 2319
 const STAGE_H = 1627
@@ -143,6 +144,7 @@ function pts(list: [number, number][]): string {
 }
 
 const bands: Band[] = [
+  // 常加热膜（CH08，左右机翼前缘后方连续带）——先绘制，位于下层
   {
     key: 'leftConst',
     kind: 'const',
@@ -154,6 +156,18 @@ const bands: Band[] = [
       [1100, 978],
     ]),
   },
+  {
+    key: 'rightConst',
+    kind: 'const',
+    segKey: null,
+    points: pts([
+      [743, 836],
+      [274, 499],
+      [302, 485],
+      [788, 814],
+    ]),
+  },
+  // 左翼前缘三段（画面右下）
   {
     key: 'leftInner',
     kind: 'segment',
@@ -185,6 +199,86 @@ const bands: Band[] = [
       [1941, 1533],
       [1949, 1507],
       [1670, 1362],
+    ]),
+  },
+  // 右翼前缘三段（画面左上）
+  {
+    key: 'rightInner',
+    kind: 'segment',
+    segKey: 'rightInner',
+    points: pts([
+      [717, 863],
+      [577, 756],
+      [600, 744],
+      [745, 849],
+    ]),
+  },
+  {
+    key: 'rightMid',
+    kind: 'segment',
+    segKey: 'rightMid',
+    points: pts([
+      [568, 749],
+      [427, 643],
+      [447, 633],
+      [592, 738],
+    ]),
+  },
+  {
+    key: 'rightOuter',
+    kind: 'segment',
+    segKey: 'rightOuter',
+    points: pts([
+      [418, 636],
+      [277, 530],
+      [294, 521],
+      [439, 626],
+    ]),
+  },
+  // H 形平尾前缘（左右两半）
+  {
+    key: 'rightHTail',
+    kind: 'segment',
+    segKey: 'rightHTail',
+    points: pts([
+      [1562, 505],
+      [1762, 605],
+      [1762, 591],
+      [1562, 491],
+    ]),
+  },
+  {
+    key: 'leftHTail',
+    kind: 'segment',
+    segKey: 'leftHTail',
+    points: pts([
+      [1776, 612],
+      [1972, 710],
+      [1972, 696],
+      [1776, 598],
+    ]),
+  },
+  // 垂尾前缘
+  {
+    key: 'rightVTail',
+    kind: 'segment',
+    segKey: 'rightVTail',
+    points: pts([
+      [1649, 186],
+      [1539, 462],
+      [1552, 462],
+      [1662, 186],
+    ]),
+  },
+  {
+    key: 'leftVTail',
+    kind: 'segment',
+    segKey: 'leftVTail',
+    points: pts([
+      [2053, 368],
+      [1998, 600],
+      [2011, 600],
+      [2066, 368],
     ]),
   },
 ]
