@@ -3,9 +3,37 @@
     <div class="dd-card-head">
       <span class="dd-card-title">翼面防冰状态 · 温-压-流对照（双尾蝎）</span>
       <span class="dd-card-sub c-green">
-        加热段 {{ heatingCount }}/{{ segments.length }} · 常加
-        {{ hasRelay ? (constHeatOn ? '通电' : '断开') : '—' }}
+        加热条 {{ heatingStripCount }}/{{ stripRows.length }} · 遥测
+        {{ telemetryRate !== null ? `${telemetryRate.toFixed(0)}Hz` : '—' }}
       </span>
+    </div>
+
+    <!-- 结冰 / 大气环境速览 -->
+    <div class="env-strip">
+      <div class="env-tile icing-tile" :class="icingClass">
+        <span class="env-label">
+          结冰探头
+          <span v-if="manualJudge" class="judge-tag">人工判定</span>
+        </span>
+        <span class="env-value icing-value">
+          <i class="icing-dot"></i>
+          {{ icingText }}
+        </span>
+      </div>
+      <div class="env-tile">
+        <span class="env-label">大气温度</span>
+        <span class="env-value dd-mono c-cyan">
+          {{ fmtFixed(env?.temperature, 1) }}
+          <span v-if="env" class="env-unit">°C</span>
+        </span>
+      </div>
+      <div class="env-tile">
+        <span class="env-label">相对湿度</span>
+        <span class="env-value dd-mono c-green">
+          {{ fmtFixed(env?.humidity, 0) }}
+          <span v-if="env" class="env-unit">%RH</span>
+        </span>
+      </div>
     </div>
 
     <div class="airframe-canvas">
@@ -21,7 +49,6 @@
           class="airframe-overlay"
           :viewBox="`0 0 ${STAGE_W} ${STAGE_H}`"
           preserveAspectRatio="xMidYMid meet"
-          aria-hidden="true"
         >
           <defs>
             <filter
@@ -50,63 +77,25 @@
                 ? 'url(#airframe-heat-glow)'
                 : undefined
             "
-          />
+          >
+            <title>{{ bandTitle(band) }}</title>
+          </polygon>
         </svg>
-
-        <div
-          v-for="seg in segments"
-          :key="seg.key"
-          class="seg-label"
-          :class="`state-${stateOf(seg.key)}`"
-          :style="labelStyle(LABEL_POS[seg.key])"
-          :title="`${seg.name} · CH${String(seg.relayId).padStart(2, '0')} · 电压 ${fmtFixed(seg.voltage, 1)}V · 电流 ${fmtFixed(seg.current, 2)}A`"
-        >
-          <i class="seg-dot"></i>
-          <span class="seg-name">{{ LABEL_TEXT[seg.key] }}</span>
-          <span class="seg-temp dd-mono">
-            {{ fmtFixed(seg.temp, 1) }}
-            <template v-if="seg.temp !== null">°C</template>
-          </span>
-        </div>
-
-        <div
-          class="seg-label kind-const"
-          :class="`state-${constState}`"
-          :style="labelStyle(CONST_LABEL_POS)"
-          :title="constTitle"
-        >
-          <i class="seg-dot"></i>
-          <span class="seg-name">机翼常加热</span>
-          <span class="seg-temp dd-mono">
-            {{ fmtFixed(constTempAvg, 1) }}
-            <template v-if="constTempAvg !== null">°C</template>
-          </span>
-        </div>
       </div>
-    </div>
 
-    <div class="airframe-foot">
       <div class="legend">
         <span class="legend-item">
           <i class="swatch kind-segment state-heating"></i>
-          分段加热中（回路闭合）
+          加热中
         </span>
         <span class="legend-item">
           <i class="swatch kind-const state-heating"></i>
-          常加热膜通电（CH08）
+          常加热
         </span>
         <span class="legend-item">
           <i class="swatch state-off"></i>
-          未加热（回路断开）
+          未加热
         </span>
-        <span class="legend-item">
-          <i class="swatch state-nodata"></i>
-          无回路状态
-        </span>
-        <span class="legend-note">数值 = 翼面加热膜采集温度</span>
-      </div>
-      <div class="airframe-caption">
-        双尾蝎布局 · 上单翼 + 双尾撑 · H 形尾翼 · 16 路加热膜供电回路
       </div>
     </div>
   </section>
@@ -116,18 +105,24 @@
 import { computed } from 'vue'
 import airframeImg from '@/assets/deice/twin-tail-scorpion-perspective.webp'
 import { usePayloadStore } from '@/store/payloadStore'
-import { usePayloadRelayControl } from '@/composables/useDeiceDashboard'
+import { useUavStore } from '@/store/uavStore'
+import {
+  useManualIcingJudgement,
+  usePayloadRelayControl,
+  useTelemetryRate,
+} from '@/composables/useDeiceDashboard'
 import {
   buildHeatSegments,
+  buildHeatStripRows,
   fmtFixed,
   type HeatSegmentKey,
 } from '@/utils/deice/dashboardModel'
 
 /**
  * 舞台坐标系 = 透视原图像素坐标（2319×1627）。
- * 机头朝左下，故画面右下方机翼为飞机左翼、左上方机翼为右翼；
- * 近处（画面右侧）垂尾为左垂尾。
- * 色带多边形取自原图示意色带（左翼）并按同一透视关系推算其余翼面。
+ * 机头朝左下，画面右下方机翼为飞机左翼：
+ * 前缘三段绿色带 = 左翼外/中/内段加热膜（CH11/CH10/CH09），
+ * 其后红色连续带 = 机翼常加热膜（CH08）。
  */
 const STAGE_W = 2319
 const STAGE_H = 1627
@@ -138,7 +133,7 @@ type BandState = 'heating' | 'off' | 'nodata'
 interface Band {
   key: string
   kind: BandKind
-  /** 分段加热带对应的热区 key；常加热带为 null（统一由 CH08 控制） */
+  /** 分段加热带对应热区；常加热带为 null（由 CH08 控制） */
   segKey: HeatSegmentKey | null
   points: string
 }
@@ -148,7 +143,6 @@ function pts(list: [number, number][]): string {
 }
 
 const bands: Band[] = [
-  // 常加热膜（CH08，左右机翼前缘后方连续带）——先绘制，位于下层
   {
     key: 'leftConst',
     kind: 'const',
@@ -160,18 +154,6 @@ const bands: Band[] = [
       [1100, 978],
     ]),
   },
-  {
-    key: 'rightConst',
-    kind: 'const',
-    segKey: null,
-    points: pts([
-      [743, 836],
-      [274, 499],
-      [302, 485],
-      [788, 814],
-    ]),
-  },
-  // 左翼前缘三段（画面右下）
   {
     key: 'leftInner',
     kind: 'segment',
@@ -205,150 +187,54 @@ const bands: Band[] = [
       [1670, 1362],
     ]),
   },
-  // 右翼前缘三段（画面左上）
-  {
-    key: 'rightInner',
-    kind: 'segment',
-    segKey: 'rightInner',
-    points: pts([
-      [717, 863],
-      [577, 756],
-      [600, 744],
-      [745, 849],
-    ]),
-  },
-  {
-    key: 'rightMid',
-    kind: 'segment',
-    segKey: 'rightMid',
-    points: pts([
-      [568, 749],
-      [427, 643],
-      [447, 633],
-      [592, 738],
-    ]),
-  },
-  {
-    key: 'rightOuter',
-    kind: 'segment',
-    segKey: 'rightOuter',
-    points: pts([
-      [418, 636],
-      [277, 530],
-      [294, 521],
-      [439, 626],
-    ]),
-  },
-  // H 形平尾前缘（左右两半）
-  {
-    key: 'rightHTail',
-    kind: 'segment',
-    segKey: 'rightHTail',
-    points: pts([
-      [1562, 505],
-      [1762, 605],
-      [1762, 591],
-      [1562, 491],
-    ]),
-  },
-  {
-    key: 'leftHTail',
-    kind: 'segment',
-    segKey: 'leftHTail',
-    points: pts([
-      [1776, 612],
-      [1972, 710],
-      [1972, 696],
-      [1776, 598],
-    ]),
-  },
-  // 垂尾前缘
-  {
-    key: 'rightVTail',
-    kind: 'segment',
-    segKey: 'rightVTail',
-    points: pts([
-      [1649, 186],
-      [1539, 462],
-      [1552, 462],
-      [1662, 186],
-    ]),
-  },
-  {
-    key: 'leftVTail',
-    kind: 'segment',
-    segKey: 'leftVTail',
-    points: pts([
-      [2053, 368],
-      [1998, 600],
-      [2011, 600],
-      [2066, 368],
-    ]),
-  },
 ]
 
-/** 温度标签中心点（舞台坐标），均落在翼面外侧的背景区域 */
-const LABEL_POS: Record<HeatSegmentKey, { x: number; y: number }> = {
-  leftInner: { x: 1060, y: 1236 },
-  leftMid: { x: 1392, y: 1412 },
-  leftOuter: { x: 1748, y: 1566 },
-  rightInner: { x: 600, y: 884 },
-  rightMid: { x: 446, y: 772 },
-  rightOuter: { x: 292, y: 662 },
-  rightVTail: { x: 1450, y: 300 },
-  leftVTail: { x: 1900, y: 380 },
-  rightHTail: { x: 1700, y: 660 },
-  leftHTail: { x: 1900, y: 500 },
-}
-
-const CONST_LABEL_POS = { x: 1640, y: 1150 }
-
-const LABEL_TEXT: Record<HeatSegmentKey, string> = {
-  leftOuter: '左翼外侧',
-  leftMid: '左翼中间',
-  leftInner: '左翼内侧',
-  rightInner: '右翼内侧',
-  rightMid: '右翼中间',
-  rightOuter: '右翼外侧',
-  leftHTail: '左平尾',
-  rightHTail: '右平尾',
-  leftVTail: '左垂尾',
-  rightVTail: '右垂尾',
-}
-
 const payloadStore = usePayloadStore()
+const uavStore = useUavStore()
 const { isRelayClosed, relayStatus } = usePayloadRelayControl()
+const { manualJudge } = useManualIcingJudgement()
 
 const segments = computed(() => buildHeatSegments(payloadStore.currentPayload))
+const stripRows = computed(() => buildHeatStripRows(segments.value))
 const hasRelay = computed(() => Boolean(relayStatus.value?.channels))
-const constHeatOn = computed(() => isRelayClosed(8))
 
-const heatingCount = computed(
-  () => segments.value.filter((s) => isRelayClosed(s.relayId)).length,
+const heatingStripCount = computed(
+  () =>
+    stripRows.value.filter((r) => r.relayIds.some((id) => isRelayClosed(id)))
+      .length,
 )
 
-const constState = computed<BandState>(() => {
-  if (!hasRelay.value) return 'nodata'
-  return constHeatOn.value ? 'heating' : 'off'
-})
-
-const constTemps = computed(() =>
-  segments.value
-    .filter((s) => s.constTemp !== null)
-    .map((s) => ({ name: s.name, temp: s.constTemp as number })),
+// 防除冰控制器遥测帧刷新率（按帧计数变化统计）
+const telemetryRate = useTelemetryRate(
+  () => uavStore.fp95Deice?.frameCount ?? null,
 )
 
-const constTempAvg = computed<number | null>(() => {
-  const list = constTemps.value
-  if (!list.length) return null
-  return list.reduce((sum, t) => sum + t.temp, 0) / list.length
+const env = computed(
+  () => payloadStore.currentPayload?.environmentSensor ?? null,
+)
+
+const SHORT_ICING_TEXT: Record<string, string> = {
+  NoIce: '无结冰',
+  AlertCalculating: '结冰告警',
+  Light: '弱结冰',
+  Moderate: '中度结冰',
+  Severe: '强结冰',
+  Extreme: '极强结冰',
+}
+
+const icingText = computed(() => {
+  const ice = payloadStore.currentPayload?.icingSensor
+  if (!ice) return '—'
+  if (ice.detectorFault) return '探测器故障'
+  return SHORT_ICING_TEXT[ice.icingSeverity] ?? '未知'
 })
 
-const constTitle = computed(() => {
-  const detail = constTemps.value
-    .map((t) => `${t.name} ${fmtFixed(t.temp, 1)}°C`)
-    .join(' / ')
-  return `机翼常加热膜 · CH08 · 平均温度 ${fmtFixed(constTempAvg.value, 1)}°C${detail ? ` · ${detail}` : ''}`
+const icingClass = computed(() => {
+  const level = payloadStore.icingDesc.level
+  if (level === 'normal') return 'is-normal'
+  if (level === 'warning') return 'is-warning'
+  if (level === 'danger') return 'is-danger'
+  return 'is-muted'
 })
 
 function stateOf(key: HeatSegmentKey): BandState {
@@ -359,14 +245,28 @@ function stateOf(key: HeatSegmentKey): BandState {
 }
 
 function bandState(band: Band): BandState {
-  return band.segKey ? stateOf(band.segKey) : constState.value
+  if (band.segKey) return stateOf(band.segKey)
+  if (!hasRelay.value) return 'nodata'
+  return isRelayClosed(8) ? 'heating' : 'off'
 }
 
-function labelStyle(p: { x: number; y: number }) {
-  return {
-    left: `${(p.x / STAGE_W) * 100}%`,
-    top: `${(p.y / STAGE_H) * 100}%`,
+const STATE_TEXT: Record<BandState, string> = {
+  heating: '加热中',
+  off: '未加热',
+  nodata: '无回路状态',
+}
+
+function bandTitle(band: Band): string {
+  const state = STATE_TEXT[bandState(band)]
+  if (!band.segKey) {
+    const temps = segments.value
+      .filter((s) => s.constTemp !== null)
+      .map((s) => `${s.name} ${fmtFixed(s.constTemp, 1)}°C`)
+    return `机翼常加热膜 · CH08 · ${state}${temps.length ? `\n${temps.join(' / ')}` : ''}`
   }
+  const seg = segments.value.find((s) => s.key === band.segKey)
+  if (!seg) return state
+  return `${seg.name} · CH${String(seg.relayId).padStart(2, '0')} · ${state}\n温度 ${fmtFixed(seg.temp, 1)}°C · 电压 ${fmtFixed(seg.voltage, 1)}V · 电流 ${fmtFixed(seg.current, 2)}A`
 }
 </script>
 
@@ -376,25 +276,108 @@ function labelStyle(p: { x: number; y: number }) {
   min-height: 0;
 }
 
+/* ---------- 环境速览 ---------- */
+.env-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid rgb(56 189 248 / 28%);
+  border-radius: 8px;
+  background: rgb(14 30 52 / 45%);
+}
+
+.env-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 14px;
+  border: 1px solid var(--dd-tile-border);
+  border-radius: 6px;
+  background: var(--dd-tile);
+  min-width: 0;
+}
+
+.env-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--dd-text-2);
+}
+
+.judge-tag {
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--dd-amber);
+  background: var(--dd-amber-dim);
+}
+
+.env-value {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 26px;
+  line-height: 32px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.env-unit {
+  font-size: 22px;
+}
+
+.icing-value {
+  align-items: center;
+  font-family: var(--dd-sans);
+  gap: 10px;
+}
+
+.icing-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentcolor;
+  box-shadow: 0 0 8px currentcolor;
+}
+
+.icing-tile.is-normal .icing-value {
+  color: var(--dd-green);
+}
+
+.icing-tile.is-warning .icing-value {
+  color: var(--dd-amber);
+}
+
+.icing-tile.is-danger .icing-value {
+  color: var(--dd-red);
+}
+
+.icing-tile.is-muted .icing-value {
+  color: var(--dd-text-3);
+}
+
+/* ---------- 机体图（铺满裁切，对应设计稿大图） ---------- */
 .airframe-canvas {
+  position: relative;
   flex: 1;
   min-height: 0;
   container-type: size;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* 与透视底图边缘色一致（上 #0c1a40 → 下 #132450），羽化后无明显接缝 */
-  background: linear-gradient(to bottom, #0c1a40, #132450);
-  border: 1px solid var(--dd-tile-border);
+  background: #0b1220;
   border-radius: 6px;
   overflow: hidden;
 }
 
 .airframe-stage {
-  position: relative;
-  width: 100%;
-  width: min(100cqw, calc(100cqh * 2319 / 1627));
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  /* 近似 cover：优先铺满，但横向最多裁切约 15%，保证整机轮廓可辨 */
+  width: min(calc(max(100cqw, 100cqh * 2319 / 1627) * 1.04), 115cqw);
   aspect-ratio: 2319 / 1627;
+  transform: translate(-49%, -50%);
 }
 
 .airframe-img {
@@ -404,13 +387,6 @@ function labelStyle(p: { x: number; y: number }) {
   height: 100%;
   user-select: none;
   pointer-events: none;
-
-  /* 四周羽化，使原图深蓝背景自然过渡到卡片底色 */
-  mask-image:
-    linear-gradient(to right, transparent, #000 5%, #000 95%, transparent),
-    linear-gradient(to bottom, transparent, #000 5%, #000 95%, transparent);
-  mask-composite: intersect;
-  -webkit-mask-composite: source-in;
 }
 
 .airframe-overlay {
@@ -422,6 +398,8 @@ function labelStyle(p: { x: number; y: number }) {
 }
 
 .heat-band {
+  pointer-events: visiblePainted;
+  cursor: default;
   stroke-width: 2;
   stroke-linejoin: round;
   transition:
@@ -440,7 +418,7 @@ function labelStyle(p: { x: number; y: number }) {
 .heat-band.kind-const.state-heating {
   fill: #e11d1d;
   stroke: rgb(254 202 202 / 45%);
-  opacity: 0.86;
+  opacity: 0.88;
   animation: heat-pulse 2.4s ease-in-out infinite;
 }
 
@@ -454,7 +432,6 @@ function labelStyle(p: { x: number; y: number }) {
   fill: rgb(148 163 184 / 32%);
   stroke: rgb(203 213 225 / 60%);
   stroke-dasharray: 8 6;
-  opacity: 1;
 }
 
 @keyframes heat-pulse {
@@ -464,7 +441,7 @@ function labelStyle(p: { x: number; y: number }) {
   }
 
   50% {
-    opacity: 0.68;
+    opacity: 0.7;
   }
 }
 
@@ -474,91 +451,15 @@ function labelStyle(p: { x: number; y: number }) {
   }
 }
 
-.seg-label {
-  position: absolute;
-  transform: translate(-50%, -50%);
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 7px;
-  white-space: nowrap;
-  border-radius: 4px;
-  border: 1px solid rgb(148 163 184 / 22%);
-  background: rgb(7 12 26 / 72%);
-  backdrop-filter: blur(2px);
-  pointer-events: auto;
-  cursor: default;
-}
-
-.seg-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--dd-gray);
-}
-
-.seg-name {
-  font-size: 11px;
-  color: var(--dd-text-2);
-}
-
-.seg-temp {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--dd-text-3);
-}
-
-.seg-label.state-heating {
-  border-color: rgb(74 222 128 / 45%);
-}
-
-.seg-label.state-heating .seg-dot {
-  background: var(--dd-green);
-  box-shadow: 0 0 6px rgb(74 222 128 / 80%);
-}
-
-.seg-label.state-heating .seg-temp {
-  color: var(--dd-green);
-}
-
-.seg-label.kind-const.state-heating {
-  border-color: rgb(239 68 68 / 50%);
-}
-
-.seg-label.kind-const.state-heating .seg-dot {
-  background: #ef4444;
-  box-shadow: 0 0 6px rgb(239 68 68 / 80%);
-}
-
-.seg-label.kind-const.state-heating .seg-temp {
-  color: #fca5a5;
-}
-
-.seg-label.state-off {
-  border-color: rgb(245 165 36 / 40%);
-}
-
-.seg-label.state-off .seg-dot {
-  background: var(--dd-amber);
-}
-
-.seg-label.state-off .seg-temp {
-  color: #7dd3fc;
-}
-
-.airframe-foot {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
 .legend {
+  position: absolute;
+  left: 14px;
+  bottom: 12px;
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
   font-size: 11px;
   color: var(--dd-text-2);
-  flex-wrap: wrap;
 }
 
 .legend-item {
@@ -569,8 +470,8 @@ function labelStyle(p: { x: number; y: number }) {
 
 .swatch {
   width: 14px;
-  height: 6px;
-  border-radius: 3px;
+  height: 8px;
+  border-radius: 2px;
 }
 
 .swatch.kind-segment.state-heating {
@@ -583,22 +484,5 @@ function labelStyle(p: { x: number; y: number }) {
 
 .swatch.state-off {
   background: var(--dd-amber);
-}
-
-.swatch.state-nodata {
-  background: rgb(148 163 184 / 22%);
-  border: 1px dashed rgb(148 163 184 / 55%);
-}
-
-.legend-note {
-  margin-left: 8px;
-  color: var(--dd-text-3);
-}
-
-.airframe-caption {
-  text-align: center;
-  font-size: 10.5px;
-  color: var(--dd-text-3);
-  letter-spacing: 0.3px;
 }
 </style>

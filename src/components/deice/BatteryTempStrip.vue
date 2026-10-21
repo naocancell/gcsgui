@@ -1,12 +1,7 @@
 <template>
   <div class="battery-strip">
     <div v-for="b in batteries" :key="b.label" class="dd-card battery-card">
-      <span class="battery-label">
-        {{ b.label }} ·
-        <span :class="b.value !== null ? 'c-green' : 'c-muted'">
-          {{ b.value !== null ? '在线' : '无数据' }}
-        </span>
-      </span>
+      <span class="battery-label">{{ b.label }}</span>
       <span class="battery-value dd-mono" :title="b.device">
         {{ fmtFixed(b.value, 1) }}
         <template v-if="b.value !== null">°C</template>
@@ -31,10 +26,26 @@ const batteries = computed(() => {
   const t1 = payloadStore.currentPayload?.tempSensor1
   const t2 = payloadStore.currentPayload?.tempSensor2
   return [
-    { label: '电池1温度采集', device: '采集设备 1', value: num(t1?.batteryA) },
-    { label: '电池2温度采集', device: '采集设备 1', value: num(t1?.batteryB) },
-    { label: '电池3温度采集', device: '采集设备 2', value: num(t2?.batteryA) },
-    { label: '电池4温度采集', device: '采集设备 2', value: num(t2?.batteryB) },
+    {
+      label: '电池1温度',
+      device: '电池1温度采集 · 采集设备 1',
+      value: num(t1?.batteryA),
+    },
+    {
+      label: '电池2温度',
+      device: '电池2温度采集 · 采集设备 1',
+      value: num(t1?.batteryB),
+    },
+    {
+      label: '电池3温度',
+      device: '电池3温度采集 · 采集设备 2',
+      value: num(t2?.batteryA),
+    },
+    {
+      label: '电池4温度',
+      device: '电池4温度采集 · 采集设备 2',
+      value: num(t2?.batteryB),
+    },
   ]
 })
 </script>

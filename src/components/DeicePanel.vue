@@ -30,31 +30,22 @@
         </div>
 
         <div class="header-chips" :data-tauri-drag-region="dragRegion">
-          <span class="chip chip-green">
-            目标功率 {{ formatInt(deiceData?.targetPower) }}W
-          </span>
-          <span class="chip" :class="modeBadgeClass">
-            防除冰 ·
-            {{ deiceData?.workModeDesc || (hasData ? '未知' : '待机') }}
-          </span>
-          <span class="chip chip-blue">
-            链路 · 防除冰{{ hasData ? '在线' : '离线' }} · 载荷{{
-              hasPayload ? '在线' : '离线'
-            }}
-          </span>
-          <span class="chip chip-plain">继电器 {{ closedRelayCount }}/16</span>
           <span
-            class="status"
-            :class="{
-              online: hasData && !headerAlarm,
-              warning: hasData && headerAlarm,
-              offline: !hasData,
-            }"
+            class="chip"
+            :class="heaterMasterOn ? 'chip-green' : 'chip-plain'"
+            :title="`防除冰工作模式 ${formatHex(deiceData?.workMode)}`"
           >
-            <span class="status-dot"></span>
-            <span v-if="!hasData">离线</span>
-            <span v-else-if="headerAlarm">告警</span>
-            <span v-else>正常</span>
+            加热总开关 · {{ heaterMasterText }}
+          </span>
+          <span
+            class="chip"
+            :class="linkOnline ? 'chip-blue' : 'chip-plain'"
+            :title="`防除冰${hasData ? '在线' : '离线'} · 载荷${hasPayload ? '在线' : '离线'}`"
+          >
+            回传链路 {{ linkText }}
+          </span>
+          <span class="chip chip-plain">
+            继电器已闭合 {{ closedRelayCount }}/16
           </span>
         </div>
 
@@ -86,7 +77,27 @@
           >
             全部断开
           </button>
-          <span class="clock dd-mono">{{ clockText }}</span>
+          <span class="judge-label">防除冰 · 人工判定</span>
+          <div class="judge-switch" role="group" aria-label="防除冰人工判定">
+            <button
+              type="button"
+              class="judge-opt"
+              :class="{ active: !manualJudge }"
+              :aria-pressed="!manualJudge"
+              @click="setManualJudge(false)"
+            >
+              关闭
+            </button>
+            <button
+              type="button"
+              class="judge-opt judge-opt-on"
+              :class="{ active: manualJudge }"
+              :aria-pressed="manualJudge"
+              @click="setManualJudge(true)"
+            >
+              开启
+            </button>
+          </div>
 
           <div v-if="props.standalone" class="window-controls">
             <button
@@ -141,9 +152,11 @@
           <!-- 功率监测 (协议表 1) -->
           <section class="dd-card power-card">
             <div class="dd-card-head">
-              <span class="dd-card-title">功率监测</span>
-              <span class="dd-card-sub c-blue">
-                目标 / 实际 · 最近 {{ powerSamples.length }} 帧
+              <span
+                class="dd-card-title"
+                :title="`目标 / 实际 · 最近 ${powerSamples.length} 帧`"
+              >
+                功率监测
               </span>
             </div>
             <div class="dd-grid-2">
@@ -173,9 +186,8 @@
           <!-- 电气与温度遥测 (协议表 1) -->
           <section class="dd-card">
             <div class="dd-card-head">
-              <span class="dd-card-title">电气与温度遥测</span>
-              <span class="dd-card-sub" :title="`同步码 ${syncCodeText}`">
-                控制器 · {{ syncCodeText }}
+              <span class="dd-card-title" :title="`同步码 ${syncCodeText}`">
+                电气与温度遥测
               </span>
             </div>
             <div class="dd-grid-3">
@@ -193,8 +205,13 @@
                   <span class="dd-unit">A</span>
                 </span>
               </div>
-              <div class="dd-tile" title="控制器温度 (0-255, 偏差-45℃)">
-                <span class="dd-tile-label">控制器温度</span>
+              <div
+                class="dd-tile"
+                title="控制器温度原始值 0-255，显示值已减 45℃ 偏移"
+              >
+                <span class="dd-tile-label ctrl-temp-label">
+                  控制器温度 (0-255, 偏移-45°C)
+                </span>
                 <span class="dd-tile-value temp-row c-green">
                   <span>
                     {{ formatFixed(deiceData?.controllerTemp, 1) }}
@@ -223,10 +240,13 @@
           <section class="dd-card cmd-control-card">
             <div class="dd-card-head">
               <span class="dd-card-title">防除冰工作模式与控制指令</span>
-              <span class="dd-card-sub mode-run" :class="modeBadgeClass">
+              <span
+                class="dd-card-sub mode-run"
+                :class="modeBadgeClass"
+                :title="`工作模式 ${formatHex(deiceData?.workMode)}`"
+              >
                 当前运行 ·
                 {{ deiceData?.workModeDesc || (hasData ? '未知' : '待机') }}
-                ({{ formatHex(deiceData?.workMode) }})
               </span>
             </div>
 
@@ -255,94 +275,104 @@
             </div>
 
             <!-- 0x00: 关闭模式 -->
-            <div v-if="selectedPropMode === 0" class="cmd-row">
-              <span class="cmd-tip">停止防除冰电加热输出</span>
+            <button
+              v-if="selectedPropMode === 0"
+              type="button"
+              class="btn-send-cmd btn-block btn-danger"
+              :disabled="isSendingCommand"
+              @click="handleSendClosedMode"
+            >
+              {{ isSendingCommand ? '下发中...' : '下发关闭指令' }}
+            </button>
+
+            <!-- 0x01: 指令调节（每次 1% 步长） -->
+            <div v-else-if="selectedPropMode === 1" class="adjust-btns">
               <button
                 type="button"
-                class="btn-send-cmd btn-danger"
+                class="btn-send-cmd"
                 :disabled="isSendingCommand"
-                @click="handleSendClosedMode"
+                @click="handleSendAdjust(0)"
               >
-                {{ isSendingCommand ? '下发中...' : '下发关闭指令' }}
+                − 减小 1%
+              </button>
+              <button
+                type="button"
+                class="btn-send-cmd"
+                :disabled="isSendingCommand"
+                @click="handleSendAdjust(1)"
+              >
+                + 增大 1%
               </button>
             </div>
 
-            <!-- 0x01: 指令调节 -->
-            <div v-else-if="selectedPropMode === 1" class="cmd-row">
-              <span class="cmd-tip">每次 1% 步长微调输出功率</span>
-              <div class="adjust-btns">
+            <!-- 0x02 恒功率 / 0x03 恒温：点击后在气泡中确认参数再下发 -->
+            <n-popover
+              v-else
+              v-model:show="paramPopoverShow"
+              trigger="click"
+              placement="bottom"
+              :width="'trigger'"
+              :show-arrow="false"
+              class="deice-param-popover"
+            >
+              <template #trigger>
                 <button
                   type="button"
-                  class="btn-adjust"
+                  class="btn-send-cmd btn-block"
                   :disabled="isSendingCommand"
-                  @click="handleSendAdjust(0)"
                 >
-                  − 减小 1%
+                  {{
+                    isSendingCommand
+                      ? '下发中...'
+                      : selectedPropMode === 2
+                        ? '下发恒功率指令'
+                        : '下发恒温指令'
+                  }}
                 </button>
+              </template>
+              <div class="param-pop">
+                <label class="cmd-field">
+                  <span class="cmd-label">
+                    {{
+                      selectedPropMode === 2 ? '设定目标功率' : '设定目标温度'
+                    }}
+                  </span>
+                  <span class="cmd-input-box">
+                    <input
+                      v-if="selectedPropMode === 2"
+                      v-model.number="cmdTargetPower"
+                      type="number"
+                      min="0"
+                      max="65535"
+                      step="50"
+                      class="param-input dd-mono"
+                      placeholder="0~65535"
+                    />
+                    <input
+                      v-else
+                      v-model.number="cmdTargetTemp"
+                      type="number"
+                      min="-40"
+                      max="100"
+                      step="1"
+                      class="param-input dd-mono"
+                      placeholder="-40~100"
+                    />
+                    <span class="param-unit">
+                      {{ selectedPropMode === 2 ? 'W' : '℃' }}
+                    </span>
+                  </span>
+                </label>
                 <button
                   type="button"
-                  class="btn-adjust"
+                  class="btn-send-cmd"
                   :disabled="isSendingCommand"
-                  @click="handleSendAdjust(1)"
+                  @click="confirmParamCommand"
                 >
-                  + 增大 1%
+                  确认下发
                 </button>
               </div>
-            </div>
-
-            <!-- 0x02: 恒功率模式 -->
-            <div v-else-if="selectedPropMode === 2" class="cmd-row">
-              <label class="cmd-field">
-                <span class="cmd-label">设定目标功率</span>
-                <span class="cmd-input-box">
-                  <input
-                    v-model.number="cmdTargetPower"
-                    type="number"
-                    min="0"
-                    max="65535"
-                    step="50"
-                    class="param-input dd-mono"
-                    placeholder="0~65535"
-                  />
-                  <span class="param-unit">W</span>
-                </span>
-              </label>
-              <button
-                type="button"
-                class="btn-send-cmd"
-                :disabled="isSendingCommand"
-                @click="handleSendConstantPower"
-              >
-                {{ isSendingCommand ? '下发中...' : '下发恒功率指令' }}
-              </button>
-            </div>
-
-            <!-- 0x03: 恒温模式 -->
-            <div v-else-if="selectedPropMode === 3" class="cmd-row">
-              <label class="cmd-field">
-                <span class="cmd-label">设定目标温度</span>
-                <span class="cmd-input-box">
-                  <input
-                    v-model.number="cmdTargetTemp"
-                    type="number"
-                    min="-40"
-                    max="100"
-                    step="1"
-                    class="param-input dd-mono"
-                    placeholder="-40~100"
-                  />
-                  <span class="param-unit">℃</span>
-                </span>
-              </label>
-              <button
-                type="button"
-                class="btn-send-cmd"
-                :disabled="isSendingCommand"
-                @click="handleSendConstantTemp"
-              >
-                {{ isSendingCommand ? '下发中...' : '下发恒温指令' }}
-              </button>
-            </div>
+            </n-popover>
           </section>
 
           <RelayCircuitPanel />
@@ -352,12 +382,14 @@
           <!-- 控制故障与状态告警矩阵 (协议表 2 + 0xC5 结冰) -->
           <section class="dd-card">
             <div class="dd-card-head">
-              <span class="dd-card-title">控制故障与状态告警矩阵</span>
               <span
-                class="dd-card-sub"
-                :class="activeAlarmCount > 0 ? 'c-red' : 'c-green'"
+                class="dd-card-title"
+                :title="`${activeAlarmCount} 告警 · ${alarmSummaryText}`"
               >
-                {{ activeAlarmCount }} 告警 · {{ alarmSummaryText }}
+                控制故障与状态告警矩阵
+              </span>
+              <span v-if="activeAlarmCount > 0" class="dd-card-sub c-red">
+                {{ activeAlarmCount }} 告警 · 请及时处置
               </span>
             </div>
             <div class="alarm-grid">
@@ -375,15 +407,13 @@
                 <div class="alarm-top">
                   <span class="indicator-dot"></span>
                   <span class="alarm-name">{{ alarm.name }}</span>
-                  <span v-if="!alarm.online" class="pill pill-offline">
-                    待机
-                  </span>
-                  <span v-else-if="alarm.active" class="pill pill-danger">
+                  <span
+                    v-if="alarm.online && alarm.active"
+                    class="pill pill-danger"
+                  >
                     告警
                   </span>
-                  <span v-else class="pill pill-normal">正常</span>
                 </div>
-                <div class="alarm-code dd-mono">{{ alarm.code }}</div>
               </div>
             </div>
           </section>
@@ -397,16 +427,16 @@
 
 <script setup lang="ts">
 import { ref, computed, onBeforeUnmount } from 'vue'
-import { NConfigProvider, darkTheme, useMessage } from 'naive-ui'
+import { NConfigProvider, NPopover, darkTheme, useMessage } from 'naive-ui'
 import { useUavStore } from '@/store/uavStore'
 import { usePayloadStore } from '@/store/payloadStore'
 import { useDeiceMonitor } from '@/composables/useDeiceMonitor'
 import {
   useDashboardFit,
   useDeicePowerHistory,
+  useManualIcingJudgement,
   usePayloadLink,
   usePayloadRelayControl,
-  useWallClock,
 } from '@/composables/useDeiceDashboard'
 import { powerDeviationPercent } from '@/utils/deice/dashboardModel'
 import AirframeHeatMap from '@/components/deice/AirframeHeatMap.vue'
@@ -436,7 +466,8 @@ const payloadStore: ReturnType<typeof usePayloadStore> = usePayloadLink()
 const { closedRelayCount, loadingBatch, handleSetAll } =
   usePayloadRelayControl()
 const { samples: powerSamples } = useDeicePowerHistory(uavStore)
-const { clockText } = useWallClock()
+// 防除冰 · 人工判定开关（顶栏切换，中栏结冰探头同步标注）
+const { manualJudge, setManualJudge } = useManualIcingJudgement()
 // 大屏自适应：窗口高度不足时整体等比缩放三栏内容，尽量免滚动完整呈现
 const bodyEl = ref<HTMLElement | null>(null)
 useDashboardFit(bodyEl)
@@ -454,6 +485,13 @@ const selectedPropMode = ref<number>(2) // 默认恒功率模式
 const cmdTargetPower = ref<number>(2000) // 目标设定功率 (W)
 const cmdTargetTemp = ref<number>(15) // 目标温度 (℃)
 const isSendingCommand = ref(false)
+const paramPopoverShow = ref(false)
+
+async function confirmParamCommand() {
+  paramPopoverShow.value = false
+  if (selectedPropMode.value === 2) await handleSendConstantPower()
+  else if (selectedPropMode.value === 3) await handleSendConstantTemp()
+}
 
 async function handleSendClosedMode() {
   isSendingCommand.value = true
@@ -535,6 +573,23 @@ const {
 } = useDeiceMonitor(uavStore)
 
 const hasPayload = computed(() => payloadStore.currentPayload !== null)
+
+// 顶栏：加热总开关 = 防除冰控制器处于非关闭模式（0x00 以外）
+const heaterMasterOn = computed(
+  () => hasData.value && deiceData.value?.workMode !== 0,
+)
+const heaterMasterText = computed(() => {
+  if (!hasData.value) return '离线'
+  return heaterMasterOn.value ? '已闭合' : '已断开'
+})
+
+// 顶栏：回传链路状态（防除冰 + 载荷两路遥测）
+const linkOnline = computed(() => hasData.value || hasPayload.value)
+const linkText = computed(() => {
+  if (hasData.value && hasPayload.value) return '正常'
+  if (linkOnline.value) return '部分在线'
+  return '离线'
+})
 
 const powerDeviationText = computed(() => {
   const pct = powerDeviationPercent(
@@ -789,8 +844,7 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 1500px) {
-  .chip-blue,
-  .clock {
+  .judge-label {
     display: none;
   }
 }
@@ -899,10 +953,49 @@ onBeforeUnmount(() => {
   color: var(--dd-red);
 }
 
-.clock {
+.ctrl-temp-label {
+  font-size: 10px;
+  letter-spacing: -0.2px;
+}
+
+.judge-label {
   font-size: 11.5px;
   color: var(--dd-text-2);
   white-space: nowrap;
+}
+
+/* 防除冰 · 人工判定：关闭 / 开启 分段开关 */
+.judge-switch {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 6px;
+  border: 1px solid rgb(96 165 250 / 35%);
+  background: rgb(15 23 42 / 60%);
+}
+
+.judge-opt {
+  height: 24px;
+  min-width: 52px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dd-text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.judge-opt.active {
+  background: rgb(148 163 184 / 14%);
+  color: var(--dd-text);
+}
+
+.judge-opt-on.active {
+  background: rgb(22 101 52 / 45%);
+  color: var(--dd-green);
 }
 
 .window-controls {
@@ -1106,19 +1199,6 @@ onBeforeUnmount(() => {
   color: var(--dd-green);
 }
 
-.cmd-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-height: 32px;
-}
-
-.cmd-tip {
-  font-size: 11.5px;
-  color: var(--dd-text-2);
-}
-
 .cmd-field {
   display: flex;
   align-items: center;
@@ -1179,8 +1259,7 @@ onBeforeUnmount(() => {
   filter: brightness(1.15);
 }
 
-.btn-send-cmd:disabled,
-.btn-adjust:disabled {
+.btn-send-cmd:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
@@ -1189,25 +1268,34 @@ onBeforeUnmount(() => {
   background: #dc2626;
 }
 
-.adjust-btns {
+.btn-send-cmd.btn-block {
+  width: 100%;
+  height: 32px;
+}
+
+/* 恒功率 / 恒温参数确认气泡（弹层挂载在大屏外部，需自带配色） */
+.param-pop {
+  --dd-tile: #0a111e;
+  --dd-tile-border: rgb(148 163 184 / 14%);
+  --dd-text: #e2e8f0;
+  --dd-text-2: #94a3b8;
+  --dd-text-3: #5b6b85;
+  --dd-blue: #2563eb;
+
   display: flex;
-  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
-.btn-adjust {
-  height: 30px;
-  padding: 0 12px;
-  border-radius: 5px;
-  border: 1px solid var(--dd-tile-border);
-  background: rgb(148 163 184 / 10%);
-  color: var(--dd-text);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
+.adjust-btns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
 }
 
-.btn-adjust:hover:not(:disabled) {
-  background: rgb(148 163 184 / 18%);
+.adjust-btns .btn-send-cmd {
+  height: 32px;
 }
 
 /* 告警矩阵 */
@@ -1220,8 +1308,10 @@ onBeforeUnmount(() => {
 .alarm-card {
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 2px;
-  padding: 4px 8px;
+  min-height: 34px;
+  padding: 6px 10px;
   border-radius: 6px;
   background: var(--dd-tile);
   border: 1px solid var(--dd-tile-border);
@@ -1245,17 +1335,8 @@ onBeforeUnmount(() => {
 
 .alarm-name {
   flex: 1;
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--dd-text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.alarm-code {
-  font-size: 9px;
-  color: var(--dd-text-3);
-  text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1264,14 +1345,6 @@ onBeforeUnmount(() => {
 .pill {
   font-size: 10px;
   flex-shrink: 0;
-}
-
-.pill-offline {
-  color: var(--dd-text-3);
-}
-
-.pill-normal {
-  color: var(--dd-green);
 }
 
 .pill-danger {

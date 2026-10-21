@@ -2,46 +2,37 @@
   <section class="dd-card matrix-card">
     <div class="dd-card-head">
       <span class="dd-card-title">覆盖温度 · 压 · 流对照矩阵</span>
-      <span class="dd-card-sub">
-        {{ segments.length }} 段 · 左设备1 / 右设备2
-      </span>
     </div>
 
     <table class="matrix-table">
       <thead>
         <tr>
           <th class="col-pos"></th>
-          <th>温度 (°C)</th>
+          <th>温度</th>
           <th>供电电压</th>
           <th>电流</th>
         </tr>
       </thead>
       <tbody>
-        <tr v-for="seg in segments" :key="seg.key">
+        <tr v-for="row in rows" :key="row.key" :title="row.detail">
           <td class="col-pos">
-            <span class="pos-name">{{ seg.name }}</span>
-            <span class="pos-tag">{{ seg.tag }}</span>
+            <span class="pos-name">{{ row.name }}</span>
           </td>
           <td>
             <span
               class="temp-pill dd-mono"
-              :class="tempClass(seg.relayId, seg.temp)"
-              :title="
-                seg.constTemp !== null
-                  ? `常加热膜温度 ${fmtFixed(seg.constTemp, 1)}°C`
-                  : undefined
-              "
+              :class="tempClass(row.relayIds, row.temp)"
             >
-              {{ fmtFixed(seg.temp, 1) }}
+              {{ fmtFixed(row.temp, 1) }}
             </span>
           </td>
           <td class="dd-mono">
-            {{ fmtFixed(seg.voltage, 1) }}
-            <span v-if="seg.voltage !== null" class="unit">V</span>
+            {{ fmtFixed(row.voltage, 0) }}
+            <span v-if="row.voltage !== null" class="unit">V</span>
           </td>
           <td class="dd-mono">
-            {{ fmtFixed(seg.current, 2) }}
-            <span v-if="seg.current !== null" class="unit">A</span>
+            {{ fmtFixed(row.current, 1) }}
+            <span v-if="row.current !== null" class="unit">A</span>
           </td>
         </tr>
       </tbody>
@@ -53,17 +44,23 @@
 import { computed } from 'vue'
 import { usePayloadStore } from '@/store/payloadStore'
 import { usePayloadRelayControl } from '@/composables/useDeiceDashboard'
-import { buildHeatSegments, fmtFixed } from '@/utils/deice/dashboardModel'
+import {
+  buildHeatSegments,
+  buildHeatStripRows,
+  fmtFixed,
+} from '@/utils/deice/dashboardModel'
 
 const payloadStore = usePayloadStore()
 const { isRelayClosed, relayStatus } = usePayloadRelayControl()
 
-const segments = computed(() => buildHeatSegments(payloadStore.currentPayload))
+const rows = computed(() =>
+  buildHeatStripRows(buildHeatSegments(payloadStore.currentPayload)),
+)
 
-function tempClass(relayId: number, temp: number | null) {
+function tempClass(relayIds: number[], temp: number | null) {
   if (temp === null) return 'is-empty'
   if (!relayStatus.value?.channels) return 'is-nodata'
-  return isRelayClosed(relayId) ? 'is-heating' : 'is-off'
+  return relayIds.some((id) => isRelayClosed(id)) ? 'is-heating' : 'is-off'
 }
 </script>
 
@@ -98,17 +95,6 @@ function tempClass(relayId: number, temp: number | null) {
 
 .pos-name {
   color: var(--dd-text);
-}
-
-.pos-tag {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 0 5px;
-  font-size: 9.5px;
-  line-height: 15px;
-  border-radius: 3px;
-  color: var(--dd-text-2);
-  background: rgb(96 165 250 / 12%);
 }
 
 .unit {

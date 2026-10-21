@@ -3,6 +3,7 @@ import {
   RELAY_CHANNELS,
   RELAY_GROUPS,
   buildHeatSegments,
+  buildHeatStripRows,
   buildSparklinePoints,
   dewPoint,
   powerDeviationPercent,
@@ -92,5 +93,33 @@ describe('防除冰大屏数据映射', () => {
     const pts = buildSparklinePoints([0, null, 10], 100, 50, 0, 10, 0)
     expect(pts).toBe('0.0,50.0 100.0,0.0')
     expect(buildSparklinePoints([], 100, 50, 0, 10)).toBe('')
+  })
+
+  it('9 条加热条：左右垂尾合并为垂直尾翼并取均值', () => {
+    const segs = buildHeatSegments(null).map((s) =>
+      s.key === 'leftVTail'
+        ? { ...s, temp: -1.0, voltage: 120, current: 1.0 }
+        : s.key === 'rightVTail'
+          ? { ...s, temp: -2.0, voltage: 122, current: 1.4 }
+          : s,
+    )
+    const rows = buildHeatStripRows(segs)
+    expect(rows.map((r) => r.name)).toEqual([
+      '左翼外段',
+      '左翼中段',
+      '左翼内段',
+      '右翼外段',
+      '右翼中段',
+      '右翼内段',
+      '左平尾',
+      '右平尾',
+      '垂直尾翼',
+    ])
+    const v = rows[8]
+    expect(v.relayIds).toEqual([6, 2])
+    expect(v.temp).toBeCloseTo(-1.5, 5)
+    expect(v.voltage).toBeCloseTo(121, 5)
+    expect(v.current).toBeCloseTo(1.2, 5)
+    expect(rows[0].temp).toBeNull()
   })
 })

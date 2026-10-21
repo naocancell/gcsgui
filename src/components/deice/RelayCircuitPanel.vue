@@ -1,7 +1,7 @@
 <template>
   <section class="dd-card relay-card">
     <div class="dd-card-head">
-      <span class="dd-card-title">0xC3 继电器回路控制器 · 16 路回路控制</span>
+      <span class="dd-card-title">继电器回路控制器</span>
       <span
         class="dd-card-sub"
         :class="relayStatus ? 'c-green' : 'c-muted'"
@@ -27,23 +27,9 @@
             'is-closed': !ch.reserved && isRelayClosed(ch.id),
             'is-reserved': ch.reserved,
           }"
-          :title="`CH${pad(ch.id)} · ${ch.name}`"
+          :title="tileTitle(ch)"
         >
-          <div class="tile-name">
-            <span class="dd-mono">CH{{ pad(ch.id) }}</span>
-            · {{ ch.shortName }}
-          </div>
-          <div class="tile-state">
-            <template v-if="ch.reserved">未配置</template>
-            <template v-else-if="isRelayClosed(ch.id)">
-              通电中
-              <template v-if="voltageText(ch.voltageKey)">
-                ·
-                <span class="dd-mono">{{ voltageText(ch.voltageKey) }}V</span>
-              </template>
-            </template>
-            <template v-else>断开</template>
-          </div>
+          <div class="tile-name">{{ ch.tileName }}</div>
           <button
             class="tile-btn"
             type="button"
@@ -66,7 +52,10 @@
 import { computed } from 'vue'
 import { usePayloadStore, type VoltageSensorData } from '@/store/payloadStore'
 import { usePayloadRelayControl } from '@/composables/useDeiceDashboard'
-import { RELAY_GROUPS } from '@/utils/deice/dashboardModel'
+import {
+  RELAY_GROUPS,
+  type RelayChannelDef,
+} from '@/utils/deice/dashboardModel'
 
 const payloadStore = usePayloadStore()
 const {
@@ -85,6 +74,14 @@ const maskText = computed(() => {
 
 function pad(id: number) {
   return String(id).padStart(2, '0')
+}
+
+function tileTitle(ch: RelayChannelDef): string {
+  const head = `CH${pad(ch.id)} · ${ch.name}`
+  if (ch.reserved) return `${head} · 未配置`
+  if (!isRelayClosed(ch.id)) return `${head} · 断开`
+  const v = voltageText(ch.voltageKey)
+  return `${head} · 通电中${v ? ` · ${v}V` : ''}`
 }
 
 function voltageText(key: keyof VoltageSensorData | null): string {
@@ -114,7 +111,7 @@ function voltageText(key: keyof VoltageSensorData | null): string {
   background: var(--dd-tile);
   border: 1px solid var(--dd-tile-border);
   border-radius: 6px;
-  padding: 3px 7px 4px;
+  padding: 4px 7px 5px;
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -133,17 +130,8 @@ function voltageText(key: keyof VoltageSensorData | null): string {
   text-overflow: ellipsis;
 }
 
-.tile-state {
-  font-size: 10px;
-  line-height: 13px;
-  color: var(--dd-text-3);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .tile-btn {
-  margin-top: 2px;
+  margin-top: 3px;
   height: 18px;
   border: none;
   border-radius: 4px;
@@ -169,8 +157,7 @@ function voltageText(key: keyof VoltageSensorData | null): string {
   border-color: rgb(74 222 128 / 25%);
 }
 
-.relay-tile.is-closed .tile-name,
-.relay-tile.is-closed .tile-state {
+.relay-tile.is-closed .tile-name {
   color: var(--dd-green);
 }
 
