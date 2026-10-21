@@ -215,3 +215,55 @@ export function useDashboardFit(
 
   return { zoom, refit: scheduleFit }
 }
+
+/**
+ * 遥测刷新率：统计 source 值在最近 windowMs 内的变化次数并换算为 Hz。
+ * source 应返回每帧都会变化的字段（如帧计数 / 更新时间戳）。
+ */
+export function useTelemetryRate(source: () => unknown, windowMs = 2000) {
+  const rate = ref<number | null>(null)
+  const stamps: number[] = []
+
+  watch(source, (val) => {
+    if (val === null || val === undefined) return
+    stamps.push(Date.now())
+  })
+
+  let timer: ReturnType<typeof setInterval> | null = null
+  onMounted(() => {
+    timer = setInterval(() => {
+      const now = Date.now()
+      while (stamps.length && now - stamps[0] > windowMs) stamps.shift()
+      rate.value = stamps.length ? (stamps.length * 1000) / windowMs : null
+    }, 500)
+  })
+  onBeforeUnmount(() => {
+    if (timer) clearInterval(timer)
+  })
+  return rate
+}
+
+const MANUAL_JUDGE_KEY = 'deice.manualIcingJudgement'
+
+function readManualJudge(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(MANUAL_JUDGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+/** 防除冰 · 人工判定开关（全局共享，本地持久化） */
+const manualJudge = ref<boolean>(readManualJudge())
+
+export function useManualIcingJudgement() {
+  function setManualJudge(on: boolean) {
+    manualJudge.value = on
+    try {
+      globalThis.localStorage?.setItem(MANUAL_JUDGE_KEY, on ? '1' : '0')
+    } catch {
+      // 本地存储不可用时仅保留内存状态
+    }
+  }
+  return { manualJudge, setManualJudge }
+}

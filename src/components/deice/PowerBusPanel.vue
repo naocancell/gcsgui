@@ -1,12 +1,13 @@
 <template>
   <section class="dd-card power-bus-card">
     <div class="dd-card-head">
-      <span class="dd-card-title">电源与系统总线遥测</span>
-      <span class="dd-card-sub">0xC4 · 6.1 / 6.5 / 6.3</span>
+      <span class="dd-card-title" title="0xC4 · 6.1 / 6.5 / 6.3">
+        电源与系统总线遥测
+      </span>
     </div>
 
     <!-- 6.1 升压模块 -->
-    <div class="dd-section-label">6.1 升压模块 (ID: 01)</div>
+    <div class="dd-section-label" title="ID: 01">6.1 升压模块</div>
     <div class="dd-grid-2">
       <div class="dd-tile">
         <span class="dd-tile-label">输入电压</span>
@@ -36,35 +37,21 @@
           <span class="dd-unit">A</span>
         </span>
       </div>
-      <div class="dd-tile dd-span-2">
+      <div class="dd-tile">
         <span class="dd-tile-label">温度</span>
         <span class="dd-tile-value c-amber">
           {{ fmtFixed(boost?.temperature, 1) }}
           <span class="dd-unit">°C</span>
         </span>
       </div>
-    </div>
-
-    <!-- 6.5 温湿度气压传感器 & 结冰环境 -->
-    <div class="dd-section-label">
-      6.5 温湿度气压传感器 (ID: 07) &amp; 结冰环境
-    </div>
-    <div class="dd-grid-3">
-      <div class="dd-tile">
-        <span class="dd-tile-label">温度</span>
-        <span class="dd-tile-value c-cyan">
-          {{ fmtFixed(env?.temperature, 1) }}
-          <span class="dd-unit">°C</span>
-        </span>
-      </div>
-      <div class="dd-tile">
-        <span class="dd-tile-label">湿度</span>
+      <div class="dd-tile" title="6.3 电压采集模块 · 电池输入电压">
+        <span class="dd-tile-label">电池输入电压</span>
         <span class="dd-tile-value c-green">
-          {{ fmtFixed(env?.humidity, 0) }}
-          <span class="dd-unit">%RH</span>
+          {{ fmtFixed(batteryInput, 1) }}
+          <span class="dd-unit">V</span>
         </span>
       </div>
-      <div class="dd-tile">
+      <div class="dd-tile dd-span-2" title="6.5 温湿度气压传感器">
         <span class="dd-tile-label">大气压</span>
         <span class="dd-tile-value">
           {{ pressureHpa }}
@@ -72,6 +59,9 @@
         </span>
       </div>
     </div>
+
+    <!-- 6.5 温湿度气压传感器 & 结冰环境 -->
+    <div class="dd-section-label">6.5 温湿度气压传感器 &amp; 结冰环境</div>
     <div class="dd-grid-2">
       <div class="dd-tile">
         <span class="dd-tile-label">结冰探测状态</span>
@@ -88,8 +78,8 @@
     </div>
 
     <!-- 6.3 电压采集模块 -->
-    <div class="dd-section-label">
-      6.3 电压采集模块 (ID: 04) · 电源与特种载荷供电电压 · 11 通道
+    <div class="dd-section-label" title="ID: 04 · 电源与特种载荷供电电压">
+      6.3 电压采集模块
     </div>
     <div class="volt-list">
       <div v-for="ch in voltageRows" :key="ch.key" class="volt-row">
@@ -151,18 +141,26 @@ const heatingClass = computed(() => {
   return icing.value.heatingActive ? 'c-green' : 'c-amber'
 })
 
+const batteryInput = computed(() => {
+  const v = payloadStore.currentPayload?.voltageSensor?.batteryInput
+  return typeof v === 'number' && Number.isFinite(v) ? v : null
+})
+
+// 电池输入电压已在 6.1 区域单独展示，电压条列表不再重复
 const voltageRows = computed(() => {
   const vs = payloadStore.currentPayload?.voltageSensor
-  return SYSTEM_VOLTAGE_CHANNELS.map((ch) => {
-    const raw = vs?.[ch.key]
-    const val = typeof raw === 'number' && Number.isFinite(raw) ? raw : null
-    return {
-      ...ch,
-      text: fmtFixed(val, 1),
-      percent: voltageBarPercent(val),
-      tier: voltageTier(val),
-    }
-  })
+  return SYSTEM_VOLTAGE_CHANNELS.filter((ch) => ch.key !== 'batteryInput').map(
+    (ch) => {
+      const raw = vs?.[ch.key]
+      const val = typeof raw === 'number' && Number.isFinite(raw) ? raw : null
+      return {
+        ...ch,
+        text: fmtFixed(val, 1),
+        percent: voltageBarPercent(val),
+        tier: voltageTier(val),
+      }
+    },
+  )
 })
 </script>
 

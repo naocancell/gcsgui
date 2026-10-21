@@ -12,6 +12,8 @@ export interface RelayChannelDef {
   name: string
   /** 大屏紧凑显示名称 */
   shortName: string
+  /** 回路控制卡片显示名称（设计稿样式，不含通道号） */
+  tileName: string
   group: RelayGroup
   /** 该回路对应的 6.3 电压采集字段（无采集点则为 null） */
   voltageKey: keyof VoltageSensorData | null
@@ -25,6 +27,7 @@ export const RELAY_CHANNELS: RelayChannelDef[] = [
     id: 1,
     name: '右平尾加热膜供电',
     shortName: '右平尾',
+    tileName: '右平尾加热膜',
     group: 'tail',
     voltageKey: 'rightHorizontalTail',
   },
@@ -32,6 +35,7 @@ export const RELAY_CHANNELS: RelayChannelDef[] = [
     id: 2,
     name: '右垂尾加热膜供电',
     shortName: '右垂尾',
+    tileName: '右垂尾加热膜',
     group: 'tail',
     voltageKey: 'rightVerticalTail',
   },
@@ -39,6 +43,7 @@ export const RELAY_CHANNELS: RelayChannelDef[] = [
     id: 3,
     name: '右内机翼加热膜供电',
     shortName: '右内机翼',
+    tileName: '右内机翼加热膜',
     group: 'wing',
     voltageKey: 'rightInnerWing',
   },
@@ -46,6 +51,7 @@ export const RELAY_CHANNELS: RelayChannelDef[] = [
     id: 4,
     name: '右中机翼加热膜供电',
     shortName: '右中机翼',
+    tileName: '右中机翼加热膜',
     group: 'wing',
     voltageKey: 'rightMidWing',
   },
@@ -53,6 +59,7 @@ export const RELAY_CHANNELS: RelayChannelDef[] = [
     id: 5,
     name: '右外机翼加热膜供电',
     shortName: '右外机翼',
+    tileName: '右外机翼加热膜',
     group: 'wing',
     voltageKey: 'rightOuterWing',
   },
@@ -60,6 +67,7 @@ export const RELAY_CHANNELS: RelayChannelDef[] = [
     id: 6,
     name: '左垂尾加热膜供电',
     shortName: '左垂尾',
+    tileName: '左垂尾加热膜',
     group: 'tail',
     voltageKey: 'leftVerticalTail',
   },
@@ -67,6 +75,7 @@ export const RELAY_CHANNELS: RelayChannelDef[] = [
     id: 7,
     name: '左平尾加热膜供电',
     shortName: '左平尾',
+    tileName: '左平尾加热膜',
     group: 'tail',
     voltageKey: 'leftHorizontalTail',
   },
@@ -74,6 +83,7 @@ export const RELAY_CHANNELS: RelayChannelDef[] = [
     id: 8,
     name: '机翼常加热膜供电',
     shortName: '机翼常加热',
+    tileName: '机翼常加热膜',
     group: 'reserve',
     voltageKey: 'wingConstHeat',
   },
@@ -81,6 +91,7 @@ export const RELAY_CHANNELS: RelayChannelDef[] = [
     id: 9,
     name: '左内机翼加热膜供电',
     shortName: '左内机翼',
+    tileName: '左内机翼加热膜',
     group: 'wing',
     voltageKey: 'leftInnerWing',
   },
@@ -88,6 +99,7 @@ export const RELAY_CHANNELS: RelayChannelDef[] = [
     id: 10,
     name: '左中机翼加热膜供电',
     shortName: '左中机翼',
+    tileName: '左中机翼加热膜',
     group: 'wing',
     voltageKey: 'leftMidWing',
   },
@@ -95,6 +107,7 @@ export const RELAY_CHANNELS: RelayChannelDef[] = [
     id: 11,
     name: '左外机翼加热膜供电',
     shortName: '左外机翼',
+    tileName: '左外机翼加热膜',
     group: 'wing',
     voltageKey: 'leftOuterWing',
   },
@@ -102,6 +115,7 @@ export const RELAY_CHANNELS: RelayChannelDef[] = [
     id: 12,
     name: '大气测量-加温供电',
     shortName: '大气测量加温',
+    tileName: '大气测量加温',
     group: 'payload',
     voltageKey: 'atmosphereHeat',
   },
@@ -109,6 +123,7 @@ export const RELAY_CHANNELS: RelayChannelDef[] = [
     id: 13,
     name: '云滴探测-加温供电',
     shortName: '云滴探测加温',
+    tileName: '云滴探测加温',
     group: 'payload',
     voltageKey: 'cloudDropHeat',
   },
@@ -116,6 +131,7 @@ export const RELAY_CHANNELS: RelayChannelDef[] = [
     id: 14,
     name: '电源设备供电',
     shortName: '电源设备',
+    tileName: '电源设备供电',
     group: 'payload',
     voltageKey: null,
   },
@@ -123,6 +139,7 @@ export const RELAY_CHANNELS: RelayChannelDef[] = [
     id: 15,
     name: '桨叶防除冰控制',
     shortName: '桨叶防除冰',
+    tileName: '桨叶防除冰控制',
     group: 'payload',
     voltageKey: null,
   },
@@ -130,6 +147,7 @@ export const RELAY_CHANNELS: RelayChannelDef[] = [
     id: 16,
     name: '空',
     shortName: '预留（空）',
+    tileName: '备用回路',
     group: 'reserve',
     voltageKey: null,
     reserved: true,
@@ -147,17 +165,17 @@ function pick(ids: number[]): RelayChannelDef[] {
   return ids.map((id) => RELAY_CHANNELS[id - 1])
 }
 
-/** 大屏分区：机翼 6 路 / 尾翼 4 路 / 载荷 4 路 / 常加与预留 2 路 */
+/** 大屏分区（设计稿顺序）：机翼 6 路 / 尾翼 4 路 / 载荷 4 路 / 常加与备用 2 路 */
 export const RELAY_GROUPS: RelayGroupDef[] = [
   {
     key: 'wing',
-    title: '机翼加热膜供电回路（6 路 · 左右机翼独立控制）',
+    title: '机翼加热膜供电回路',
     columns: 3,
-    channels: pick([11, 10, 9, 3, 4, 5]),
+    channels: pick([5, 4, 3, 9, 10, 11]),
   },
   {
     key: 'tail',
-    title: '尾翼加热膜供电回路（4 路 · 平尾与垂尾独立控制）',
+    title: '翼面加热膜供电回路',
     columns: 4,
     channels: pick([7, 1, 6, 2]),
   },
@@ -169,7 +187,7 @@ export const RELAY_GROUPS: RelayGroupDef[] = [
   },
   {
     key: 'reserve',
-    title: '常加热与预留回路（2 路）',
+    title: '常加热与备用回路',
     columns: 2,
     channels: pick([8, 16]),
   },
@@ -415,4 +433,57 @@ export function fmtFixed(val: unknown, digits = 1): string {
     return val.toFixed(digits)
   }
   return '—'
+}
+
+/** 温压流矩阵 / 机体图共用的 9 条加热条（左右垂尾合并为“垂直尾翼”） */
+export interface HeatStripRow {
+  key: string
+  name: string
+  relayIds: number[]
+  temp: number | null
+  voltage: number | null
+  current: number | null
+  /** 悬停明细（合并行列出各分段原始值） */
+  detail: string
+}
+
+function avg(list: (number | null)[]): number | null {
+  const vals = list.filter((v): v is number => v !== null)
+  if (!vals.length) return null
+  return vals.reduce((sum, v) => sum + v, 0) / vals.length
+}
+
+const STRIP_ORDER: { key: string; name: string; parts: HeatSegmentKey[] }[] = [
+  { key: 'leftOuter', name: '左翼外段', parts: ['leftOuter'] },
+  { key: 'leftMid', name: '左翼中段', parts: ['leftMid'] },
+  { key: 'leftInner', name: '左翼内段', parts: ['leftInner'] },
+  { key: 'rightOuter', name: '右翼外段', parts: ['rightOuter'] },
+  { key: 'rightMid', name: '右翼中段', parts: ['rightMid'] },
+  { key: 'rightInner', name: '右翼内段', parts: ['rightInner'] },
+  { key: 'leftHTail', name: '左平尾', parts: ['leftHTail'] },
+  { key: 'rightHTail', name: '右平尾', parts: ['rightHTail'] },
+  { key: 'vTail', name: '垂直尾翼', parts: ['leftVTail', 'rightVTail'] },
+]
+
+export function buildHeatStripRows(segments: HeatSegment[]): HeatStripRow[] {
+  return STRIP_ORDER.map((row) => {
+    const parts = row.parts
+      .map((k) => segments.find((s) => s.key === k))
+      .filter((s): s is HeatSegment => Boolean(s))
+    const detail = parts
+      .map(
+        (s) =>
+          `${s.name} CH${String(s.relayId).padStart(2, '0')}：${fmtFixed(s.temp, 1)}°C / ${fmtFixed(s.voltage, 1)}V / ${fmtFixed(s.current, 2)}A`,
+      )
+      .join('\n')
+    return {
+      key: row.key,
+      name: row.name,
+      relayIds: parts.map((s) => s.relayId),
+      temp: avg(parts.map((s) => s.temp)),
+      voltage: avg(parts.map((s) => s.voltage)),
+      current: avg(parts.map((s) => s.current)),
+      detail,
+    }
+  })
 }
