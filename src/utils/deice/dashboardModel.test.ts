@@ -3,9 +3,11 @@ import {
   RELAY_CHANNELS,
   RELAY_GROUPS,
   buildHeatSegments,
+  buildConstHeatRow,
   buildHeatStripRows,
   buildSparklinePoints,
   dewPoint,
+  normalizeConstTempTarget,
   powerDeviationPercent,
   voltageBarPercent,
   voltageTier,
@@ -121,5 +123,46 @@ describe('防除冰大屏数据映射', () => {
     expect(v.voltage).toBeCloseTo(121, 5)
     expect(v.current).toBeCloseTo(1.2, 5)
     expect(rows[0].temp).toBeNull()
+  })
+
+  it('机翼常加热行（CH08）：温度取 6 路最低值，电压/电流取常加热专用通道', () => {
+    const constTemps = (inner: number, mid: number, outer: number) =>
+      ({
+        innerWingConst: inner,
+        midWingConst: mid,
+        outerWingConst: outer,
+      }) as never
+    const row = buildConstHeatRow({
+      tempSensor1: constTemps(1.2, -0.4, 0.8),
+      tempSensor2: constTemps(0.5, 2.1, -1.3),
+      voltageSensor: { wingConstHeat: 118.6 },
+      currentSensor1: { wingConstHeat: 6.25 },
+    } as never)
+    expect(row).toMatchObject({
+      key: 'wingConst',
+      name: '机翼常加热',
+      relayIds: [8],
+      temp: -1.3,
+      voltage: 118.6,
+      current: 6.25,
+    })
+    expect(row.detail).toContain('右外 -1.3°C')
+
+    const empty = buildConstHeatRow(null)
+    expect(empty.temp).toBeNull()
+    expect(empty.voltage).toBeNull()
+    expect(empty.current).toBeNull()
+  })
+
+  it('恒温目标温度：仅允许 0~100℃，负温与非法值不下发', () => {
+    expect(normalizeConstTempTarget(15)).toBe(15)
+    expect(normalizeConstTempTarget(0)).toBe(0)
+    expect(normalizeConstTempTarget(100)).toBe(100)
+    expect(normalizeConstTempTarget(14.6)).toBe(15)
+    expect(normalizeConstTempTarget(-10)).toBeNull()
+    expect(normalizeConstTempTarget(-0.6)).toBeNull()
+    expect(normalizeConstTempTarget(101)).toBeNull()
+    expect(normalizeConstTempTarget(Number.NaN)).toBeNull()
+    expect(normalizeConstTempTarget('20')).toBeNull()
   })
 })

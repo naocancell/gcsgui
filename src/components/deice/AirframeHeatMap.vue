@@ -11,10 +11,7 @@
     <!-- 结冰 / 大气环境速览 -->
     <div class="env-strip">
       <div class="env-tile icing-tile" :class="icingClass">
-        <span class="env-label">
-          结冰探头
-          <span v-if="manualJudge" class="judge-tag">人工判定</span>
-        </span>
+        <span class="env-label">结冰探头</span>
         <span class="env-value icing-value">
           <i class="icing-dot"></i>
           {{ icingText }}
@@ -107,11 +104,11 @@ import airframeImg from '@/assets/deice/twin-tail-scorpion-perspective.webp'
 import { usePayloadStore } from '@/store/payloadStore'
 import { useUavStore } from '@/store/uavStore'
 import {
-  useManualIcingJudgement,
   usePayloadRelayControl,
   useTelemetryRate,
 } from '@/composables/useDeiceDashboard'
 import {
+  buildConstHeatRow,
   buildHeatSegments,
   buildHeatStripRows,
   fmtFixed,
@@ -286,7 +283,6 @@ const bands: Band[] = [
 const payloadStore = usePayloadStore()
 const uavStore = useUavStore()
 const { isRelayClosed, relayStatus } = usePayloadRelayControl()
-const { manualJudge } = useManualIcingJudgement()
 
 const segments = computed(() => buildHeatSegments(payloadStore.currentPayload))
 const stripRows = computed(() => buildHeatStripRows(segments.value))
@@ -353,10 +349,8 @@ const STATE_TEXT: Record<BandState, string> = {
 function bandTitle(band: Band): string {
   const state = STATE_TEXT[bandState(band)]
   if (!band.segKey) {
-    const temps = segments.value
-      .filter((s) => s.constTemp !== null)
-      .map((s) => `${s.name} ${fmtFixed(s.constTemp, 1)}°C`)
-    return `机翼常加热膜 · CH08 · ${state}${temps.length ? `\n${temps.join(' / ')}` : ''}`
+    const row = buildConstHeatRow(payloadStore.currentPayload)
+    return `机翼常加热膜 · CH08 · ${state}\n电压 ${fmtFixed(row.voltage, 1)}V · 电流 ${fmtFixed(row.current, 2)}A · 最低温度 ${fmtFixed(row.temp, 1)}°C`
   }
   const seg = segments.value.find((s) => s.key === band.segKey)
   if (!seg) return state
@@ -398,15 +392,6 @@ function bandTitle(band: Band): string {
   gap: 6px;
   font-size: 12px;
   color: var(--dd-text-2);
-}
-
-.judge-tag {
-  padding: 0 5px;
-  border-radius: 3px;
-  font-size: 10px;
-  line-height: 16px;
-  color: var(--dd-amber);
-  background: var(--dd-amber-dim);
 }
 
 .env-value {

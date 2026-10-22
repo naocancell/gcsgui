@@ -14,7 +14,12 @@
         </tr>
       </thead>
       <tbody>
-        <tr v-for="row in rows" :key="row.key" :title="row.detail">
+        <tr
+          v-for="row in rows"
+          :key="row.key"
+          :class="{ 'row-const': row.key === 'wingConst' }"
+          :title="row.detail"
+        >
           <td class="col-pos">
             <span class="pos-name">{{ row.name }}</span>
           </td>
@@ -45,6 +50,7 @@ import { computed } from 'vue'
 import { usePayloadStore } from '@/store/payloadStore'
 import { usePayloadRelayControl } from '@/composables/useDeiceDashboard'
 import {
+  buildConstHeatRow,
   buildHeatSegments,
   buildHeatStripRows,
   fmtFixed,
@@ -53,9 +59,11 @@ import {
 const payloadStore = usePayloadStore()
 const { isRelayClosed, relayStatus } = usePayloadRelayControl()
 
-const rows = computed(() =>
-  buildHeatStripRows(buildHeatSegments(payloadStore.currentPayload)),
-)
+// 9 条分段加热 + 机翼常加热（CH08）
+const rows = computed(() => {
+  const p = payloadStore.currentPayload
+  return [...buildHeatStripRows(buildHeatSegments(p)), buildConstHeatRow(p)]
+})
 
 function tempClass(relayIds: number[], temp: number | null) {
   if (temp === null) return 'is-empty'
@@ -91,6 +99,11 @@ function tempClass(relayIds: number[], temp: number | null) {
 .matrix-table .col-pos {
   width: 34%;
   text-align: left;
+}
+
+.matrix-table .row-const td {
+  border-top: 1px dashed rgb(148 163 184 / 22%);
+  padding-top: 2px;
 }
 
 .pos-name {
