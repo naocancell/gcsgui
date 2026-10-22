@@ -121,8 +121,21 @@ impl ReplayEngine {
         }
     }
 
+    /// 读会话（容忍锁中毒：某次回放任务 panic 不应让后续所有回放命令连锁 panic）
+    fn read_inner(&self) -> std::sync::RwLockReadGuard<'_, Option<ReplaySession>> {
+        self.inner
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn write_inner(&self) -> std::sync::RwLockWriteGuard<'_, Option<ReplaySession>> {
+        self.inner
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     pub fn is_active(&self) -> bool {
-        let guard = self.inner.read().unwrap();
+        let guard = self.read_inner();
         guard.as_ref().map_or(false, |s| !s.is_finished.load(Ordering::SeqCst))
     }
 
@@ -197,7 +210,7 @@ impl ReplayEngine {
         speed: f32,
     ) -> Result<ReplayInfo, String> {
         // 若已有旧会话（播完或进行中），先释放并注销旧虚拟链路，避免会话死锁
-        if let Some(old) = self.inner.write().unwrap().take() {
+        if let Some(old) = self.write_inner().take() {
             old.cancel.cancel();
             Self::unregister_virtual_links(app_state, &old.virtual_links);
         }
@@ -239,7 +252,7 @@ impl ReplayEngine {
             header.start_wall_ms,
         ));
 
-        *self.inner.write().unwrap() = Some(ReplaySession {
+        *self.write_inner() = Some(ReplaySession {
             cancel: cancel.clone(),
             join,
             is_finished,
@@ -276,7 +289,7 @@ impl ReplayEngine {
 
     /// 暂停（幂等：重复暂停无副作用）
     pub fn pause(&self, app_state: &AppState) -> Result<(), String> {
-        let session = self.inner.read().unwrap();
+        let session = self.read_inner();
         let Some(session) = session.as_ref() else {
             return Err("当前无回放会话".into());
         };
@@ -294,7 +307,7 @@ impl ReplayEngine {
 
     /// 恢复播放
     pub fn resume(&self, app_state: &AppState) -> Result<(), String> {
-        let session = self.inner.read().unwrap();
+        let session = self.read_inner();
         let Some(session) = session.as_ref() else {
             return Err("当前无回放会话".into());
         };
@@ -312,7 +325,7 @@ impl ReplayEngine {
 
     /// 调整倍速（0 = MAX 全速）
     pub fn set_speed(&self, app_state: &AppState, speed: f32) -> Result<(), String> {
-        let session = self.inner.read().unwrap();
+        let session = self.read_inner();
         let Some(session) = session.as_ref() else {
             return Err("当前无回放会话".into());
         };
@@ -405,7 +418,7 @@ impl ReplayEngine {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        *self.inner.write().unwrap() = Some(ReplaySession {
+        *self.write_inner() = Some(ReplaySession {
             cancel,
             join,
             is_finished,
@@ -438,7 +451,7 @@ impl ReplayEngine {
     pub async fn stop(&self, app_state: &AppState) -> Result<(), String> {
         let _guard = self.lifecycle.lock().await;
 
-        let session = { self.inner.write().unwrap().take() };
+        let session = { self.write_inner().take() };
         let Some(session) = session else {
             // 幂等：会话已结束，仅清理终态标记
             *app_state

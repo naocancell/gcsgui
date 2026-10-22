@@ -1,9 +1,40 @@
+use std::time::Duration;
+
 use tauri::{PhysicalPosition, PhysicalSize, Position, Size, WebviewWindow};
 
-/// 关闭应用程序
+/// 退出前等待录制文件落盘的最长时间，避免异常时卡住退出
+const RECORDER_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// 关闭应用程序：先停止全部链路并收尾录制文件（最多等待 2s），再正常退出，
+/// 避免直接 process::exit 导致录制文件尾部未刷盘、串口句柄未释放
 #[tauri::command]
-pub fn close_app() {
-    std::process::exit(0);
+pub async fn close_app(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::AppState>,
+) -> Result<(), String> {
+    log::info!("[操作] 退出应用：停止全部链路并保存录制文件");
+    let links: Vec<_> = state
+        .active_links
+        .iter()
+        .map(|link| link.transport.clone())
+        .collect();
+    for transport in links {
+        transport.stop();
+    }
+
+    let recorder = state.recorder.clone();
+    match tokio::time::timeout(RECORDER_FLUSH_TIMEOUT, recorder.stop_all()).await {
+        Ok(summaries) => log::info!("退出前已保存 {} 个录制文件", summaries.len()),
+        Err(_) => log::warn!("退出前保存录制文件超时，强制退出"),
+    }
+
+    // 兜底：若事件循环未能及时退出（窗口阻塞等），3s 后强制结束进程
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_secs(3));
+        std::process::exit(0);
+    });
+    app.exit(0);
+    Ok(())
 }
 
 /// 准备窗口拖拽：如果是全屏模式，先安全退出全屏并将窗口稳定在当前屏幕以便平滑移动

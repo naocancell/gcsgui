@@ -3,6 +3,20 @@ use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 use tokio::time::{interval, Duration};
 
+/// 推送器守护：推送任务 panic 时记录并在 1s 后重启，避免前端画面无声冻结
+pub async fn supervise_emitter(app_handle: AppHandle, app_state: AppState) {
+    loop {
+        let task = tokio::spawn(start_emitter(app_handle.clone(), app_state.clone()));
+        match task.await {
+            Ok(()) => break,
+            Err(error) => {
+                log::error!("[Emitter] 状态推送任务异常退出，1s 后重启: {error}");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    }
+}
+
 pub async fn start_emitter(app_handle: AppHandle, app_state: AppState) {
     let mut interval = interval(Duration::from_millis(100)); // 10Hz
     let evict_timeout = std::time::Duration::from_secs(10); // 10秒死链剔除阈值

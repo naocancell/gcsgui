@@ -102,6 +102,14 @@ pub async fn start_udp_internal(
                 }
                 comms_core::LinkEvent::StatusChanged { status, .. } => {
                     log::info!("UDP 链路 {} 底层状态变化: {:?}", ln_clone, status);
+                    if let comms_core::LinkStatus::Faulted(reason) = status {
+                        crate::comms::emit_link_status(crate::comms::LinkStatusEvent {
+                            link_name: ln_clone.clone(),
+                            link_type: "UDP",
+                            status: "faulted",
+                            reason: Some(reason),
+                        });
+                    }
                 }
             }
         }
