@@ -32,9 +32,11 @@ import type { RxHealthSnapshot } from '@/types/linkHealth'
 import {
   createDefaultLinkDrafts,
   createLinkDraft,
+  DEFAULT_UPLINK_AIRCRAFT_ID,
   fromCommsConfig,
   toCommsConfig,
   validateLinkDrafts,
+  validateUplinkAircraftId,
   type LinkDraft,
   type LinkKind,
   type PersistedCommsConfig,
@@ -44,6 +46,8 @@ export const useUavStore = defineStore('uav', () => {
   const uavInfo = shallowRef<UAVInfo | null>(null)
 
   const links = ref<LinkDraft[]>(createDefaultLinkDrafts())
+  // 上行机号（0~255）：在通信设置中人工输入并保存到配置文件，所有上行指令统一使用
+  const uplinkAircraftId = ref<number | null>(DEFAULT_UPLINK_AIRCRAFT_ID)
 
   const findLink = (predicate: (link: LinkDraft) => boolean) =>
     links.value.find(predicate)
@@ -532,38 +536,28 @@ export const useUavStore = defineStore('uav', () => {
     } else {
       links.value = createDefaultLinkDrafts()
     }
+    uplinkAircraftId.value =
+      config?.uplink_aircraft_id ?? DEFAULT_UPLINK_AIRCRAFT_ID
     // 统一启停各类协议监听服务，使实际运行的监听状态与业务需求保持同步
     await syncProtocolListeners()
     return config
   }
 
   async function saveCommsConfig() {
+    const idError = validateUplinkAircraftId(uplinkAircraftId.value)
+    if (idError) throw new Error(idError)
     const validationError = validateLinkDrafts(links.value)
     if (validationError) throw new Error(validationError)
 
-    const config = toCommsConfig(links.value)
+    // 上行机号随通信配置一起落盘，后端保存时立即应用到全部上行指令
+    const config = {
+      ...toCommsConfig(links.value),
+      uplink_aircraft_id: uplinkAircraftId.value,
+    }
     const res = await invokeSafe<string>('save_comms_config', { config })
     await syncProtocolListeners()
     await emit('comms-config-changed')
-    // 保存配置并启动链路后，同步上行配置上下文（设置机号）
-    const aircraftId = currentFp95AircraftId() ?? 0
-    try {
-      await invokeSafe(
-        'configure_uplink',
-        {
-          context: {
-            destination: 0x02,
-            source: 0x01,
-            aircraftId,
-            dataSource: 0xaa,
-          },
-        },
-        { silent: true },
-      )
-    } catch (err) {
-      logger.warn('同步上行上下文失败:', err)
-    }
-    logger.info('保存配置成功:', res)
+    logger.info('保存配置成功:', res, `上行机号 ${uplinkAircraftId.value}`)
     return res
   }
 
@@ -717,11 +711,8 @@ export const useUavStore = defineStore('uav', () => {
     device: Fp95AvionicsDevice,
     enabled: boolean,
   ) {
-    const aggregate = fp95Aggregate.value
-    const aircraftId = aggregate?.uavId ?? currentFp95AircraftId() ?? 0
-
+    // 机号由后端按通信配置统一填写
     await invokeSafe('submit_flight_switch_command', {
-      aircraftId,
       command: getFp95FlightSwitchCommand(device, enabled),
     })
   }
@@ -782,9 +773,9 @@ export const useUavStore = defineStore('uav', () => {
 
   const transponderOperationPending = ref(false)
 
+  /** 当前上行机号（来自通信配置） */
   function currentFp95AircraftId() {
-    // return fp95Aggregate.value?.uavId ?? 255
-    return 255
+    return uplinkAircraftId.value
   }
 
   async function runTransponderOperation<T>(
@@ -802,19 +793,16 @@ export const useUavStore = defineStore('uav', () => {
   }
 
   async function bindTransponderSwitches(config: TransponderSwitchConfig) {
-    const aircraftId = currentFp95AircraftId()
     await runTransponderOperation(async () => {
-      await invokeSafe('bind_transponder_switches', { aircraftId, config })
+      await invokeSafe('bind_transponder_switches', { config })
     })
     transponderSwitchConfig.value = { ...config }
   }
   // 查询应答机（空地）状态
   async function queryTransponderSwitches() {
-    const aircraftId = currentFp95AircraftId()
     return runTransponderOperation(async () => {
       const res = await invokeSafe<TransponderSwitchReadback>(
         'query_transponder_switches',
-        { aircraftId },
       )
       transponderSwitchReadback.value = res
       return res
@@ -822,9 +810,8 @@ export const useUavStore = defineStore('uav', () => {
   }
 
   async function bindTransponderParams(config: TransponderParamConfig) {
-    const aircraftId = currentFp95AircraftId()
     await runTransponderOperation(async () => {
-      await invokeSafe('bind_air_traffic_params', { aircraftId, config })
+      await invokeSafe('bind_air_traffic_params', { config })
     })
     transponderParamConfig.value = {
       ...config,
@@ -834,11 +821,9 @@ export const useUavStore = defineStore('uav', () => {
   }
 
   async function queryTransponderParams() {
-    const aircraftId = currentFp95AircraftId()
     return runTransponderOperation(async () => {
       const res = await invokeSafe<TransponderParamReadback>(
         'query_air_traffic_params',
-        { aircraftId },
       )
       transponderParamReadback.value = res
       return res
@@ -846,19 +831,15 @@ export const useUavStore = defineStore('uav', () => {
   }
 
   async function bindWeightParams(config: WeightBindingConfig) {
-    const aircraftId = currentFp95AircraftId()
     await runTransponderOperation(async () => {
-      await invokeSafe('bind_weight_params', { aircraftId, config })
+      await invokeSafe('bind_weight_params', { config })
     })
     weightBindingConfig.value = { ...config }
   }
 
   async function queryWeightParams() {
-    const aircraftId = currentFp95AircraftId()
     return runTransponderOperation(async () => {
-      const res = await invokeSafe<WeightReadback>('query_weight_params', {
-        aircraftId,
-      })
+      const res = await invokeSafe<WeightReadback>('query_weight_params')
       weightReadback.value = res
       weightBindingConfig.value = { ...res }
       return res
@@ -1046,6 +1027,8 @@ export const useUavStore = defineStore('uav', () => {
   return {
     uavInfo,
     links,
+    uplinkAircraftId,
+    currentFp95AircraftId,
     addLink,
     removeLink,
     updateLinkKind,

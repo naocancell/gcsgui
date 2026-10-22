@@ -3,7 +3,6 @@ import { computed, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
-import { useUavStore } from './uavStore'
 import {
   POD_GUIDE_CODE,
   POD_STEP_DEG,
@@ -25,10 +24,9 @@ const POD_ACK_TIMEOUT_MS = 2000
  * 连续指令以 10Hz 持续发送、松开后立即回落。
  * 本 store 负责：指令提交、长按/步进定时器管理、内部角度记录、
  * 装订回执（0x28/0x01 → pod-command-acked）的 UI 状态。
+ * 上行机号由后端按通信配置统一填写，前端不再传机号。
  */
 export const usePodStore = defineStore('pod', () => {
-  const uavStore = useUavStore()
-
   // ==================== 响应式状态 ====================
   /** 当前长按中的连续指令键。 */
   const activeContinuousKey = ref<string | null>(null)
@@ -79,10 +77,6 @@ export const usePodStore = defineStore('pod', () => {
   /** 装订回执等待中（用于 UI 显示指令在途状态）。 */
   const pendingActive = computed(() => pendingKey.value !== null)
 
-  function resolveAircraftId(): number {
-    return uavStore.fp95Aggregate?.uavId ?? 255
-  }
-
   function clearPendingTimer() {
     if (pendingTimer !== null) {
       clearTimeout(pendingTimer)
@@ -111,10 +105,8 @@ export const usePodStore = defineStore('pod', () => {
 
   /** 提交一条单次触发指令（100ms 注入窗口，后端自动复位）。 */
   async function sendSingle(command: PodSingleCommand) {
-    const aircraftId = resolveAircraftId()
     try {
       await invoke('send_pod_command', {
-        aircraftId,
         request: {
           switchCode: command.code,
           mode: 'single',
@@ -132,12 +124,10 @@ export const usePodStore = defineStore('pod', () => {
 
   /** 数字引导：将吊舱引导至指定俯仰/方位角（同步更新内部角度记录）。 */
   async function guideTo(pitchDeg: number, yawDeg: number, key = 'guide') {
-    const aircraftId = resolveAircraftId()
     const pitch = clampPodAngle(pitchDeg, 'pitch')
     const yaw = clampPodAngle(yawDeg, 'yaw')
     try {
       await invoke('send_pod_command', {
-        aircraftId,
         request: {
           switchCode: POD_GUIDE_CODE,
           mode: 'single',
@@ -171,7 +161,6 @@ export const usePodStore = defineStore('pod', () => {
 
   /** 长按开始：以 10Hz 持续发送（后端 UntilClearedPeriodic）。 */
   async function startContinuous(command: PodContinuousCommand) {
-    const aircraftId = resolveAircraftId()
     clearStepTimer()
     activeStepKey.value = null
     const generation = bumpInjectGeneration()
@@ -180,7 +169,6 @@ export const usePodStore = defineStore('pod', () => {
       await runInjectOp(async () => {
         if (generation !== injectGeneration) return
         await invoke('send_pod_command', {
-          aircraftId,
           request: {
             switchCode: command.code,
             mode: 'continuous',
@@ -217,11 +205,7 @@ export const usePodStore = defineStore('pod', () => {
 
   // ==================== 步进控制（0x19 数字引导 ±1°/100ms） ====================
 
-  async function sendStepFrame(
-    aircraftId: number,
-    axis: 'pitch' | 'yaw',
-    dir: 1 | -1,
-  ) {
+  async function sendStepFrame(axis: 'pitch' | 'yaw', dir: 1 | -1) {
     const nextPitch =
       axis === 'pitch'
         ? clampPodAngle(podPitch.value + dir * POD_STEP_DEG, 'pitch')
@@ -231,7 +215,6 @@ export const usePodStore = defineStore('pod', () => {
         ? clampPodAngle(podYaw.value + dir * POD_STEP_DEG, 'yaw')
         : podYaw.value
     await invoke('send_pod_command', {
-      aircraftId,
       request: {
         switchCode: POD_GUIDE_CODE,
         mode: 'continuous',
@@ -254,7 +237,6 @@ export const usePodStore = defineStore('pod', () => {
     dir: 1 | -1,
   ) {
     if (activeStepKey.value === key) return
-    const aircraftId = resolveAircraftId()
     clearStepTimer()
     activeContinuousKey.value = null
     const generation = bumpInjectGeneration()
@@ -262,7 +244,7 @@ export const usePodStore = defineStore('pod', () => {
     try {
       await runInjectOp(async () => {
         if (generation !== injectGeneration) return
-        await sendStepFrame(aircraftId, axis, dir)
+        await sendStepFrame(axis, dir)
         if (generation !== injectGeneration) {
           await invoke('stop_pod_command')
           return
@@ -272,7 +254,7 @@ export const usePodStore = defineStore('pod', () => {
           void runInjectOp(async () => {
             if (generation !== injectGeneration) return
             try {
-              await sendStepFrame(aircraftId, axis, dir)
+              await sendStepFrame(axis, dir)
             } catch {
               // 保持按住，下一拍重试；未成功的角度不写入本地
             }
@@ -308,10 +290,8 @@ export const usePodStore = defineStore('pod', () => {
 
   /** 发送 VMC 视频通道指令（飞控开关帧三判二）。 */
   async function sendVmc(command: VmcCommandDef) {
-    const aircraftId = resolveAircraftId()
     try {
       await invoke('submit_vmc_command', {
-        aircraftId,
         switchCode: command.code,
       })
       vmcActiveKey.value = command.key

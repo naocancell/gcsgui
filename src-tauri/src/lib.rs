@@ -55,7 +55,10 @@ pub fn run() {
             let response_coordinator = uplink::FP95ResponseCoordinator::default();
             app.manage(response_coordinator.clone());
 
-            let uplink_handle = uplink::start(app_state.clone());
+            // 上行机号来自通信配置文件，启动即生效（不再等前端保存配置后才下发机号）
+            let uplink_aircraft_id =
+                config::comms::CommsConfig::load(app.handle()).effective_uplink_aircraft_id();
+            let uplink_handle = uplink::start(app_state.clone(), uplink_aircraft_id);
             app.manage(uplink_handle);
 
             let (router_tx, router_rx) = mpsc::channel::<RawData>(1000);
@@ -167,7 +170,7 @@ pub fn run() {
             switch_to_next_monitor,
             get_comms_config,
             save_comms_config,
-            configure_uplink,
+            get_uplink_aircraft_id,
             update_uplink_control,
             update_uplink_periodic,
             submit_uplink_command,
