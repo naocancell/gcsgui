@@ -320,11 +320,12 @@
                       v-if="selectedPropMode === 2"
                       v-model.number="cmdTargetPower"
                       type="number"
-                      min="0"
-                      max="65535"
+                      :min="CONST_POWER_TARGET_MIN"
+                      :max="CONST_POWER_TARGET_MAX"
                       step="50"
                       class="param-input dd-mono"
-                      placeholder="0~65535"
+                      :class="{ 'is-invalid': powerTargetInvalid }"
+                      :placeholder="`${CONST_POWER_TARGET_MIN}~${CONST_POWER_TARGET_MAX}`"
                     />
                     <input
                       v-else
@@ -342,13 +343,18 @@
                     </span>
                   </span>
                 </label>
+                <span v-if="powerTargetInvalid" class="param-error">
+                  {{ powerRangeHint }}
+                </span>
                 <span v-if="tempTargetInvalid" class="param-error">
                   {{ tempRangeHint }}
                 </span>
                 <button
                   type="button"
                   class="btn-send-cmd"
-                  :disabled="isSendingCommand || tempTargetInvalid"
+                  :disabled="
+                    isSendingCommand || powerTargetInvalid || tempTargetInvalid
+                  "
                   @click="confirmParamCommand"
                 >
                   确认下发
@@ -420,8 +426,11 @@ import {
   usePayloadRelayControl,
 } from '@/composables/useDeiceDashboard'
 import {
+  CONST_POWER_TARGET_MAX,
+  CONST_POWER_TARGET_MIN,
   CONST_TEMP_TARGET_MAX,
   CONST_TEMP_TARGET_MIN,
+  normalizeConstPowerTarget,
   normalizeConstTempTarget,
   powerDeviationPercent,
 } from '@/utils/deice/dashboardModel'
@@ -480,8 +489,17 @@ const tempTargetInvalid = computed(
 
 const tempRangeHint = `目标温度需为 ${CONST_TEMP_TARGET_MIN}~${CONST_TEMP_TARGET_MAX}℃ 的整数，不支持负温`
 
+// 恒功率目标功率：DFB-2000 额定 2000W，越界时禁止下发（不再静默截断到 65535）
+const powerTargetInvalid = computed(
+  () =>
+    selectedPropMode.value === 2 &&
+    normalizeConstPowerTarget(cmdTargetPower.value) === null,
+)
+
+const powerRangeHint = `目标功率需为 ${CONST_POWER_TARGET_MIN}~${CONST_POWER_TARGET_MAX}W`
+
 async function confirmParamCommand() {
-  if (tempTargetInvalid.value) return
+  if (powerTargetInvalid.value || tempTargetInvalid.value) return
   paramPopoverShow.value = false
   if (selectedPropMode.value === 2) await handleSendConstantPower()
   else if (selectedPropMode.value === 3) await handleSendConstantTemp()
@@ -514,11 +532,13 @@ async function handleSendAdjust(direction: 0 | 1) {
 }
 
 async function handleSendConstantPower() {
+  const power = normalizeConstPowerTarget(cmdTargetPower.value)
+  if (power === null) {
+    message.error(`${powerRangeHint}，未下发`)
+    return
+  }
   isSendingCommand.value = true
   try {
-    const power = Number.isFinite(cmdTargetPower.value)
-      ? Math.max(0, Math.min(65535, Math.round(cmdTargetPower.value)))
-      : 2000
     await payloadStore.sendPropellerDeiceCommand(2, power, 0)
     message.success(`已下发恒功率指令: 目标功率=${power}W`)
   } catch (e: any) {

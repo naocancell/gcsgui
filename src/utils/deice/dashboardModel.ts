@@ -535,6 +535,18 @@ export function buildConstHeatRow(
 export const CONST_TEMP_TARGET_MIN = 0
 export const CONST_TEMP_TARGET_MAX = 100
 
+/** 恒功率模式目标功率允许范围（W，DFB-2000 额定 2000W，与后端上限一致） */
+export const CONST_POWER_TARGET_MIN = 0
+export const CONST_POWER_TARGET_MAX = 2000
+
+/** 校验恒功率目标功率：取整后需落在允许范围内，否则返回 null（不下发，不静默截断） */
+export function normalizeConstPowerTarget(val: unknown): number | null {
+  if (typeof val !== 'number' || !Number.isFinite(val)) return null
+  const p = Math.round(val)
+  if (p < CONST_POWER_TARGET_MIN || p > CONST_POWER_TARGET_MAX) return null
+  return p
+}
+
 /** 校验恒温目标温度：取整后需落在允许范围内，否则返回 null（不下发） */
 export function normalizeConstTempTarget(val: unknown): number | null {
   if (typeof val !== 'number' || !Number.isFinite(val)) return null

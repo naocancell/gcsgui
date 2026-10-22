@@ -7,6 +7,7 @@ import {
   buildHeatStripRows,
   buildSparklinePoints,
   dewPoint,
+  normalizeConstPowerTarget,
   normalizeConstTempTarget,
   powerDeviationPercent,
   voltageBarPercent,
@@ -152,6 +153,16 @@ describe('防除冰大屏数据映射', () => {
     expect(empty.temp).toBeNull()
     expect(empty.voltage).toBeNull()
     expect(empty.current).toBeNull()
+  })
+
+  it('恒功率目标功率：仅允许 0~2000W，越界与非法值不下发', () => {
+    expect(normalizeConstPowerTarget(2000)).toBe(2000)
+    expect(normalizeConstPowerTarget(0)).toBe(0)
+    expect(normalizeConstPowerTarget(1499.6)).toBe(1500)
+    expect(normalizeConstPowerTarget(2001)).toBeNull()
+    expect(normalizeConstPowerTarget(-1)).toBeNull()
+    expect(normalizeConstPowerTarget(Number.NaN)).toBeNull()
+    expect(normalizeConstPowerTarget('2000')).toBeNull()
   })
 
   it('恒温目标温度：仅允许 0~100℃，负温与非法值不下发', () => {
