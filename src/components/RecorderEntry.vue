@@ -3,6 +3,8 @@
   自动记录态显示只读录制脉冲与路数；点击回放按钮弹出文件选择并进入回放。
   去除手动记录与暂停控制，全自动感应录制。
   悬停提示同时列出按链路的原始记录与按飞机号的校验记录（validated 子目录）。
+  性能：该组件悬浮在 Cesium 地图画布上，禁止使用 backdrop-filter 与无限循环动画——
+  两者会让 WebView 每帧重新合成并模糊整块地图背景，开启通信后帧率会明显下降。
 -->
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
@@ -122,10 +124,9 @@ onMounted(async () => {
   padding: 0;
   border: none;
   border-radius: 0.45rem;
-  background: rgb(30 36 48 / 85%);
+  background: rgb(30 36 48 / 92%);
   color: #d5dae3;
   cursor: pointer;
-  backdrop-filter: blur(4px);
   transition: background 0.15s ease;
 }
 
@@ -148,7 +149,6 @@ onMounted(async () => {
   color: #ff6b6b;
   font-size: 0.75rem;
   user-select: none;
-  backdrop-filter: blur(4px);
   border: 1px solid rgb(255 77 79 / 35%);
 }
 
@@ -157,7 +157,7 @@ onMounted(async () => {
   height: 0.45rem;
   border-radius: 50%;
   background: #ff4d4f;
-  animation: rec-blink 1.2s ease-in-out infinite;
+  box-shadow: 0 0 0.3rem rgb(255 77 79 / 70%);
 }
 
 .rec-label {
@@ -203,15 +203,5 @@ onMounted(async () => {
   font-family: 'Consolas', monospace;
   font-size: 0.72rem;
   word-break: break-all;
-}
-
-@keyframes rec-blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.25;
-  }
 }
 </style>

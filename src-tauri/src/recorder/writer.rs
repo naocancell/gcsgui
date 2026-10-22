@@ -355,7 +355,7 @@ impl RecorderService {
             });
         }
 
-        self.sync_validated_sessions(active_links, Instant::now());
+        self.sync_validated_sessions(active_links);
     }
 
     /// 非阻塞 tap：由 start_router 主循环调用，绝不阻塞实时链路

@@ -64,10 +64,11 @@
                 placeholder="链路名称"
                 size="small"
                 class="comms-link-name-input"
+                :disabled="isFixedLink(link)"
               />
               <n-select
                 :value="link.kind"
-                :options="linkKindOptions"
+                :options="linkKindOptionsFor(link)"
                 size="small"
                 style="width: 125px"
                 @update:value="$emit('updateLinkKind', link, $event)"
@@ -77,9 +78,7 @@
                 <template #unchecked>已停用</template>
               </n-switch>
               <n-button
-                v-if="
-                  link.name !== '伺服转台' && link.protocol !== 'ServoTurntable'
-                "
+                v-if="!isFixedLink(link)"
                 quaternary
                 type="error"
                 size="small"
@@ -103,11 +102,8 @@
                 <n-form-item-gi :span="12" label="协议类型">
                   <n-select
                     v-model:value="link.protocol"
-                    :options="
-                      link.kind === 'serial'
-                        ? serialProtocolOptions
-                        : udpProtocolOptions
-                    "
+                    :options="protocolOptionsFor(link)"
+                    :disabled="isFixedLink(link)"
                     placeholder="请选择协议"
                   />
                 </n-form-item-gi>
@@ -324,7 +320,7 @@ import {
   useMessage,
 } from 'naive-ui'
 import { invokeSafe } from '@/utils/ipc'
-import type { LinkDraft, LinkKind } from '@/store/commsConfig'
+import { isFixedLink, type LinkDraft, type LinkKind } from '@/store/commsConfig'
 import type { TileTestResult } from '@/utils/map/tileConfig'
 
 const message = useMessage()
@@ -345,9 +341,8 @@ async function handleExportDiagnostic() {
 }
 import {
   baudRateOptions,
-  serialProtocolOptions,
-  linkKindOptions,
-  udpProtocolOptions,
+  linkKindOptionsFor,
+  protocolOptionsFor,
 } from '@/composables/useCommsSettings'
 
 const activeTab = ref<'links' | 'tile'>('links')

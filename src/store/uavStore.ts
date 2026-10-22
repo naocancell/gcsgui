@@ -34,6 +34,7 @@ import {
   createLinkDraft,
   DEFAULT_UPLINK_AIRCRAFT_ID,
   fromCommsConfig,
+  isFixedLink,
   toCommsConfig,
   validateLinkDrafts,
   validateUplinkAircraftId,
@@ -509,10 +510,15 @@ export const useUavStore = defineStore('uav', () => {
 
   function removeLink(id: string) {
     const index = links.value.findIndex((link) => link.id === id)
-    if (index >= 0) links.value.splice(index, 1)
+    // 固定链路（伺服转台转发与三路载荷转发）不可删除
+    if (index >= 0 && !isFixedLink(links.value[index])) {
+      links.value.splice(index, 1)
+    }
   }
 
   function updateLinkKind(link: LinkDraft, kind: LinkKind) {
+    // 伺服转台转发只支持 UDP
+    if (kind === 'serial' && link.protocol === 'ServoTurntable') return
     link.kind = kind
     if (kind === 'serial' && link.protocol === 'UAVInfo') {
       link.protocol = 'FP981C'
