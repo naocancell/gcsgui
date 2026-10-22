@@ -204,10 +204,16 @@ pub fn build_propeller_deice_outer_frame(work_mode: u8, param: u16, seq: u8) -> 
     pack_payload_frame(CODE_UPLINK, PAYLOAD_ID_DEICE, seq, &inner_cmd)
 }
 
+/// 恒功率模式目标功率上限 (W)：DFB-2000-48-A 额定功率 2000W
+pub const PROPELLER_DEICE_MAX_POWER_W: u16 = 2000;
+/// 恒温模式目标温度上限 (℃)
+pub const PROPELLER_DEICE_MAX_TEMP_C: u16 = 100;
+
 /// 按工作模式解析内层控制帧的参数字段（uint16）。
 ///
 /// 恒温模式目标温度在协议中为无符号数，负温若直接 `as u16` 会按补码变成
 /// 0xFFxx（如 -10℃ → 65526），因此在此拒绝下发。
+/// 恒功率上限 2000W、恒温上限 100℃，越界同样拒绝（后端兜底，不依赖前端校验）。
 pub fn resolve_propeller_deice_param(
     work_mode: u8,
     target_power: u16,
@@ -220,10 +226,19 @@ pub fn resolve_propeller_deice_param(
         0x01 => Err(format!(
             "指令调节参数只能为 0（减小 1%）或 1（增大 1%）: {target_power}"
         )),
-        0x02 => Ok(target_power), // 目标功率 (W)
+        // 目标功率 (W)
+        0x02 if target_power <= PROPELLER_DEICE_MAX_POWER_W => Ok(target_power),
+        0x02 => Err(format!(
+            "恒功率模式目标功率超出 0~{PROPELLER_DEICE_MAX_POWER_W}W: {target_power}W"
+        )),
         // 目标温度 (℃)
-        0x03 => u16::try_from(target_temp)
-            .map_err(|_| format!("恒温模式目标温度不能为负值: {target_temp}℃")),
+        0x03 => match u16::try_from(target_temp) {
+            Ok(temp) if temp <= PROPELLER_DEICE_MAX_TEMP_C => Ok(temp),
+            Ok(_) => Err(format!(
+                "恒温模式目标温度超出 0~{PROPELLER_DEICE_MAX_TEMP_C}℃: {target_temp}℃"
+            )),
+            Err(_) => Err(format!("恒温模式目标温度不能为负值: {target_temp}℃")),
+        },
         _ => Err(format!("未知的防除冰工作模式: 0x{work_mode:02X}")),
     }
 }
@@ -366,6 +381,17 @@ mod tests {
         assert_eq!(resolve_propeller_deice_param(0x02, 2000, -10), Ok(2000));
         assert_eq!(resolve_propeller_deice_param(0x01, 1, -10), Ok(1));
         assert_eq!(resolve_propeller_deice_param(0x00, 2000, 15), Ok(0));
+    }
+
+    #[test]
+    fn test_resolve_deice_param_rejects_power_and_temp_over_limit() {
+        assert_eq!(resolve_propeller_deice_param(0x02, 0, 0), Ok(0));
+        assert_eq!(resolve_propeller_deice_param(0x02, 2000, 0), Ok(2000));
+        assert!(resolve_propeller_deice_param(0x02, 2001, 0).is_err());
+        assert!(resolve_propeller_deice_param(0x02, u16::MAX, 0).is_err());
+        assert_eq!(resolve_propeller_deice_param(0x03, 0, 100), Ok(100));
+        assert!(resolve_propeller_deice_param(0x03, 0, 101).is_err());
+        assert!(resolve_propeller_deice_param(0x03, 0, i16::MAX).is_err());
     }
 
     #[test]
