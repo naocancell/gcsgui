@@ -10,22 +10,13 @@
 use crate::protocol::pod13::{
     encode_pod_injection, validate_vmc_code, PodCommandRequest, PodSendMode, POD_INJECT_CODE,
 };
-use crate::protocol::uplink::{FlightSwitchCommand, NoAckCommand, UplinkFrameContext};
+use crate::protocol::uplink::{FlightSwitchCommand, NoAckCommand};
 use crate::uplink::{CommandSendPolicy, UplinkCommandError, UplinkHandle};
 
 /// 上行 actor 的固定 tick 周期（毫秒）。
 const UPLINK_TICK_MS: u8 = 20;
 /// 连续指令的发送周期（毫秒），对应规范 5.2 的 10Hz 循环。
 const CONTINUOUS_PERIOD_MS: u8 = 100;
-
-fn command_context(aircraft_id: u8) -> UplinkFrameContext {
-    UplinkFrameContext {
-        destination: 0x02,
-        source: 0x01,
-        aircraft_id,
-        data_source: 0xAA,
-    }
-}
 
 fn uplink_error_message(error: UplinkCommandError) -> String {
     match error {
@@ -39,7 +30,6 @@ fn uplink_error_message(error: UplinkCommandError) -> String {
 #[tauri::command]
 pub async fn send_pod_command(
     handle: tauri::State<'_, UplinkHandle>,
-    aircraft_id: u8,
     request: PodCommandRequest,
 ) -> Result<(), String> {
     let payload = encode_pod_injection(&request)?;
@@ -49,7 +39,6 @@ pub async fn send_pod_command(
         PodSendMode::Continuous => CommandSendPolicy::UntilClearedPeriodic { interval_ticks },
     };
 
-    handle.configure(command_context(aircraft_id)).await?;
     if request.mode == PodSendMode::Continuous {
         // 长按控制采用替换语义：切换控制键时先清掉在途的吊舱注入，
         // 避免上一个按键的指令占位导致 Conflict。
@@ -80,12 +69,16 @@ pub async fn stop_pod_command(handle: tauri::State<'_, UplinkHandle>) -> Result<
 #[tauri::command]
 pub async fn submit_vmc_command(
     handle: tauri::State<'_, UplinkHandle>,
-    aircraft_id: u8,
     switch_code: u8,
 ) -> Result<(), String> {
     let code = validate_vmc_code(switch_code)?;
+    log::info!(
+        "[操作] VMC 通道指令 0x{:02X}，机号 {}",
+        code,
+        handle.aircraft_id()
+    );
     handle
-        .submit_flight_switch(aircraft_id, FlightSwitchCommand::Vmc(code))
+        .submit_flight_switch(FlightSwitchCommand::Vmc(code))
         .await
         .map_err(uplink_error_message)
 }

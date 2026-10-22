@@ -4,11 +4,18 @@ use std::fs;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
+/// 未配置时的默认上行机号（沿用此前前端写死的 255）
+pub const DEFAULT_UPLINK_AIRCRAFT_ID: u8 = 255;
+
 #[derive(Default, Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct CommsConfig {
     pub udp: Vec<UdpConfig>,
     pub serial: Vec<SerialConfig>,
+    /// 上行机号（0~255）：所有带机号字段的上行帧统一使用该值。
+    /// 为空表示未人工设置，按 [`DEFAULT_UPLINK_AIRCRAFT_ID`] 处理。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uplink_aircraft_id: Option<u8>,
 }
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Copy)]
 #[serde(rename_all = "lowercase")]
@@ -79,6 +86,12 @@ fn default_parity() -> ParityConfig {
 }
 
 impl CommsConfig {
+    /// 实际生效的上行机号
+    pub fn effective_uplink_aircraft_id(&self) -> u8 {
+        self.uplink_aircraft_id
+            .unwrap_or(DEFAULT_UPLINK_AIRCRAFT_ID)
+    }
+
     pub fn normalize(&mut self) {
         for udp in &mut self.udp {
             if udp.target_port == 0 {

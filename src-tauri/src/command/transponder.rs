@@ -8,22 +8,13 @@ use crate::protocol::fp95_command::{
     AIR_TRAFFIC_BIND_CODE, AIR_TRAFFIC_QUERY_CODE, SWITCH_BIND_CODE, SWITCH_QUERY_CODE,
     WEIGHT_BIND_CODE, WEIGHT_QUERY_CODE,
 };
-use crate::protocol::uplink::{NoAckCommand, UplinkFrameContext};
+use crate::protocol::uplink::NoAckCommand;
 use crate::uplink::{
     CommandSendPolicy, ExpectedResponse, FP95Response, FP95ResponseCoordinator, UplinkCommandError,
     UplinkHandle,
 };
 
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
-
-fn command_context(aircraft_id: u8) -> UplinkFrameContext {
-    UplinkFrameContext {
-        destination: 0x02,
-        source: 0x01,
-        aircraft_id,
-        data_source: 0xAA,
-    }
-}
 
 fn uplink_error_message(error: UplinkCommandError) -> String {
     match error {
@@ -90,17 +81,23 @@ where
 async fn submit_acknowledged_command(
     handle: &UplinkHandle,
     coordinator: &FP95ResponseCoordinator,
-    aircraft_id: u8,
     function_code: u8,
     payload: [u8; 15],
     expected: ExpectedResponse,
 ) -> Result<FP95Response, String> {
+    // 机号统一取自通信配置：上行帧与 0x80 回报匹配使用同一机号
+    let aircraft_id = handle.aircraft_id();
+    log::info!(
+        "[操作] FP95 应答类指令 0x{:02X}，机号 {}，数据 {:02X?}",
+        function_code,
+        aircraft_id,
+        payload
+    );
     execute_with_response(
         coordinator,
         aircraft_id,
         expected,
         || async {
-            handle.configure(command_context(aircraft_id)).await?;
             handle
                 .submit_command(
                     NoAckCommand {
@@ -122,14 +119,12 @@ async fn submit_acknowledged_command(
 pub async fn bind_transponder_switches(
     handle: tauri::State<'_, UplinkHandle>,
     coordinator: tauri::State<'_, FP95ResponseCoordinator>,
-    aircraft_id: u8,
     config: TransponderSwitchConfig,
 ) -> Result<(), String> {
     let payload = encode_switch_binding(&config)?;
     match submit_acknowledged_command(
         &handle,
         &coordinator,
-        aircraft_id,
         SWITCH_BIND_CODE,
         payload,
         ExpectedResponse::SwitchBinding(payload),
@@ -145,12 +140,10 @@ pub async fn bind_transponder_switches(
 pub async fn query_transponder_switches(
     handle: tauri::State<'_, UplinkHandle>,
     coordinator: tauri::State<'_, FP95ResponseCoordinator>,
-    aircraft_id: u8,
 ) -> Result<TransponderSwitchReadback, String> {
     match submit_acknowledged_command(
         &handle,
         &coordinator,
-        aircraft_id,
         SWITCH_QUERY_CODE,
         [0u8; 15],
         ExpectedResponse::SwitchQuery,
@@ -166,14 +159,12 @@ pub async fn query_transponder_switches(
 pub async fn bind_air_traffic_params(
     handle: tauri::State<'_, UplinkHandle>,
     coordinator: tauri::State<'_, FP95ResponseCoordinator>,
-    aircraft_id: u8,
     config: AirTrafficParamConfig,
 ) -> Result<(), String> {
     let payload = encode_air_traffic_binding(&config)?;
     match submit_acknowledged_command(
         &handle,
         &coordinator,
-        aircraft_id,
         AIR_TRAFFIC_BIND_CODE,
         payload,
         ExpectedResponse::AirTrafficBinding(payload),
@@ -189,12 +180,10 @@ pub async fn bind_air_traffic_params(
 pub async fn query_air_traffic_params(
     handle: tauri::State<'_, UplinkHandle>,
     coordinator: tauri::State<'_, FP95ResponseCoordinator>,
-    aircraft_id: u8,
 ) -> Result<AirTrafficParamReadback, String> {
     match submit_acknowledged_command(
         &handle,
         &coordinator,
-        aircraft_id,
         AIR_TRAFFIC_QUERY_CODE,
         [0u8; 15],
         ExpectedResponse::AirTrafficQuery,
@@ -210,14 +199,12 @@ pub async fn query_air_traffic_params(
 pub async fn bind_weight_params(
     handle: tauri::State<'_, UplinkHandle>,
     coordinator: tauri::State<'_, FP95ResponseCoordinator>,
-    aircraft_id: u8,
     config: WeightBindingConfig,
 ) -> Result<(), String> {
     let payload = encode_weight_binding(&config)?;
     match submit_acknowledged_command(
         &handle,
         &coordinator,
-        aircraft_id,
         WEIGHT_BIND_CODE,
         payload,
         ExpectedResponse::WeightBinding(payload),
@@ -233,12 +220,10 @@ pub async fn bind_weight_params(
 pub async fn query_weight_params(
     handle: tauri::State<'_, UplinkHandle>,
     coordinator: tauri::State<'_, FP95ResponseCoordinator>,
-    aircraft_id: u8,
 ) -> Result<WeightReadback, String> {
     match submit_acknowledged_command(
         &handle,
         &coordinator,
-        aircraft_id,
         WEIGHT_QUERY_CODE,
         [0u8; 15],
         ExpectedResponse::WeightQuery,

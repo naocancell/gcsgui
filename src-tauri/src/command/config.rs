@@ -155,12 +155,28 @@ pub async fn save_comms_config(
     app: tauri::AppHandle,
     state: tauri::State<'_, state::AppState>,
     router_tx: tauri::State<'_, crate::comms::RouterTx>,
+    uplink: tauri::State<'_, crate::uplink::UplinkHandle>,
     mut config: CommsConfig,
 ) -> Result<String, crate::error::AppError> {
     config.normalize();
+    // 调用方未携带机号时沿用配置文件中的已有值，避免保存链路时把人工设置的机号冲掉
+    if config.uplink_aircraft_id.is_none() {
+        config.uplink_aircraft_id = CommsConfig::load(&app).uplink_aircraft_id;
+    }
     config
         .save(&app)
         .map_err(|e| crate::error::AppError::system(10002, format!("保存通信配置文件失败: {}", e)))?;
+
+    // 先应用上行机号，再热重载链路（链路启动失败不影响机号生效）
+    let aircraft_id = config.effective_uplink_aircraft_id();
+    let previous_id = uplink.aircraft_id();
+    uplink
+        .set_aircraft_id(aircraft_id)
+        .await
+        .map_err(|e| crate::error::AppError::uplink(40001, e))?;
+    if previous_id != aircraft_id {
+        log::info!("[操作] 上行机号由 {} 修改为 {}", previous_id, aircraft_id);
+    }
     apply_comms_hot_reload(&app, &state, &router_tx, &config)
         .await
         .map_err(|e| crate::error::AppError::comms(20001, e))?;

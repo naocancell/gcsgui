@@ -1,19 +1,12 @@
-use crate::protocol::uplink::{
-    NoAckCommand, PeriodicNavigationData, UplinkControlState, UplinkFrameContext,
-};
+use crate::protocol::uplink::{NoAckCommand, PeriodicNavigationData, UplinkControlState};
 use crate::uplink::{
     CommandSendPolicy, FlightSwitchCommand, UplinkCommandError, UplinkHandle, UplinkStatus,
 };
 
+/// 查询当前生效的上行机号（由通信配置统一设置，各业务指令不再单独传机号）
 #[tauri::command]
-pub async fn configure_uplink(
-    handle: tauri::State<'_, UplinkHandle>,
-    context: UplinkFrameContext,
-) -> Result<(), crate::error::AppError> {
-    handle
-        .configure(context)
-        .await
-        .map_err(|e| crate::error::AppError::uplink(40001, e))
+pub fn get_uplink_aircraft_id(handle: tauri::State<'_, UplinkHandle>) -> u8 {
+    handle.aircraft_id()
 }
 
 #[tauri::command]
@@ -44,10 +37,15 @@ pub async fn submit_uplink_command(
 #[tauri::command]
 pub async fn submit_flight_switch_command(
     handle: tauri::State<'_, UplinkHandle>,
-    aircraft_id: u8,
     command: FlightSwitchCommand,
 ) -> Result<(), UplinkCommandError> {
-    handle.submit_flight_switch(aircraft_id, command).await
+    log::info!(
+        "[操作] 飞行开关指令 {:?}（0x{:02X}），机号 {}",
+        command,
+        command.code(),
+        handle.aircraft_id()
+    );
+    handle.submit_flight_switch(command).await
 }
 
 #[tauri::command]

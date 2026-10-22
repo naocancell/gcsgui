@@ -366,6 +366,7 @@ onBeforeUnmount(() => {
   <CommsConfigModal
     v-model:show="showUdpModal"
     v-model:tile-proxy-url="tileProxyUrlInput"
+    v-model:uplink-aircraft-id="uavStore.uplinkAircraftId"
     :tile-testing="tileTesting"
     :tile-test-result="tileTestResult"
     :default-tile-proxy-url="defaultTileProxyUrl"

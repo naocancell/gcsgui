@@ -50,6 +50,20 @@ export interface PersistedSerialConfig {
 export interface PersistedCommsConfig {
   udp: PersistedUdpConfig[]
   serial: PersistedSerialConfig[]
+  /** 上行机号（0~255），所有上行指令统一使用；缺省时后端按 255 处理 */
+  uplink_aircraft_id?: number
+}
+
+/** 未人工设置时的默认上行机号（与后端 DEFAULT_UPLINK_AIRCRAFT_ID 一致） */
+export const DEFAULT_UPLINK_AIRCRAFT_ID = 255
+
+export function validateUplinkAircraftId(value: unknown): string | null {
+  const valid =
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= 255
+  return valid ? null : '上行机号须为 0~255 的整数'
 }
 
 let nextLinkId = 1

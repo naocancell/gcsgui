@@ -8,7 +8,7 @@ pub use response::{ExpectedResponse, FP95Response, FP95ResponseCoordinator, Pend
 
 use crate::state::AppState;
 
-pub fn start(state: AppState) -> UplinkHandle {
+pub fn start(state: AppState, aircraft_id: u8) -> UplinkHandle {
     let sink = dispatcher::start_dispatcher(state);
-    actor::start_actor(sink)
+    actor::start_actor(sink, aircraft_id)
 }

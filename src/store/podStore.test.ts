@@ -112,7 +112,6 @@ describe('podStore hold and step timing', () => {
     expect(invokeMock).toHaveBeenCalledWith(
       'send_pod_command',
       expect.objectContaining({
-        aircraftId: 7,
         request: expect.objectContaining({
           switchCode: POD_GUIDE_CODE,
           mode: 'continuous',
@@ -182,14 +181,13 @@ describe('podStore without telemetry', () => {
     useUavStore().fp95Aggregate = null
   })
 
-  it('sends a single command with fallback aircraft id when FP95 telemetry is missing', async () => {
+  it('sends a single command without aircraft id (backend uses configured id)', async () => {
     const store = usePodStore()
     await store.sendSingle(POD_MODE_COMMANDS[0])
 
     expect(invokeMock).toHaveBeenCalledWith(
       'send_pod_command',
       expect.objectContaining({
-        aircraftId: 255,
         request: expect.objectContaining({
           switchCode: POD_MODE_COMMANDS[0].code,
           mode: 'single',
@@ -206,7 +204,6 @@ describe('podStore without telemetry', () => {
     expect(invokeMock).toHaveBeenCalledWith(
       'send_pod_command',
       expect.objectContaining({
-        aircraftId: 255,
         request: expect.objectContaining({
           switchCode: POD_ZOOM_COMMANDS[0].code,
           mode: 'continuous',
@@ -222,9 +219,18 @@ describe('podStore without telemetry', () => {
     expect(invokeMock).toHaveBeenCalledWith(
       'submit_vmc_command',
       expect.objectContaining({
-        aircraftId: 255,
         switchCode: VMC_RATE_COMMANDS[0].code,
       }),
     )
+  })
+
+  it('never passes a per-command aircraft id to the backend', async () => {
+    const store = usePodStore()
+    await store.sendSingle(POD_MODE_COMMANDS[0])
+    await store.sendVmc(VMC_RATE_COMMANDS[0])
+
+    for (const [, args] of invokeMock.mock.calls) {
+      expect(args).not.toHaveProperty('aircraftId')
+    }
   })
 })

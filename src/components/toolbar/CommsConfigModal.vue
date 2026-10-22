@@ -30,6 +30,29 @@
       >
         <!-- 标签页 1：多通道通信链路 -->
         <n-tab-pane name="links" tab="通信链路配置">
+          <!-- 上行机号：所有上行指令统一使用，随「保存配置」写入配置文件 -->
+          <div class="comms-uplink-card">
+            <div class="comms-uplink-card__row">
+              <span class="comms-uplink-card__label">上行机号</span>
+              <n-input-number
+                :value="uplinkAircraftId"
+                :min="0"
+                :max="255"
+                :precision="0"
+                :show-button="false"
+                size="small"
+                placeholder="0~255"
+                class="comms-uplink-card__input"
+                data-testid="uplink-aircraft-id-input"
+                @update:value="$emit('update:uplinkAircraftId', $event)"
+              />
+              <span class="comms-uplink-card__range">范围 0~255</span>
+            </div>
+            <div class="comms-uplink-card__hint">
+              全部上行指令（周期帧、飞行开关、吊舱、应答机/航管/重量装订）统一使用此机号，保存配置后写入配置文件并立即生效。
+            </div>
+          </div>
+
           <div v-if="links.length === 0" class="comms-empty-state">
             暂无链路，请点击右上角“新增链路”。
           </div>
@@ -338,6 +361,7 @@ defineProps<{
   tileTesting?: boolean
   tileTestResult?: TileTestResult | null
   defaultTileProxyUrl?: string
+  uplinkAircraftId?: number | null
 }>()
 
 defineEmits<{
@@ -347,6 +371,7 @@ defineEmits<{
   (e: 'removeLink', link: LinkDraft): void
   (e: 'saveConfig'): void
   (e: 'update:tileProxyUrl', val: string): void
+  (e: 'update:uplinkAircraftId', val: number | null): void
   (e: 'testTileConnection'): void
   (e: 'resetTileUrl'): void
 }>()
@@ -375,6 +400,40 @@ defineEmits<{
 
 .comms-tabs {
   margin-top: 4px;
+}
+
+.comms-uplink-card {
+  padding: 0.6rem 0.8rem;
+  margin-bottom: 0.6rem;
+  border: 1px solid #2f5f8a;
+  border-radius: 6px;
+  background: rgba(64, 152, 252, 0.06);
+}
+
+.comms-uplink-card__row {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.comms-uplink-card__label {
+  font-weight: bold;
+}
+
+.comms-uplink-card__input {
+  width: 120px;
+}
+
+.comms-uplink-card__range {
+  color: #999;
+  font-size: 12px;
+}
+
+.comms-uplink-card__hint {
+  margin-top: 4px;
+  color: #aaa;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .comms-empty-state {

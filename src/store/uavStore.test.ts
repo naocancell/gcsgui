@@ -9,6 +9,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async () => undefined),
 }))
 
+import { invoke } from '@tauri-apps/api/core'
 import { useUavStore } from './uavStore'
 import type { SimulatedGuidance } from '@/utils/map/simulatedGuidance'
 
@@ -291,7 +292,6 @@ describe('uavStore transponder targets', () => {
   })
 })
 
-
 describe('uavStore simulated guidance', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -375,5 +375,83 @@ describe('uavStore simulated guidance', () => {
     })
 
     store.toggleMockUavInfoService()
+  })
+})
+
+describe('uavStore uplink aircraft id', () => {
+  const invokeMock = vi.mocked(invoke)
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    invokeMock.mockReset()
+    invokeMock.mockResolvedValue(undefined)
+    vi.spyOn(console, 'log').mockImplementation(() => undefined)
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('loads the uplink aircraft id from the comms config file', async () => {
+    invokeMock.mockImplementation(async (cmd) =>
+      cmd === 'get_comms_config'
+        ? { udp: [], serial: [], uplink_aircraft_id: 42 }
+        : undefined,
+    )
+    const store = useUavStore()
+    await store.loadCommsConfig()
+
+    expect(store.uplinkAircraftId).toBe(42)
+    expect(store.currentFp95AircraftId()).toBe(42)
+  })
+
+  it('falls back to 255 when the config file has no uplink aircraft id', async () => {
+    invokeMock.mockImplementation(async (cmd) =>
+      cmd === 'get_comms_config' ? { udp: [], serial: [] } : undefined,
+    )
+    const store = useUavStore()
+    store.uplinkAircraftId = 9
+    await store.loadCommsConfig()
+
+    expect(store.uplinkAircraftId).toBe(255)
+  })
+
+  it('saves the uplink aircraft id together with the comms config', async () => {
+    const store = useUavStore()
+    store.uplinkAircraftId = 0
+    await store.saveCommsConfig()
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      'save_comms_config',
+      expect.objectContaining({
+        config: expect.objectContaining({ uplink_aircraft_id: 0 }),
+      }),
+    )
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      'configure_uplink',
+      expect.anything(),
+    )
+  })
+
+  it.each([256, -1, 1.5, null])(
+    'rejects invalid uplink aircraft id %s before saving',
+    async (value) => {
+      const store = useUavStore()
+      store.uplinkAircraftId = value
+      await expect(store.saveCommsConfig()).rejects.toThrow('0~255')
+      expect(invokeMock).not.toHaveBeenCalledWith(
+        'save_comms_config',
+        expect.anything(),
+      )
+    },
+  )
+
+  it('sends flight switch commands without a per-command aircraft id', async () => {
+    const store = useUavStore()
+    await store.controlFp95AvionicsSwitch('payload', true)
+
+    expect(invokeMock).toHaveBeenCalledWith('submit_flight_switch_command', {
+      command: 'payloadOn',
+    })
   })
 })

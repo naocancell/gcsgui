@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::future::Future;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
@@ -75,16 +76,14 @@ impl ActiveCommand {
 #[derive(Debug, Clone, Copy)]
 struct ActiveFlightSwitch {
     command: FlightSwitchCommand,
-    context: UplinkFrameContext,
     command_frames_remaining: u8,
     release_frames_remaining: u8,
 }
 
 impl ActiveFlightSwitch {
-    fn new(command: FlightSwitchCommand, context: UplinkFrameContext) -> Self {
+    fn new(command: FlightSwitchCommand) -> Self {
         Self {
             command,
-            context,
             command_frames_remaining: 6,
             release_frames_remaining: 4,
         }
@@ -115,7 +114,8 @@ impl ActiveFlightSwitch {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UplinkStatus {
-    pub configured: bool,
+    /// 当前生效的上行机号（来自通信配置，全部上行帧统一使用）
+    pub aircraft_id: u8,
     pub sequence: u8,
     pub has_active_command: bool,
     pub active_function_code: Option<u8>,
@@ -141,8 +141,23 @@ pub enum UplinkCommandError {
     },
 }
 
+/// 上行帧固定的目的地址 / 源地址 / 数据来源
+const UPLINK_DESTINATION: u8 = 0x02;
+const UPLINK_SOURCE: u8 = 0x01;
+const UPLINK_DATA_SOURCE: u8 = 0xAA;
+
+pub(crate) fn uplink_frame_context(aircraft_id: u8) -> UplinkFrameContext {
+    UplinkFrameContext {
+        destination: UPLINK_DESTINATION,
+        source: UPLINK_SOURCE,
+        aircraft_id,
+        data_source: UPLINK_DATA_SOURCE,
+    }
+}
+
 pub(crate) struct UplinkCore {
-    frame_context: Option<UplinkFrameContext>,
+    /// 上行机号：仅能通过通信配置修改，各业务指令不得自行覆盖
+    aircraft_id: u8,
     control: UplinkControlState,
     periodic: PeriodicNavigationData,
     active_command: Option<ActiveCommand>,
@@ -153,9 +168,9 @@ pub(crate) struct UplinkCore {
 }
 
 impl UplinkCore {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(aircraft_id: u8) -> Self {
         Self {
-            frame_context: None,
+            aircraft_id,
             control: UplinkControlState::default(),
             periodic: PeriodicNavigationData::default(),
             active_command: None,
@@ -166,16 +181,12 @@ impl UplinkCore {
         }
     }
 
-    pub(crate) fn configure(&mut self, context: UplinkFrameContext) -> Result<(), String> {
-        encode_uplink_frame(
-            context,
-            self.control,
-            self.sequence,
-            UplinkPayload::Periodic(self.periodic),
-        )
-        .map_err(|error| error.to_string())?;
-        self.frame_context = Some(context);
-        Ok(())
+    fn frame_context(&self) -> UplinkFrameContext {
+        uplink_frame_context(self.aircraft_id)
+    }
+
+    pub(crate) fn set_aircraft_id(&mut self, aircraft_id: u8) {
+        self.aircraft_id = aircraft_id;
     }
 
     pub(crate) fn update_control(&mut self, control: UplinkControlState) {
@@ -186,14 +197,8 @@ impl UplinkCore {
         &mut self,
         periodic: PeriodicNavigationData,
     ) -> Result<(), String> {
-        let validation_context = self.frame_context.unwrap_or(UplinkFrameContext {
-            destination: 0,
-            source: 0,
-            aircraft_id: 0,
-            data_source: 0xAA,
-        });
         encode_uplink_frame(
-            validation_context,
+            self.frame_context(),
             self.control,
             self.sequence,
             UplinkPayload::Periodic(periodic),
@@ -236,7 +241,6 @@ impl UplinkCore {
 
     pub(crate) fn submit_flight_switch(
         &mut self,
-        aircraft_id: u8,
         command: FlightSwitchCommand,
     ) -> Result<(), UplinkCommandError> {
         if self.active_flight_switch.is_some() {
@@ -245,20 +249,13 @@ impl UplinkCore {
                 status: self.status(),
             });
         }
-        let context = UplinkFrameContext {
-            destination: 0x02,
-            source: 0x01,
-            aircraft_id,
-            data_source: 0xAA,
-        };
-        self.frame_context = Some(context);
-        self.active_flight_switch = Some(ActiveFlightSwitch::new(command, context));
+        self.active_flight_switch = Some(ActiveFlightSwitch::new(command));
         Ok(())
     }
 
     pub(crate) fn status(&self) -> UplinkStatus {
         UplinkStatus {
-            configured: self.frame_context.is_some(),
+            aircraft_id: self.aircraft_id,
             sequence: self.sequence,
             has_active_command: self.active_command.is_some(),
             active_function_code: self
@@ -278,17 +275,7 @@ impl UplinkCore {
         if !sink.has_targets() {
             return;
         }
-        let fallback_context = UplinkFrameContext {
-            destination: 0x02,
-            source: 0x01,
-            aircraft_id: 0,
-            data_source: 0xAA,
-        };
-        let context = self
-            .active_flight_switch
-            .map(|active| active.context)
-            .or(self.frame_context)
-            .unwrap_or(fallback_context);
+        let context = self.frame_context();
 
         let flight_switch_active = self.active_flight_switch.is_some();
         // wait_ticks > 0 时本 tick 发周期常发帧，指令仍占用槽位；用户松开由 clear_command_if 清空。
@@ -344,9 +331,9 @@ impl UplinkCore {
 }
 
 enum UplinkMessage {
-    Configure {
-        context: UplinkFrameContext,
-        reply: oneshot::Sender<Result<(), String>>,
+    SetAircraftId {
+        aircraft_id: u8,
+        reply: oneshot::Sender<()>,
     },
     UpdateControl {
         control: UplinkControlState,
@@ -362,7 +349,6 @@ enum UplinkMessage {
         reply: oneshot::Sender<Result<(), UplinkCommandError>>,
     },
     SubmitFlightSwitch {
-        aircraft_id: u8,
         command: FlightSwitchCommand,
         reply: oneshot::Sender<Result<(), UplinkCommandError>>,
     },
@@ -381,21 +367,31 @@ enum UplinkMessage {
 #[derive(Clone)]
 pub struct UplinkHandle {
     tx: mpsc::Sender<UplinkMessage>,
+    /// 当前上行机号镜像（供应答事务匹配回报等同步读取）
+    aircraft_id: Arc<AtomicU8>,
 }
 
 impl UplinkHandle {
-    pub async fn configure(&self, context: UplinkFrameContext) -> Result<(), String> {
+    /// 当前生效的上行机号
+    pub fn aircraft_id(&self) -> u8 {
+        self.aircraft_id.load(Ordering::Acquire)
+    }
+
+    /// 更新上行机号（仅由通信配置保存流程调用）
+    pub async fn set_aircraft_id(&self, aircraft_id: u8) -> Result<(), String> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
-            .send(UplinkMessage::Configure {
-                context,
+            .send(UplinkMessage::SetAircraftId {
+                aircraft_id,
                 reply: reply_tx,
             })
             .await
             .map_err(|_| "上行 Actor 不可用".to_string())?;
         reply_rx
             .await
-            .map_err(|_| "上行 Actor 未返回配置结果".to_string())?
+            .map_err(|_| "上行 Actor 未确认机号更新".to_string())?;
+        self.aircraft_id.store(aircraft_id, Ordering::Release);
+        Ok(())
     }
 
     pub async fn update_control(&self, control: UplinkControlState) -> Result<(), String> {
@@ -476,13 +472,11 @@ impl UplinkHandle {
 
     pub async fn submit_flight_switch(
         &self,
-        aircraft_id: u8,
         command: FlightSwitchCommand,
     ) -> Result<(), UplinkCommandError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(UplinkMessage::SubmitFlightSwitch {
-                aircraft_id,
                 command,
                 reply: reply_tx,
             })
@@ -511,10 +505,11 @@ impl UplinkHandle {
 
 fn build_actor(
     sink: Arc<dyn UplinkFrameSink>,
+    aircraft_id: u8,
 ) -> (UplinkHandle, impl Future<Output = ()> + Send + 'static) {
     let (tx, mut rx) = mpsc::channel(32);
     let task = async move {
-        let mut core = UplinkCore::new();
+        let mut core = UplinkCore::new(aircraft_id);
         let mut interval = tokio::time::interval(Duration::from_millis(20));
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         interval.tick().await;
@@ -526,8 +521,9 @@ fn build_actor(
                         break;
                     };
                     match message {
-                        UplinkMessage::Configure { context, reply } => {
-                            let _ = reply.send(core.configure(context));
+                        UplinkMessage::SetAircraftId { aircraft_id, reply } => {
+                            core.set_aircraft_id(aircraft_id);
+                            let _ = reply.send(());
                         }
                         UplinkMessage::UpdateControl { control, reply } => {
                             core.update_control(control);
@@ -539,8 +535,8 @@ fn build_actor(
                         UplinkMessage::SubmitCommand { command, policy, reply } => {
                             let _ = reply.send(core.submit_command(command, policy));
                         }
-                        UplinkMessage::SubmitFlightSwitch { aircraft_id, command, reply } => {
-                            let _ = reply.send(core.submit_flight_switch(aircraft_id, command));
+                        UplinkMessage::SubmitFlightSwitch { command, reply } => {
+                            let _ = reply.send(core.submit_flight_switch(command));
                         }
                         UplinkMessage::ClearCommand { reply } => {
                             core.clear_command();
@@ -558,11 +554,17 @@ fn build_actor(
             }
         }
     };
-    (UplinkHandle { tx }, task)
+    (
+        UplinkHandle {
+            tx,
+            aircraft_id: Arc::new(AtomicU8::new(aircraft_id)),
+        },
+        task,
+    )
 }
 
-pub(crate) fn start_actor(sink: Arc<dyn UplinkFrameSink>) -> UplinkHandle {
-    let (handle, task) = build_actor(sink);
+pub(crate) fn start_actor(sink: Arc<dyn UplinkFrameSink>, aircraft_id: u8) -> UplinkHandle {
+    let (handle, task) = build_actor(sink, aircraft_id);
     tauri::async_runtime::spawn(task);
     handle
 }
@@ -615,15 +617,7 @@ mod tests {
     }
 
     fn configured_core() -> UplinkCore {
-        let mut core = UplinkCore::new();
-        core.configure(UplinkFrameContext {
-            destination: 0x02,
-            source: 0x01,
-            aircraft_id: 1,
-            data_source: 0xAA,
-        })
-        .expect("configure uplink");
-        core
+        UplinkCore::new(1)
     }
 
     fn pod_inject_command() -> NoAckCommand {
@@ -711,6 +705,27 @@ mod tests {
         assert_eq!(&frame[18..20], &[0, 0]);
         assert!(frame[20..29].iter().all(|&byte| byte == 0));
     }
+
+    #[test]
+    fn all_uplink_frames_use_configured_aircraft_id() {
+        let mut core = UplinkCore::new(42);
+        let sink = RecordingSink::new();
+
+        // 周期常发帧
+        core.tick(&sink);
+        assert_eq!(sink.last()[4], 42);
+
+        // 飞行开关指令不再携带独立机号，沿用配置机号
+        core.submit_flight_switch(FlightSwitchCommand::PayloadOn)
+            .unwrap();
+        core.tick(&sink);
+        assert_eq!(sink.last()[4], 42);
+        assert_eq!(sink.last()[6], FlightSwitchCommand::PayloadOn.code());
+
+        // 修改配置机号后立即生效
+        core.set_aircraft_id(7);
+        core.tick(&sink);
+        assert_eq!(sink.last()[4], 7);
+        assert_eq!(core.status().aircraft_id, 7);
+    }
 }
-
-
