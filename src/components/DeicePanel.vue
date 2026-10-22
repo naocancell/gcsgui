@@ -37,13 +37,6 @@
           >
             加热总开关 · {{ heaterMasterText }}
           </span>
-          <span
-            class="chip"
-            :class="linkOnline ? 'chip-blue' : 'chip-plain'"
-            :title="`防除冰${hasData ? '在线' : '离线'} · 载荷${hasPayload ? '在线' : '离线'}`"
-          >
-            回传链路 {{ linkText }}
-          </span>
           <span class="chip chip-plain">
             继电器已闭合 {{ closedRelayCount }}/16
           </span>
@@ -588,23 +581,24 @@ const {
   tempStatusText,
 } = useDeiceMonitor(uavStore)
 
-const hasPayload = computed(() => payloadStore.currentPayload !== null)
-
 // 顶栏：加热总开关 = 防除冰控制器处于非关闭模式（0x00 以外）
 const heaterMasterOn = computed(
   () => hasData.value && deiceData.value?.workMode !== 0,
 )
 const heaterMasterText = computed(() => {
   if (!hasData.value) return '离线'
-  return heaterMasterOn.value ? '已闭合' : '已断开'
-})
-
-// 顶栏：回传链路状态（防除冰 + 载荷两路遥测）
-const linkOnline = computed(() => hasData.value || hasPayload.value)
-const linkText = computed(() => {
-  if (hasData.value && hasPayload.value) return '正常'
-  if (linkOnline.value) return '部分在线'
-  return '离线'
+  switch (deiceData.value?.workMode) {
+    case 0x00:
+      return '关闭模式'
+    case 0x01:
+      return '指令调节模式'
+    case 0x02:
+      return '恒功率模式'
+    case 0x03:
+      return '恒温模式'
+    default:
+      return deiceData.value?.workModeDesc || '未知模式'
+  }
 })
 
 const powerDeviationText = computed(() => {
