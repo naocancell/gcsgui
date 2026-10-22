@@ -29,6 +29,18 @@ export interface LinkRecordStatus {
   dropped: number
 }
 
+/** 与后端 recorder::validated::AircraftRecordStatus 对应：按飞机号记录的校验数据 */
+export interface AircraftRecordStatus {
+  uavId: number
+  file: string
+  startedAtMs: number
+  bytes: number
+  records: number
+  dropped: number
+  /** 已记录的数据类别，如 ['FP95', '载荷'] */
+  sources: string[]
+}
+
 /** 与后端 recorder::writer::RecorderStatus 对应（serde camelCase） */
 export interface RecorderStatus {
   active: boolean
@@ -37,6 +49,13 @@ export interface RecorderStatus {
   totalBytes: number
   totalRecords: number
   totalDropped: number
+  /** 旧版后端无此字段 */
+  aircraft?: AircraftRecordStatus[]
+}
+
+function fileNameOf(path: string): string {
+  const idx = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  return idx >= 0 ? path.slice(idx + 1) : path
 }
 
 export const useReplayStore = defineStore('replay', () => {
@@ -51,15 +70,17 @@ export const useReplayStore = defineStore('replay', () => {
     () => recorderStatus.value?.activeCount ?? 0,
   )
   const recordingLinks = computed(() => {
-    return (recorderStatus.value?.links ?? []).map((link) => {
-      const file = link.file
-      const idx = Math.max(file.lastIndexOf('/'), file.lastIndexOf('\\'))
-      const fileName = idx >= 0 ? file.slice(idx + 1) : file
-      return {
-        ...link,
-        fileName,
-      }
-    })
+    return (recorderStatus.value?.links ?? []).map((link) => ({
+      ...link,
+      fileName: fileNameOf(link.file),
+    }))
+  })
+  /** 按飞机号记录校验数据的会话 */
+  const recordingAircraft = computed(() => {
+    return (recorderStatus.value?.aircraft ?? []).map((item) => ({
+      ...item,
+      fileName: fileNameOf(item.file),
+    }))
   })
 
   let unlistenReplay: UnlistenFn | null = null
@@ -150,6 +171,7 @@ export const useReplayStore = defineStore('replay', () => {
     isRecording,
     activeRecordingsCount,
     recordingLinks,
+    recordingAircraft,
     ensureListeners,
     dispose,
     startReplayFromFile,

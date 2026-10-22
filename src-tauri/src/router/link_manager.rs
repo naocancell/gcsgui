@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::comms::{ProtocolType, RawData};
 use crate::protocol::uav_info::UAVInfo;
+use crate::recorder::ValidatedKind;
 use crate::router::rx_arbiter::{
     FrameObservation, RxArbiter, RxArbiterConfig, RxDecision, RxHealthSnapshot, StreamKey,
 };
@@ -105,7 +106,12 @@ impl RouterCore {
                 app_state,
             ),
             ProtocolType::UAVInfo => {
-                extract_and_process_uav_info(&mut buffer.data, raw.received_at, app_state);
+                extract_and_process_uav_info(
+                    &mut buffer.data,
+                    &raw.source_link,
+                    raw.received_at,
+                    app_state,
+                );
                 if datagram && !buffer.data.is_empty() {
                     log::debug!(
                         "链路 {} UAVInfo 数据报长度 {} 不是 75 的整数倍，丢弃尾部 {} 字节",
@@ -394,6 +400,14 @@ fn process_fp981c_frame(
     match ParsedSubFrame::from_bytes(frame_id, subframe_payload) {
         Ok(parsed) => {
             app_state.metrics.inc_ok();
+            // 校验记录：CRC 通过 + 仲裁采纳 + 解析成功的帧按飞机号落盘
+            app_state.recorder.record_validated(
+                source_link,
+                ValidatedKind::Fp981c,
+                uav_id,
+                frame,
+                received_at,
+            );
             let mut agg = app_state.fp981c_pool.entry(uav_id).or_insert_with(|| {
                 crate::protocol::fp981c::FP981CAggregate {
                     uav_id,
@@ -413,7 +427,12 @@ fn process_fp981c_frame(
 
 // ==================== UAVInfo 切帧 + 解析 ====================
 
-fn extract_and_process_uav_info(buffer: &mut BytesMut, received_at: Instant, app_state: &AppState) {
+fn extract_and_process_uav_info(
+    buffer: &mut BytesMut,
+    source_link: &str,
+    received_at: Instant,
+    app_state: &AppState,
+) {
     while buffer.len() >= 75 {
         let frame = buffer.split_to(75);
 
@@ -426,6 +445,13 @@ fn extract_and_process_uav_info(buffer: &mut BytesMut, received_at: Instant, app
                     continue;
                 };
                 app_state.metrics.inc_ok();
+                app_state.recorder.record_validated(
+                    source_link,
+                    ValidatedKind::UavInfo,
+                    uav_id,
+                    &frame,
+                    received_at,
+                );
                 app_state.uav_pool.insert(uav_id, info);
                 app_state.uav_seen.insert(uav_id, received_at);
             }
@@ -544,7 +570,13 @@ fn extract_and_process_fp95_and_payload(
                     continue;
                 }
                 let frame = buffer.split_to(total_len);
-                process_payload_frame(frame.as_ref(), reassembler, app_state, received_at);
+                process_payload_frame(
+                    frame.as_ref(),
+                    reassembler,
+                    source_link,
+                    app_state,
+                    received_at,
+                );
             }
         }
     }
@@ -558,12 +590,22 @@ fn extract_and_process_fp95_and_payload(
 fn process_payload_frame(
     frame: &[u8],
     reassembler: &mut crate::protocol::payload::PayloadStreamReassembler,
+    source_link: &str,
     app_state: &AppState,
     received_at: Instant,
 ) {
     match crate::protocol::payload::unpack_payload_frame(frame) {
         Ok(outer) => {
             app_state.metrics.inc_ok();
+            // 校验记录：AA55 不带机号，按同链路 FP95 机号归属
+            let record_uav_id = app_state.recorder.payload_aircraft(source_link);
+            app_state.recorder.record_validated(
+                source_link,
+                ValidatedKind::Payload,
+                record_uav_id,
+                frame,
+                received_at,
+            );
             let uav_id = crate::protocol::payload::MISSION_PAYLOAD_UAV_ID;
             let now_ms = crate::protocol::payload::unix_now_ms();
 
@@ -612,6 +654,8 @@ fn process_fp95_frame(
     let seq_num = frame[2];
     let uav_id = frame[3];
     let frame_id = frame[4];
+    // 冗余链路上的重复帧同样说明该链路承载此机号，供同链路 AA55 载荷帧归属
+    app_state.recorder.note_link_aircraft(source_link, uav_id);
 
     let frame_bytes: [u8; 32] = frame.try_into().expect("FP95 frame length was checked");
     let decision = arbiter.observe(
@@ -639,6 +683,13 @@ fn process_fp95_frame(
     match ParsedSubFrame::from_bytes(frame_id, subframe_payload) {
         Ok(parsed) => {
             app_state.metrics.inc_ok();
+            app_state.recorder.record_validated(
+                source_link,
+                ValidatedKind::Fp95,
+                uav_id,
+                frame,
+                received_at,
+            );
             if let ParsedSubFrame::Frame80(frame80) = &parsed {
                 response_coordinator.deliver(uav_id, frame80.injection_response);
                 maybe_emit_pod_ack(uav_id, &frame80.injection_response);
@@ -1044,7 +1095,7 @@ mod tests {
         frame[1..5].copy_from_slice(&300u32.to_le_bytes());
         buffer.extend_from_slice(&frame);
 
-        extract_and_process_uav_info(&mut buffer, Instant::now(), &app_state);
+        extract_and_process_uav_info(&mut buffer, "UAVInfo-UDP", Instant::now(), &app_state);
 
         assert!(app_state.uav_pool.is_empty(), "机号超出 0-255 的帧应被丢弃");
     }
@@ -1069,7 +1120,13 @@ mod tests {
         assert_eq!(frame[3], 0xC6);
 
         // 处理该帧（验证正常解包并合入状态）
-        process_payload_frame(&frame, &mut reassembler, &app_state, Instant::now());
+        process_payload_frame(
+            &frame,
+            &mut reassembler,
+            "FP95-UDP",
+            &app_state,
+            Instant::now(),
+        );
 
         let agg = app_state.mission_payload_pool.get(&95);
         assert!(agg.is_some(), "应成功存入 95 号机载荷状态");
@@ -1079,6 +1136,83 @@ mod tests {
         let mut corrupt_frame = frame.clone();
         let last_idx = corrupt_frame.len() - 1;
         corrupt_frame[last_idx] ^= 0xFF;
-        process_payload_frame(&corrupt_frame, &mut reassembler, &app_state, Instant::now());
+        process_payload_frame(
+            &corrupt_frame,
+            &mut reassembler,
+            "FP95-UDP",
+            &app_state,
+            Instant::now(),
+        );
+    }
+    #[tokio::test]
+    async fn validated_recording_merges_redundant_links_by_aircraft() {
+        let app_state = AppState::new();
+        let dir = std::env::temp_dir().join(format!(
+            "gcs_router_validated_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        app_state.recorder.init_dir(dir.clone());
+        let mut router = RouterCore::new(RxArbiterConfig::default());
+        let coordinator = FP95ResponseCoordinator::default();
+        let links: HashSet<String> = ["UDP-A".to_string(), "UDP-B".to_string()].into();
+        let raw = |link: &str, data: Vec<u8>| RawData {
+            source_link: link.to_string(),
+            link_generation: 1,
+            data,
+            received_at: Instant::now(),
+        };
+
+        let fp95 = valid_fp95_frame(1, 7).to_vec();
+        let payload = crate::protocol::payload::pack_payload_frame(
+            crate::protocol::payload::CODE_DOWNLINK,
+            crate::protocol::payload::PAYLOAD_ID_ATMOSPHERE,
+            3,
+            &[0x01, 0x02, 0x03],
+        );
+        // 同一 FP95 帧经两条冗余链路到达：仲裁后只记一次
+        for (link, data) in [
+            ("UDP-A", fp95.clone()),
+            ("UDP-B", fp95.clone()),
+            // 载荷帧先经 B 到达（B 上的 FP95 虽是重复帧，也已登记 7 号机），再经 A 重复到达
+            ("UDP-B", payload.clone()),
+            ("UDP-A", payload.clone()),
+        ] {
+            router.process_raw(
+                raw(link, data),
+                ProtocolType::FP95,
+                true,
+                links.clone(),
+                &app_state,
+                &coordinator,
+            );
+        }
+
+        assert_eq!(app_state.recorder.validated_sessions_count(), 1);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let summaries = app_state.recorder.stop_all_validated().await;
+        assert_eq!(summaries.len(), 1);
+        assert!(
+            summaries[0].link_name.starts_with("UAV007"),
+            "载荷帧应归属 7 号机"
+        );
+
+        let mut file = std::fs::File::open(&summaries[0].file).unwrap();
+        crate::recorder::format::read_header(&mut file).unwrap();
+        let mut reader = crate::recorder::format::RecordReader::new(file);
+        let mut records = Vec::new();
+        while let Some(record) = reader.next_record().unwrap() {
+            records.push(record);
+        }
+        assert_eq!(records.len(), 2, "冗余链路的重复帧不应重复记录");
+        assert_eq!(records[0].payload, fp95);
+        assert_eq!(records[1].payload, payload);
+        assert!(records
+            .iter()
+            .all(|r| r.link_id == ValidatedKind::Fp95.link_id()));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

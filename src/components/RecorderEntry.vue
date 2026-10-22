@@ -2,15 +2,28 @@
   记录/回放入口：地图右侧悬浮。
   自动记录态显示只读录制脉冲与路数；点击回放按钮弹出文件选择并进入回放。
   去除手动记录与暂停控制，全自动感应录制。
+  悬停提示同时列出按链路的原始记录与按飞机号的校验记录（validated 子目录）。
 -->
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { NTooltip, NIcon, useMessage } from 'naive-ui'
 import { PlayBackOutline } from '@vicons/ionicons5'
-import { useReplayStore } from '@/store/replayStore'
+import { useReplayStore, type AircraftRecordStatus } from '@/store/replayStore'
 
 const store = useReplayStore()
 const message = useMessage()
+
+/** 指示器文字：原始记录路数，有校验记录时追加飞机数 */
+const indicatorLabel = computed(() => {
+  const aircraftCount = store.recordingAircraft.length
+  const links = `${store.activeRecordingsCount}路`
+  return aircraftCount > 0 ? `${links}·${aircraftCount}机` : links
+})
+
+function aircraftLabel(item: AircraftRecordStatus): string {
+  const sources = item.sources.length ? ` · ${item.sources.join(' / ')}` : ''
+  return `${item.uavId} 号机${sources}`
+}
 
 async function handleReplayClick() {
   if (store.sessionActive && !store.isFinished) {
@@ -37,7 +50,7 @@ onMounted(async () => {
       <template #trigger>
         <div class="entry-indicator is-recording" aria-label="正在自动记录链路数据">
           <span class="rec-dot" />
-          <span class="rec-label">{{ store.activeRecordingsCount }}路</span>
+          <span class="rec-label">{{ indicatorLabel }}</span>
         </div>
       </template>
       <div class="rec-tooltip-content">
@@ -52,6 +65,19 @@ onMounted(async () => {
           <span class="rec-link-name">[{{ link.protocol }}] {{ link.linkName }}</span>
           <span class="rec-file-name">{{ link.fileName }}</span>
         </div>
+        <template v-if="store.recordingAircraft.length">
+          <div class="rec-tooltip-title rec-tooltip-subtitle">
+            按飞机号记录校验数据（共 {{ store.recordingAircraft.length }} 架）：
+          </div>
+          <div
+            v-for="item in store.recordingAircraft"
+            :key="item.file"
+            class="rec-file-item"
+          >
+            <span class="rec-link-name">{{ aircraftLabel(item) }}</span>
+            <span class="rec-file-name">{{ item.fileName }}</span>
+          </div>
+        </template>
       </div>
     </n-tooltip>
 
@@ -69,7 +95,7 @@ onMounted(async () => {
           </n-icon>
         </button>
       </template>
-      回放链路 dat 记录文件
+      回放 dat 记录文件（原始记录或 validated 目录下的校验记录）
     </n-tooltip>
   </div>
 </template>
@@ -150,6 +176,10 @@ onMounted(async () => {
   font-weight: 600;
   margin-bottom: 0.3rem;
   color: #ff9c9c;
+}
+
+.rec-tooltip-subtitle {
+  margin-top: 0.5rem;
 }
 
 .rec-file-item {
