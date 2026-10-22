@@ -66,6 +66,35 @@ export function validateUplinkAircraftId(value: unknown): string | null {
   return valid ? null : '上行机号须为 0~255 的整数'
 }
 
+/**
+ * 固定链路：伺服转台与三路人影载荷转发，每种协议恰好一条，不可删除、不可改名、不可改协议。
+ * 旧配置按协议识别（名称、重复条目在读取与保存时统一纠正）。
+ */
+export const FIXED_LINK_PROTOCOLS = [
+  'ServoTurntable',
+  'PassthroughC0',
+  'PassthroughC1',
+  'PassthroughC2',
+] as const
+export type FixedLinkProtocol = (typeof FIXED_LINK_PROTOCOLS)[number]
+
+export const FIXED_LINK_NAMES: Record<FixedLinkProtocol, string> = {
+  ServoTurntable: '伺服转台转发',
+  PassthroughC0: '大气数据测量转发',
+  PassthroughC1: '焰条转发',
+  PassthroughC2: '云滴探测分析系统转发',
+}
+
+export function isFixedLinkProtocol(
+  protocol: ProtocolType,
+): protocol is FixedLinkProtocol {
+  return (FIXED_LINK_PROTOCOLS as readonly ProtocolType[]).includes(protocol)
+}
+
+export function isFixedLink(link: Pick<LinkDraft, 'protocol'>): boolean {
+  return isFixedLinkProtocol(link.protocol)
+}
+
 let nextLinkId = 1
 
 function makeId(prefix: string) {
@@ -93,8 +122,84 @@ export function createLinkDraft(
   }
 }
 
-export function createDefaultLinkDrafts(): LinkDraft[] {
+/** 固定链路默认参数（与此前内置的伺服转台/透传链路一致） */
+const FIXED_LINK_DEFAULTS: Record<
+  FixedLinkProtocol,
+  {
+    index: number
+    ip: string
+    localPort: number
+    targetPort: number
+    autoConnect: boolean
+  }
+> = {
+  ServoTurntable: {
+    index: 5,
+    ip: '192.168.1.100',
+    localPort: 6001,
+    targetPort: 6000,
+    autoConnect: true,
+  },
+  PassthroughC0: {
+    index: 6,
+    ip: '127.0.0.1',
+    localPort: 9100,
+    targetPort: 9100,
+    autoConnect: false,
+  },
+  PassthroughC1: {
+    index: 7,
+    ip: '127.0.0.1',
+    localPort: 9101,
+    targetPort: 9101,
+    autoConnect: false,
+  },
+  PassthroughC2: {
+    index: 8,
+    ip: '127.0.0.1',
+    localPort: 9102,
+    targetPort: 9102,
+    autoConnect: false,
+  },
+}
+
+export function createFixedLinkDraft(protocol: FixedLinkProtocol): LinkDraft {
+  const { index, ...params } = FIXED_LINK_DEFAULTS[protocol]
+  return {
+    ...createLinkDraft('udp-unicast', index),
+    ...params,
+    name: FIXED_LINK_NAMES[protocol],
+    protocol,
+    enabled: false,
+    interfaceIp: '0.0.0.0',
+  }
+}
+
+/**
+ * 固定链路归一化：按协议识别，名称强制为固定名称；同一协议只保留第一条；
+ * 缺失的补默认配置。固定链路统一排在普通链路之后，顺序固定。
+ */
+export function normalizeFixedLinks(links: LinkDraft[]): LinkDraft[] {
+  const regular: LinkDraft[] = []
+  const fixed = new Map<FixedLinkProtocol, LinkDraft>()
+  for (const link of links) {
+    if (!isFixedLinkProtocol(link.protocol)) {
+      regular.push(link)
+      continue
+    }
+    if (fixed.has(link.protocol)) continue
+    fixed.set(link.protocol, { ...link, name: FIXED_LINK_NAMES[link.protocol] })
+  }
   return [
+    ...regular,
+    ...FIXED_LINK_PROTOCOLS.map(
+      (protocol) => fixed.get(protocol) ?? createFixedLinkDraft(protocol),
+    ),
+  ]
+}
+
+export function createDefaultLinkDrafts(): LinkDraft[] {
+  return normalizeFixedLinks([
     {
       ...createLinkDraft('udp-multicast', 1),
       name: 'UAVInfo_UDP',
@@ -123,51 +228,7 @@ export function createDefaultLinkDrafts(): LinkDraft[] {
       name: '副链路',
       enabled: false,
     },
-    {
-      ...createLinkDraft('udp-unicast', 5),
-      name: '伺服转台',
-      protocol: 'ServoTurntable',
-      enabled: false,
-      autoConnect: true,
-      ip: '192.168.1.100',
-      localPort: 6001,
-      targetPort: 6000,
-      interfaceIp: '0.0.0.0',
-    },
-    {
-      ...createLinkDraft('udp-unicast', 6),
-      name: '人影大气测量透传(0xC0)',
-      protocol: 'PassthroughC0',
-      enabled: false,
-      autoConnect: false,
-      ip: '127.0.0.1',
-      localPort: 9100,
-      targetPort: 9100,
-      interfaceIp: '0.0.0.0',
-    },
-    {
-      ...createLinkDraft('udp-unicast', 7),
-      name: '人影焰条透传(0xC1)',
-      protocol: 'PassthroughC1',
-      enabled: false,
-      autoConnect: false,
-      ip: '127.0.0.1',
-      localPort: 9101,
-      targetPort: 9101,
-      interfaceIp: '0.0.0.0',
-    },
-    {
-      ...createLinkDraft('udp-unicast', 8),
-      name: '人影云滴透传(0xC2)',
-      protocol: 'PassthroughC2',
-      enabled: false,
-      autoConnect: false,
-      ip: '127.0.0.1',
-      localPort: 9102,
-      targetPort: 9102,
-      interfaceIp: '0.0.0.0',
-    },
-  ]
+  ])
 }
 
 function protocolForLink(kind: LinkKind, protocol: ProtocolType): ProtocolType {
@@ -194,70 +255,6 @@ export function fromCommsConfig(config: PersistedCommsConfig): LinkDraft[] {
     }
   })
 
-  // 保证固定的“伺服转台”链路始终存在
-  const hasServo = udpLinks.some((l) => l.protocol === 'ServoTurntable' || l.name === '伺服转台')
-  if (!hasServo) {
-    udpLinks.push({
-      ...createLinkDraft('udp-unicast', 5),
-      name: '伺服转台',
-      protocol: 'ServoTurntable',
-      enabled: false,
-      autoConnect: true,
-      ip: '192.168.1.100',
-      localPort: 6001,
-      targetPort: 6000,
-      interfaceIp: '0.0.0.0',
-    })
-  }
-
-  // 保证 3 个人影载荷透传链路存在（若当前尚未配置）
-  const allExistingProtocols = new Set([
-    ...udpLinks.map((l) => l.protocol),
-    ...(config.serial ?? []).map((s) => s.protocol),
-  ])
-
-  if (!allExistingProtocols.has('PassthroughC0')) {
-    udpLinks.push({
-      ...createLinkDraft('udp-unicast', 6),
-      name: '人影大气测量透传(0xC0)',
-      protocol: 'PassthroughC0',
-      enabled: false,
-      autoConnect: false,
-      ip: '127.0.0.1',
-      localPort: 9100,
-      targetPort: 9100,
-      interfaceIp: '0.0.0.0',
-    })
-  }
-
-  if (!allExistingProtocols.has('PassthroughC1')) {
-    udpLinks.push({
-      ...createLinkDraft('udp-unicast', 7),
-      name: '人影焰条透传(0xC1)',
-      protocol: 'PassthroughC1',
-      enabled: false,
-      autoConnect: false,
-      ip: '127.0.0.1',
-      localPort: 9101,
-      targetPort: 9101,
-      interfaceIp: '0.0.0.0',
-    })
-  }
-
-  if (!allExistingProtocols.has('PassthroughC2')) {
-    udpLinks.push({
-      ...createLinkDraft('udp-unicast', 8),
-      name: '人影云滴透传(0xC2)',
-      protocol: 'PassthroughC2',
-      enabled: false,
-      autoConnect: false,
-      ip: '127.0.0.1',
-      localPort: 9102,
-      targetPort: 9102,
-      interfaceIp: '0.0.0.0',
-    })
-  }
-
   const serialLinks = (config.serial ?? []).map((item, index) => ({
     id: makeId(`serial-${index}`),
     name: item.name,
@@ -273,7 +270,13 @@ export function fromCommsConfig(config: PersistedCommsConfig): LinkDraft[] {
     baudRate: item.baud_rate,
   }))
 
-  return [...udpLinks, ...serialLinks]
+  return normalizeFixedLinks([...udpLinks, ...serialLinks])
+}
+
+function linkNameForSave(link: LinkDraft): string {
+  return isFixedLinkProtocol(link.protocol)
+    ? FIXED_LINK_NAMES[link.protocol]
+    : link.name.trim()
 }
 
 export function toCommsConfig(links: LinkDraft[]): PersistedCommsConfig {
@@ -281,7 +284,7 @@ export function toCommsConfig(links: LinkDraft[]): PersistedCommsConfig {
     udp: links
       .filter((link) => link.kind !== 'serial')
       .map((link) => ({
-        name: link.name.trim(),
+        name: linkNameForSave(link),
         mode: link.kind === 'udp-unicast' ? 'unicast' : 'multicast',
         ip: link.ip.trim(),
         port: link.localPort,
@@ -294,7 +297,7 @@ export function toCommsConfig(links: LinkDraft[]): PersistedCommsConfig {
     serial: links
       .filter((link) => link.kind === 'serial')
       .map((link) => ({
-        name: link.name.trim(),
+        name: linkNameForSave(link),
         port_name: link.portName.trim(),
         baud_rate: link.baudRate,
         data_bits: 8,
@@ -332,8 +335,15 @@ export function validateLinkDrafts(links: LinkDraft[]): string | null {
   const names = new Set<string>()
   const serialPorts = new Set<string>()
   const udpLocalPorts = new Set<number>()
+  const fixedProtocols = new Set<ProtocolType>()
   for (const link of links) {
-    const name = link.name.trim()
+    if (isFixedLinkProtocol(link.protocol)) {
+      if (fixedProtocols.has(link.protocol)) {
+        return `固定链路“${FIXED_LINK_NAMES[link.protocol]}”只能有一条`
+      }
+      fixedProtocols.add(link.protocol)
+    }
+    const name = linkNameForSave(link)
     if (!name) return '链路名称不能为空'
     if (names.has(name)) return `链路名称不能重复: ${name}`
     names.add(name)

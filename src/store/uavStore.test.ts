@@ -455,3 +455,30 @@ describe('uavStore uplink aircraft id', () => {
     })
   })
 })
+
+describe('uavStore fixed links', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('固定链路不能删除，普通链路可以删除', () => {
+    const store = useUavStore()
+    const fixed = store.links.find((link) => link.protocol === 'PassthroughC0')!
+    const regular = store.links.find((link) => link.protocol === 'FP95')!
+
+    store.removeLink(fixed.id)
+    store.removeLink(regular.id)
+
+    expect(store.links.some((link) => link.id === fixed.id)).toBe(true)
+    expect(store.links.some((link) => link.id === regular.id)).toBe(false)
+  })
+
+  it('伺服转台转发不能改为串口', () => {
+    const store = useUavStore()
+    const servo = store.links.find(
+      (link) => link.protocol === 'ServoTurntable',
+    )!
+    store.updateLinkKind(servo, 'serial')
+    expect(servo.kind).toBe('udp-unicast')
+  })
+})

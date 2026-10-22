@@ -4,7 +4,8 @@
 import { ref, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useUavStore } from '@/store/uavStore'
-import type { LinkDraft, LinkKind } from '@/store/commsConfig'
+import type { LinkDraft, LinkKind, ProtocolType } from '@/store/commsConfig'
+import { isFixedLink, isFixedLinkProtocol } from '@/store/commsConfig'
 import {
   getTileProxyUrl,
   applyTileProxyUrlIfChanged,
@@ -26,9 +27,9 @@ export const baudRateOptions = [
 export const serialProtocolOptions = [
   { label: 'FP981C', value: 'FP981C' },
   { label: 'FP95', value: 'FP95' },
-  { label: '人影大气测量透传(0xC0)', value: 'PassthroughC0' },
-  { label: '人影焰条透传(0xC1)', value: 'PassthroughC1' },
-  { label: '人影云滴透传(0xC2)', value: 'PassthroughC2' },
+  { label: '大气数据测量转发(0xC0)', value: 'PassthroughC0' },
+  { label: '焰条转发(0xC1)', value: 'PassthroughC1' },
+  { label: '云滴探测分析系统转发(0xC2)', value: 'PassthroughC2' },
 ]
 
 export const linkKindOptions = [
@@ -41,11 +42,28 @@ export const udpProtocolOptions = [
   { label: 'FP981C', value: 'FP981C' },
   { label: 'FP95', value: 'FP95' },
   { label: 'UAVInfo', value: 'UAVInfo' },
-  { label: '伺服转台', value: 'ServoTurntable' },
-  { label: '人影大气测量透传(0xC0)', value: 'PassthroughC0' },
-  { label: '人影焰条透传(0xC1)', value: 'PassthroughC1' },
-  { label: '人影云滴透传(0xC2)', value: 'PassthroughC2' },
+  { label: '伺服转台转发', value: 'ServoTurntable' },
+  { label: '大气数据测量转发(0xC0)', value: 'PassthroughC0' },
+  { label: '焰条转发(0xC1)', value: 'PassthroughC1' },
+  { label: '云滴探测分析系统转发(0xC2)', value: 'PassthroughC2' },
 ]
+
+/** 协议下拉选项：固定链路的协议只属于对应固定链路，普通链路不可选（避免出现重复的固定链路） */
+export function protocolOptionsFor(link: Pick<LinkDraft, 'kind' | 'protocol'>) {
+  const options =
+    link.kind === 'serial' ? serialProtocolOptions : udpProtocolOptions
+  if (isFixedLink(link)) return options
+  return options.filter(
+    (option) => !isFixedLinkProtocol(option.value as ProtocolType),
+  )
+}
+
+/** 链路类型选项：伺服转台转发只支持 UDP */
+export function linkKindOptionsFor(link: Pick<LinkDraft, 'protocol'>) {
+  return link.protocol === 'ServoTurntable'
+    ? linkKindOptions.filter((option) => option.value !== 'serial')
+    : linkKindOptions
+}
 
 export function useCommsSettings() {
   const message = useMessage()

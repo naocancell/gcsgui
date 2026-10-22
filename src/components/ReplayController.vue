@@ -278,8 +278,8 @@ watch(finished, (done) => {
   transform: translateX(-50%);
   padding: 0.35rem 0.8rem;
   border-radius: 0.5rem;
-  background: rgb(24 29 39 / 88%);
-  backdrop-filter: blur(6px);
+  /* 悬浮在地图画布上：不用 backdrop-filter，避免每帧重新模糊地图背景 */
+  background: rgb(24 29 39 / 94%);
   box-shadow: 0 2px 12px rgb(0 0 0 / 35%);
   z-index: 20;
 }

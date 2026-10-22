@@ -179,8 +179,12 @@ pub async fn save_comms_config(
     if previous_id != aircraft_id {
         log::info!("[操作] 上行机号由 {} 修改为 {}", previous_id, aircraft_id);
     }
-    apply_comms_hot_reload(&app, &state, &router_tx, &config)
-        .await
-        .map_err(|e| crate::error::AppError::comms(20001, e))?;
+    let reload_result = apply_comms_hot_reload(&app, &state, &router_tx, &config).await;
+    // 链路切换完成后再判定是否停止通信：已无接收链路时收尾校验记录（热重载过程中不切分文件）
+    state
+        .recorder
+        .close_validated_if_comms_stopped(&state.active_links)
+        .await;
+    reload_result.map_err(|e| crate::error::AppError::comms(20001, e))?;
     Ok("配置保存并成功应用热重载！".to_string())
 }

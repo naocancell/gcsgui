@@ -75,6 +75,36 @@ pub enum ParityConfig {
     Even,
 }
 
+/// 固定链路（伺服转台与三路人影载荷转发）的固定名称，普通协议返回 None
+pub fn fixed_link_name(protocol: ProtocolType) -> Option<&'static str> {
+    match protocol {
+        ProtocolType::ServoTurntable => Some("伺服转台转发"),
+        ProtocolType::PassthroughC0 => Some("大气数据测量转发"),
+        ProtocolType::PassthroughC1 => Some("焰条转发"),
+        ProtocolType::PassthroughC2 => Some("云滴探测分析系统转发"),
+        _ => None,
+    }
+}
+
+/// 普通链路原样保留；固定链路首次出现时改为固定名称并保留，重复出现时返回 false（丢弃）
+fn claim_fixed_link(
+    seen: &mut Vec<ProtocolType>,
+    protocol: ProtocolType,
+    name: &mut String,
+) -> bool {
+    let Some(fixed_name) = fixed_link_name(protocol) else {
+        return true;
+    };
+    if seen.contains(&protocol) {
+        return false;
+    }
+    seen.push(protocol);
+    if name != fixed_name {
+        *name = fixed_name.to_string();
+    }
+    true
+}
+
 fn default_data_bits() -> u8 {
     8
 }
@@ -98,6 +128,19 @@ impl CommsConfig {
                 udp.target_port = udp.port;
             }
         }
+        self.normalize_fixed_links();
+    }
+
+    /// 固定链路按协议识别：名称强制为固定名称，同一协议只保留第一条（UDP 优先于串口）。
+    /// 伺服转台只支持 UDP，串口上的伺服转台条目不按固定链路处理（前端会改为 FP981C）。
+    fn normalize_fixed_links(&mut self) {
+        let mut seen: Vec<ProtocolType> = Vec::new();
+        self.udp
+            .retain_mut(|udp| claim_fixed_link(&mut seen, udp.protocol, &mut udp.name));
+        self.serial.retain_mut(|serial| {
+            serial.protocol == ProtocolType::ServoTurntable
+                || claim_fixed_link(&mut seen, serial.protocol, &mut serial.name)
+        });
     }
 
     pub fn file_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -157,5 +200,66 @@ impl CommsConfig {
         fs::write(&path, json_str).map_err(|e| format!("写入 comms.json 失败: {}", e))?;
         log::info!("配置成功写入: {:?}", path);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn udp(name: &str, protocol: ProtocolType, port: u16) -> UdpConfig {
+        UdpConfig {
+            name: name.to_string(),
+            ip: "127.0.0.1".to_string(),
+            port,
+            interface_ip: "0.0.0.0".to_string(),
+            protocol,
+            ..Default::default()
+        }
+    }
+
+    fn serial(name: &str, protocol: ProtocolType) -> SerialConfig {
+        SerialConfig {
+            name: name.to_string(),
+            port_name: "COM3".to_string(),
+            baud_rate: 115200,
+            protocol,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn fixed_links_renamed_and_deduplicated() {
+        let mut config = CommsConfig {
+            udp: vec![
+                udp("FP95_UDP", ProtocolType::FP95, 8999),
+                udp("伺服转台", ProtocolType::ServoTurntable, 6001),
+                udp("人影大气测量透传(0xC0)", ProtocolType::PassthroughC0, 9100),
+                udp("我的透传", ProtocolType::PassthroughC0, 9200),
+                udp("人影云滴透传(0xC2)", ProtocolType::PassthroughC2, 9102),
+            ],
+            serial: vec![
+                serial("主链路", ProtocolType::FP981C),
+                serial("焰条串口", ProtocolType::PassthroughC1),
+                serial("云滴串口", ProtocolType::PassthroughC2),
+                serial("旧伺服", ProtocolType::ServoTurntable),
+            ],
+            uplink_aircraft_id: None,
+        };
+        config.normalize();
+
+        let udp_names: Vec<_> = config.udp.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            udp_names,
+            vec![
+                "FP95_UDP",
+                "伺服转台转发",
+                "大气数据测量转发",
+                "云滴探测分析系统转发"
+            ]
+        );
+        assert_eq!(config.udp[2].port, 9100, "重复的固定链路只保留第一条");
+        let serial_names: Vec<_> = config.serial.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(serial_names, vec!["主链路", "焰条转发", "旧伺服"]);
     }
 }

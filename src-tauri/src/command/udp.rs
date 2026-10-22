@@ -154,9 +154,11 @@ pub fn stop_udp_listener(
     match state.active_links.remove(&name) { Some((_, link)) => {
         link.transport.stop();
         let recorder = state.recorder.clone();
+        let active_links = state.active_links.clone();
         let n = name.clone();
         tauri::async_runtime::spawn(async move {
             let _ = recorder.stop_link(&n).await;
+            recorder.close_validated_if_comms_stopped(&active_links).await;
         });
         Ok(format!("UDP 监听服务 [{}] 已停止", name))
     } _ => {

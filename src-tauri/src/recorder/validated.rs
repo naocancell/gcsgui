@@ -22,8 +22,9 @@
 //! - AA55 与 UAVInfo 没有可供仲裁的帧序号：同一飞机 500ms 内从另一条链路收到字节完全相同的帧
 //!   视为冗余重复，只记一次（同一链路上的重复帧照常记录）。
 //!
-//! 生命周期：某飞机首帧合法数据到达时自动建文件；该飞机 5 分钟无合法数据、或所有接收链路
-//! 都已关闭时自动收尾落盘；退出程序时随原始记录一起落盘。回放注入的数据永不记录。
+//! 生命周期：开始通信后，某飞机首帧合法数据到达时自动建文件，此后该飞机的合法数据一直写入
+//! 同一个文件（中途断数、串口重连、修改链路参数热重载都不切分），直到停止通信（保存配置后已无
+//! 任何启用的 FP981C / FP95 / UAVInfo 接收链路）或退出程序时才收尾落盘。回放注入的数据永不记录。
 //!
 //! [`MISSION_PAYLOAD_UAV_ID`]: crate::protocol::payload::MISSION_PAYLOAD_UAV_ID
 
@@ -53,9 +54,6 @@ use super::writer::{
 
 /// 校验记录文件所在的录制目录子目录名
 pub const VALIDATED_SUBDIR: &str = "validated";
-
-/// 某飞机连续多久没有合法数据即收尾该飞机的记录文件
-pub const VALIDATED_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// 无序号帧（AA55 / UAVInfo）的冗余链路去重窗口
 const CROSS_LINK_DEDUP_WINDOW: Duration = Duration::from_millis(500);
@@ -133,7 +131,7 @@ struct AircraftSession {
     path: PathBuf,
     start_instant: Instant,
     start_wall_ms: i64,
-    /// 最近一条记录的时间戳（相对 start_instant），兼作空闲判定
+    /// 最近一条记录的时间戳（相对 start_instant），保证时间戳单调不减
     last_ts_ns: AtomicU64,
     /// 已记录过的帧类别位图
     kinds: AtomicU8,
@@ -148,13 +146,6 @@ struct AircraftSession {
 }
 
 impl AircraftSession {
-    fn idle_for(&self, now: Instant) -> Duration {
-        now.saturating_duration_since(self.start_instant)
-            .saturating_sub(Duration::from_nanos(
-                self.last_ts_ns.load(Ordering::Relaxed),
-            ))
-    }
-
     fn sources(&self) -> Vec<String> {
         let kinds = self.kinds.load(Ordering::Relaxed);
         ValidatedKind::ALL
@@ -232,6 +223,15 @@ pub fn validated_link_entries(uav_id: u8) -> Vec<LinkEntry> {
 
 fn is_replay_source(source_link: &str) -> bool {
     source_link.starts_with(REPLAY_LINK_PREFIX)
+}
+
+/// 是否为能产生校验记录数据的实时接收链路（FP981C / FP95 / UAVInfo，回放虚拟链路除外）
+fn is_live_rx_link(link_type: &str, protocol: ProtocolType) -> bool {
+    link_type != REPLAY_LINK_TYPE
+        && matches!(
+            protocol,
+            ProtocolType::FP981C | ProtocolType::FP95 | ProtocolType::UAVInfo
+        )
 }
 
 fn create_session(
@@ -434,63 +434,32 @@ impl RecorderService {
         }
     }
 
-    /// 随链路维护周期调用：清理已关闭链路的机号归属；
-    /// 飞机长时间无合法数据或已无任何实时接收链路时，收尾对应校验记录文件
-    pub(super) fn sync_validated_sessions(
-        &self,
-        active_links: &DashMap<String, ActiveLink>,
-        now: Instant,
-    ) {
+    /// 随链路维护周期调用：清理已关闭链路的机号归属。
+    ///
+    /// 这里不收尾任何校验记录：热重载会先停后启链路，维护周期可能恰好看到链路表为空，
+    /// 若在此收尾会把同一次通信切成多个文件。收尾只在停止通信和退出程序时进行。
+    pub(super) fn sync_validated_sessions(&self, active_links: &DashMap<String, ActiveLink>) {
         if !self.validated.link_aircraft.is_empty() {
             self.validated
                 .link_aircraft
                 .retain(|link, _| active_links.contains_key(link));
         }
-        if self.validated.sessions.is_empty() {
-            return;
-        }
+    }
 
-        let has_live_rx_link = active_links.iter().any(|link| {
-            link.link_type != REPLAY_LINK_TYPE
-                && matches!(
-                    link.protocol,
-                    ProtocolType::FP981C | ProtocolType::FP95 | ProtocolType::UAVInfo
-                )
-        });
-        let to_stop: Vec<u8> = self
-            .validated
-            .sessions
+    /// 停止通信判定：链路切换完成后已没有任何实时接收链路时，收尾全部校验记录文件。
+    /// 由保存通信配置（热重载完成后）与单独停止链路的命令调用。
+    pub async fn close_validated_if_comms_stopped(
+        &self,
+        active_links: &DashMap<String, ActiveLink>,
+    ) -> Vec<RecorderSummary> {
+        let has_live_rx_link = active_links
             .iter()
-            .filter(|entry| {
-                !has_live_rx_link || entry.value().idle_for(now) >= VALIDATED_IDLE_TIMEOUT
-            })
-            .map(|entry| *entry.key())
-            .collect();
-        if to_stop.is_empty() {
-            return;
+            .any(|link| is_live_rx_link(&link.link_type, link.protocol));
+        if has_live_rx_link || self.validated.sessions.is_empty() {
+            return Vec::new();
         }
-
-        let removed: Vec<Arc<AircraftSession>> = to_stop
-            .iter()
-            .filter_map(|uav_id| self.validated.sessions.remove(uav_id).map(|(_, s)| s))
-            .collect();
-        if removed.is_empty() {
-            return;
-        }
-        if has_live_rx_link {
-            log::info!(
-                "[Recorder] 飞机 {to_stop:?} 已 {} 秒无合法数据，收尾校验记录",
-                VALIDATED_IDLE_TIMEOUT.as_secs()
-            );
-        } else {
-            log::info!("[Recorder] 实时接收链路已全部关闭，收尾全部校验记录");
-        }
-        self.emit_status();
-        tauri::async_runtime::spawn(async move {
-            for session in removed {
-                finalize_session(session).await;
-            }
-        });
+        log::info!("[Recorder] 已停止通信（无启用的接收链路），收尾全部校验记录");
+        self.stop_all_validated().await
     }
 
     /// 收尾全部校验记录文件
@@ -717,52 +686,51 @@ mod tests {
 
         // 链路关闭后归属清除
         let active: DashMap<String, ActiveLink> = DashMap::new();
-        service.sync_validated_sessions(&active, Instant::now());
+        service.sync_validated_sessions(&active);
         assert_eq!(service.payload_aircraft("UDP-A"), MISSION_PAYLOAD_UAV_ID);
     }
 
     #[tokio::test]
-    async fn sessions_closed_when_no_live_links() {
+    async fn sessions_kept_until_comms_stopped() {
         let dir = temp_test_dir();
         let service = RecorderService::new();
         service.init_dir(dir.clone());
-        service.record_validated("UDP-A", ValidatedKind::Fp95, 3, &[1; 32], Instant::now());
+        let start = Instant::now();
+        service.record_validated("UDP-A", ValidatedKind::Fp95, 3, &[1; 32], start);
         assert_eq!(service.validated_sessions_count(), 1);
 
+        // 维护周期看到链路表为空（如热重载停旧启新的间隙）：不收尾、不切分文件
         let active: DashMap<String, ActiveLink> = DashMap::new();
-        service.sync_validated_sessions(&active, Instant::now());
+        service.sync_validated_sessions(&active);
+        assert_eq!(service.validated_sessions_count(), 1);
+
+        // 长时间断数后同一飞机的数据仍写入同一个文件
+        service.record_validated(
+            "UDP-A",
+            ValidatedKind::Fp95,
+            3,
+            &[2; 32],
+            start + Duration::from_secs(600),
+        );
+        assert_eq!(service.validated_sessions_count(), 1);
+
+        // 停止通信（已无接收链路）：全部收尾
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let summaries = service.close_validated_if_comms_stopped(&active).await;
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].records, 2);
         assert_eq!(service.validated_sessions_count(), 0);
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn idle_duration_measured_from_last_record() {
-        let start = Instant::now();
-        let (tx, _rx) = mpsc::channel(1);
-        let session = AircraftSession {
-            uav_id: 1,
-            path: PathBuf::new(),
-            start_instant: start,
-            start_wall_ms: 0,
-            last_ts_ns: AtomicU64::new(Duration::from_secs(10).as_nanos() as u64),
-            kinds: AtomicU8::new(0),
-            dedup: Mutex::new(HashMap::new()),
-            tx,
-            cancel: CancellationToken::new(),
-            join: Mutex::new(None),
-            records_count: Arc::new(AtomicU64::new(0)),
-            bytes_count: Arc::new(AtomicU64::new(0)),
-            dropped_count: Arc::new(AtomicU64::new(0)),
-        };
-        assert_eq!(
-            session.idle_for(start + Duration::from_secs(25)),
-            Duration::from_secs(15)
-        );
-        assert_eq!(
-            session.idle_for(start + Duration::from_secs(5)),
-            Duration::ZERO
-        );
+    fn live_rx_link_classification() {
+        assert!(is_live_rx_link("UDP", ProtocolType::FP95));
+        assert!(is_live_rx_link("SERIAL", ProtocolType::FP981C));
+        assert!(is_live_rx_link("UDP", ProtocolType::UAVInfo));
+        assert!(!is_live_rx_link(REPLAY_LINK_TYPE, ProtocolType::FP95));
+        assert!(!is_live_rx_link("UDP", ProtocolType::ServoTurntable));
+        assert!(!is_live_rx_link("UDP", ProtocolType::PassthroughC0));
     }
 }
