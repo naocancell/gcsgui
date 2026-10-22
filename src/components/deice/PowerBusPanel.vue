@@ -51,7 +51,14 @@
           <span class="dd-unit">V</span>
         </span>
       </div>
-      <div class="dd-tile dd-span-2" title="6.5 温湿度气压传感器">
+      <div class="dd-tile" title="电流采集模块 2 (ID: 06) · 低压供电电流">
+        <span class="dd-tile-label">低压供电电流</span>
+        <span class="dd-tile-value c-green">
+          {{ fmtFixed(lowVoltageSupplyCurrent, 2) }}
+          <span class="dd-unit">A</span>
+        </span>
+      </div>
+      <div class="dd-tile" title="6.5 温湿度气压传感器">
         <span class="dd-tile-label">大气压</span>
         <span class="dd-tile-value">
           {{ pressureHpa }}
@@ -144,6 +151,12 @@ const heatingClass = computed(() => {
 const batteryInput = computed(() => {
   const v = payloadStore.currentPayload?.voltageSensor?.batteryInput
   return typeof v === 'number' && Number.isFinite(v) ? v : null
+})
+
+// 低压供电电流（0xC4 电流采集模块 2，0.005A 分辨率）
+const lowVoltageSupplyCurrent = computed(() => {
+  const c = payloadStore.currentPayload?.currentSensor2?.lowVoltageSupply
+  return typeof c === 'number' && Number.isFinite(c) ? c : null
 })
 
 // 电池输入电压已在 6.1 区域单独展示，电压条列表不再重复
