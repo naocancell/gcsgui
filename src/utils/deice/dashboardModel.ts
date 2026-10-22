@@ -487,3 +487,58 @@ export function buildHeatStripRows(segments: HeatSegment[]): HeatStripRow[] {
     }
   })
 }
+
+/** 机翼常加热膜（CH08）6 路采温：左=设备1、右=设备2 */
+const CONST_TEMP_POINTS: {
+  name: string
+  sensor: 'tempSensor1' | 'tempSensor2'
+  field: 'innerWingConst' | 'midWingConst' | 'outerWingConst'
+}[] = [
+  { name: '左内', sensor: 'tempSensor1', field: 'innerWingConst' },
+  { name: '左中', sensor: 'tempSensor1', field: 'midWingConst' },
+  { name: '左外', sensor: 'tempSensor1', field: 'outerWingConst' },
+  { name: '右内', sensor: 'tempSensor2', field: 'innerWingConst' },
+  { name: '右中', sensor: 'tempSensor2', field: 'midWingConst' },
+  { name: '右外', sensor: 'tempSensor2', field: 'outerWingConst' },
+]
+
+/**
+ * 温压流矩阵“机翼常加热”行（CH08）：
+ * 温度取 6 路常加热膜采温最低值，电压/电流取常加热膜专用采集通道。
+ */
+export function buildConstHeatRow(
+  p: MissionPayloadAggregate | null | undefined,
+): HeatStripRow {
+  const temps = CONST_TEMP_POINTS.map((pt) => ({
+    name: pt.name,
+    temp: num(p?.[pt.sensor]?.[pt.field]),
+  }))
+  const valid = temps.map((t) => t.temp).filter((t): t is number => t !== null)
+  const voltage = num(p?.voltageSensor?.wingConstHeat)
+  const current = num(p?.currentSensor1?.wingConstHeat)
+  const detail = [
+    `机翼常加热膜 CH08：${fmtFixed(voltage, 1)}V / ${fmtFixed(current, 2)}A`,
+    `温度（取最低）：${temps.map((t) => `${t.name} ${fmtFixed(t.temp, 1)}°C`).join(' / ')}`,
+  ].join('\n')
+  return {
+    key: 'wingConst',
+    name: '机翼常加热',
+    relayIds: [8],
+    temp: valid.length ? Math.min(...valid) : null,
+    voltage,
+    current,
+    detail,
+  }
+}
+
+/** 恒温模式目标温度允许范围（℃，协议参数为 uint16，不支持负温） */
+export const CONST_TEMP_TARGET_MIN = 0
+export const CONST_TEMP_TARGET_MAX = 100
+
+/** 校验恒温目标温度：取整后需落在允许范围内，否则返回 null（不下发） */
+export function normalizeConstTempTarget(val: unknown): number | null {
+  if (typeof val !== 'number' || !Number.isFinite(val)) return null
+  const t = Math.round(val)
+  if (t < CONST_TEMP_TARGET_MIN || t > CONST_TEMP_TARGET_MAX) return null
+  return t
+}

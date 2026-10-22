@@ -77,28 +77,6 @@
           >
             全部断开
           </button>
-          <span class="judge-label">防除冰 · 人工判定</span>
-          <div class="judge-switch" role="group" aria-label="防除冰人工判定">
-            <button
-              type="button"
-              class="judge-opt"
-              :class="{ active: !manualJudge }"
-              :aria-pressed="!manualJudge"
-              @click="setManualJudge(false)"
-            >
-              关闭
-            </button>
-            <button
-              type="button"
-              class="judge-opt judge-opt-on"
-              :class="{ active: manualJudge }"
-              :aria-pressed="manualJudge"
-              @click="setManualJudge(true)"
-            >
-              开启
-            </button>
-          </div>
-
           <div v-if="props.standalone" class="window-controls">
             <button
               class="window-control"
@@ -352,21 +330,25 @@
                       v-else
                       v-model.number="cmdTargetTemp"
                       type="number"
-                      min="-40"
-                      max="100"
+                      :min="CONST_TEMP_TARGET_MIN"
+                      :max="CONST_TEMP_TARGET_MAX"
                       step="1"
                       class="param-input dd-mono"
-                      placeholder="-40~100"
+                      :class="{ 'is-invalid': tempTargetInvalid }"
+                      :placeholder="`${CONST_TEMP_TARGET_MIN}~${CONST_TEMP_TARGET_MAX}`"
                     />
                     <span class="param-unit">
                       {{ selectedPropMode === 2 ? 'W' : '℃' }}
                     </span>
                   </span>
                 </label>
+                <span v-if="tempTargetInvalid" class="param-error">
+                  {{ tempRangeHint }}
+                </span>
                 <button
                   type="button"
                   class="btn-send-cmd"
-                  :disabled="isSendingCommand"
+                  :disabled="isSendingCommand || tempTargetInvalid"
                   @click="confirmParamCommand"
                 >
                   确认下发
@@ -434,11 +416,15 @@ import { useDeiceMonitor } from '@/composables/useDeiceMonitor'
 import {
   useDashboardFit,
   useDeicePowerHistory,
-  useManualIcingJudgement,
   usePayloadLink,
   usePayloadRelayControl,
 } from '@/composables/useDeiceDashboard'
-import { powerDeviationPercent } from '@/utils/deice/dashboardModel'
+import {
+  CONST_TEMP_TARGET_MAX,
+  CONST_TEMP_TARGET_MIN,
+  normalizeConstTempTarget,
+  powerDeviationPercent,
+} from '@/utils/deice/dashboardModel'
 import AirframeHeatMap from '@/components/deice/AirframeHeatMap.vue'
 import BatteryTempStrip from '@/components/deice/BatteryTempStrip.vue'
 import HeatingMatrixPanel from '@/components/deice/HeatingMatrixPanel.vue'
@@ -466,8 +452,6 @@ const payloadStore: ReturnType<typeof usePayloadStore> = usePayloadLink()
 const { closedRelayCount, loadingBatch, handleSetAll } =
   usePayloadRelayControl()
 const { samples: powerSamples } = useDeicePowerHistory(uavStore)
-// 防除冰 · 人工判定开关（顶栏切换，中栏结冰探头同步标注）
-const { manualJudge, setManualJudge } = useManualIcingJudgement()
 // 大屏自适应：窗口高度不足时整体等比缩放三栏内容，尽量免滚动完整呈现
 const bodyEl = ref<HTMLElement | null>(null)
 useDashboardFit(bodyEl)
@@ -487,7 +471,17 @@ const cmdTargetTemp = ref<number>(15) // 目标温度 (℃)
 const isSendingCommand = ref(false)
 const paramPopoverShow = ref(false)
 
+// 恒温目标温度：协议参数为 uint16，负温或越界时禁止下发
+const tempTargetInvalid = computed(
+  () =>
+    selectedPropMode.value === 3 &&
+    normalizeConstTempTarget(cmdTargetTemp.value) === null,
+)
+
+const tempRangeHint = `目标温度需为 ${CONST_TEMP_TARGET_MIN}~${CONST_TEMP_TARGET_MAX}℃ 的整数，不支持负温`
+
 async function confirmParamCommand() {
+  if (tempTargetInvalid.value) return
   paramPopoverShow.value = false
   if (selectedPropMode.value === 2) await handleSendConstantPower()
   else if (selectedPropMode.value === 3) await handleSendConstantTemp()
@@ -535,11 +529,13 @@ async function handleSendConstantPower() {
 }
 
 async function handleSendConstantTemp() {
+  const temp = normalizeConstTempTarget(cmdTargetTemp.value)
+  if (temp === null) {
+    message.error(`${tempRangeHint}，未下发`)
+    return
+  }
   isSendingCommand.value = true
   try {
-    const temp = Number.isFinite(cmdTargetTemp.value)
-      ? Math.round(cmdTargetTemp.value)
-      : 15
     await payloadStore.sendPropellerDeiceCommand(3, 0, temp)
     message.success(`已下发恒温指令: 目标温度=${temp}℃`)
   } catch (e: any) {
@@ -843,12 +839,6 @@ onBeforeUnmount(() => {
   }
 }
 
-@media (max-width: 1500px) {
-  .judge-label {
-    display: none;
-  }
-}
-
 .chip {
   font-size: 11px;
   padding: 4px 8px;
@@ -956,46 +946,6 @@ onBeforeUnmount(() => {
 .ctrl-temp-label {
   font-size: 10px;
   letter-spacing: -0.2px;
-}
-
-.judge-label {
-  font-size: 11.5px;
-  color: var(--dd-text-2);
-  white-space: nowrap;
-}
-
-/* 防除冰 · 人工判定：关闭 / 开启 分段开关 */
-.judge-switch {
-  display: inline-flex;
-  padding: 2px;
-  border-radius: 6px;
-  border: 1px solid rgb(96 165 250 / 35%);
-  background: rgb(15 23 42 / 60%);
-}
-
-.judge-opt {
-  height: 24px;
-  min-width: 52px;
-  padding: 0 12px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--dd-text-2);
-  font-size: 12px;
-  cursor: pointer;
-  transition:
-    background 0.15s ease,
-    color 0.15s ease;
-}
-
-.judge-opt.active {
-  background: rgb(148 163 184 / 14%);
-  color: var(--dd-text);
-}
-
-.judge-opt-on.active {
-  background: rgb(22 101 52 / 45%);
-  color: var(--dd-green);
 }
 
 .window-controls {
@@ -1284,8 +1234,21 @@ onBeforeUnmount(() => {
 
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 10px;
+}
+
+.param-pop .param-error {
+  order: 3;
+  flex-basis: 100%;
+  margin-top: -4px;
+  font-size: 11px;
+  color: #f87171;
+}
+
+.param-input.is-invalid {
+  color: #f87171;
 }
 
 .adjust-btns {

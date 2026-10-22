@@ -183,6 +183,26 @@ pub fn build_propeller_deice_outer_frame(work_mode: u8, param: u16) -> Vec<u8> {
     pack_payload_frame(CODE_UPLINK, PAYLOAD_ID_DEICE, 0, &inner_cmd)
 }
 
+/// 按工作模式解析内层控制帧的参数字段（uint16）。
+///
+/// 恒温模式目标温度在协议中为无符号数，负温若直接 `as u16` 会按补码变成
+/// 0xFFxx（如 -10℃ → 65526），因此在此拒绝下发。
+pub fn resolve_propeller_deice_param(
+    work_mode: u8,
+    target_power: u16,
+    target_temp: i16,
+) -> Result<u16, String> {
+    match work_mode {
+        0x00 => Ok(0x0000),
+        0x01 => Ok(target_power), // 0: 减小 1%, 1: 增大 1%
+        0x02 => Ok(target_power), // 目标功率 (W)
+        // 目标温度 (℃)
+        0x03 => u16::try_from(target_temp)
+            .map_err(|_| format!("恒温模式目标温度不能为负值: {target_temp}℃")),
+        _ => Ok(target_power),
+    }
+}
+
 /// 螺旋桨加热模式与功率/温度控制指令
 ///
 /// 最新协议架构：外层采用 0xAA 0x55 统一任务管理器-载荷透传帧结构，载荷ID为 0xC6；
@@ -196,13 +216,7 @@ pub async fn send_propeller_deice_command(
     target_power: u16,
     target_temp: i16,
 ) -> Result<(), String> {
-    let param: u16 = match work_mode {
-        0x00 => 0x0000,
-        0x01 => target_power, // 0: 减小 1%, 1: 增大 1%
-        0x02 => target_power, // 目标功率 (W)
-        0x03 => target_temp as u16, // 目标温度 (℃)
-        _ => target_power,
-    };
+    let param = resolve_propeller_deice_param(work_mode, target_power, target_temp)?;
 
     let frame = build_propeller_deice_outer_frame(work_mode, param);
     broadcast_raw_payload(&state, &frame).await
@@ -310,5 +324,16 @@ mod tests {
         assert_eq!(&unpacked.data[2..5], &[0x02, 0x02, 0x02]); // 模式重复3次
         assert_eq!(&unpacked.data[5..7], &[0xD0, 0x07]); // 参数低字节在前
     }
-}
 
+    #[test]
+    fn test_resolve_deice_param_rejects_negative_temp() {
+        assert_eq!(resolve_propeller_deice_param(0x03, 0, 15), Ok(15));
+        assert_eq!(resolve_propeller_deice_param(0x03, 0, 0), Ok(0));
+        assert!(resolve_propeller_deice_param(0x03, 0, -10).is_err());
+        assert!(resolve_propeller_deice_param(0x03, 0, i16::MIN).is_err());
+        // 非恒温模式不使用温度参数
+        assert_eq!(resolve_propeller_deice_param(0x02, 2000, -10), Ok(2000));
+        assert_eq!(resolve_propeller_deice_param(0x01, 1, -10), Ok(1));
+        assert_eq!(resolve_propeller_deice_param(0x00, 2000, 15), Ok(0));
+    }
+}

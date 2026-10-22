@@ -242,28 +242,3 @@ export function useTelemetryRate(source: () => unknown, windowMs = 2000) {
   })
   return rate
 }
-
-const MANUAL_JUDGE_KEY = 'deice.manualIcingJudgement'
-
-function readManualJudge(): boolean {
-  try {
-    return globalThis.localStorage?.getItem(MANUAL_JUDGE_KEY) === '1'
-  } catch {
-    return false
-  }
-}
-
-/** 防除冰 · 人工判定开关（全局共享，本地持久化） */
-const manualJudge = ref<boolean>(readManualJudge())
-
-export function useManualIcingJudgement() {
-  function setManualJudge(on: boolean) {
-    manualJudge.value = on
-    try {
-      globalThis.localStorage?.setItem(MANUAL_JUDGE_KEY, on ? '1' : '0')
-    } catch {
-      // 本地存储不可用时仅保留内存状态
-    }
-  }
-  return { manualJudge, setManualJudge }
-}
