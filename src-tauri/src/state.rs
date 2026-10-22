@@ -12,6 +12,8 @@ struct TimedFP95Aggregate {
     aggregate: crate::protocol::fp95::FP95Aggregate,
     last_seen: Instant,
     frame94_sequence: u64,
+    /// 防除冰子帧（94/子帧2 或 0xC6 载荷）最近一次刷新时间
+    deice_seen: Option<Instant>,
 }
 
 #[derive(Clone, Serialize)]
@@ -20,7 +22,12 @@ pub struct FP95EventPayload {
     #[serde(flatten)]
     aggregate: crate::protocol::fp95::FP95Aggregate,
     frame94_sequence: u64,
+    /// 防除冰控制器数据已超时（控制器单独掉线），前端应按离线处理
+    deice_stale: bool,
 }
+
+/// 防除冰控制器数据超过该时长未刷新即视为掉线
+pub const FP95_DEICE_STALE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// 代表一条处于活动状态的物理链路句柄
 pub struct ActiveLink {
@@ -157,6 +164,9 @@ pub struct AppState {
 
     /// 回放会话公共状态（pacing 循环写，emitter / command 读）
     pub replay_status: Arc<RwLock<Option<crate::recorder::replay::ReplayStatus>>>,
+
+    /// TX 层：继电器写线圈串行锁 + 已下发未确认的期望掩码（防读-改-写互相覆盖）
+    pub relay_pending: Arc<tokio::sync::Mutex<Option<crate::protocol::payload::PendingRelayMask>>>,
 }
 
 impl AppState {
@@ -176,6 +186,7 @@ impl AppState {
             recorder: Arc::new(crate::recorder::RecorderService::new()),
             replay: Arc::new(crate::recorder::replay::ReplayEngine::new()),
             replay_status: Arc::new(RwLock::new(None)),
+            relay_pending: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
@@ -205,18 +216,53 @@ impl AppState {
             aggregate: Default::default(),
             last_seen: received_at,
             frame94_sequence: 0,
+            deice_seen: None,
         });
         state.aggregate.uav_id = uav_id;
-        if matches!(
-            &parsed,
+        match &parsed {
             crate::protocol::fp95::ParsedSubFrame::Frame94(
-                crate::protocol::fp95::FP95Frame94::Sub1(_)
-            )
-        ) {
-            state.frame94_sequence = state.frame94_sequence.wrapping_add(1);
+                crate::protocol::fp95::FP95Frame94::Sub1(_),
+            ) => {
+                state.frame94_sequence = state.frame94_sequence.wrapping_add(1);
+            }
+            crate::protocol::fp95::ParsedSubFrame::Frame94(
+                crate::protocol::fp95::FP95Frame94::Sub2(_),
+            ) => {
+                state.deice_seen = Some(received_at);
+            }
+            _ => {}
         }
 
         state.aggregate.merge(parsed);
+        state.last_seen = received_at;
+    }
+
+    /// 合入 0xC6 载荷透传的防除冰控制器数据。
+    ///
+    /// 载荷外层协议不带机号：已有 FP95 聚合时保留 FP95 帧上报的真实机号，
+    /// 仅在尚无 FP95 数据时用 `fallback_uav_id` 建立聚合。
+    pub fn merge_fp95_deice(
+        &self,
+        fallback_uav_id: u8,
+        deice: crate::protocol::fp95::FP95Frame94Sub2,
+        received_at: Instant,
+    ) {
+        let mut guard = self.fp95_state.lock().expect("FP95 state mutex poisoned");
+        let state = guard.get_or_insert_with(|| TimedFP95Aggregate {
+            aggregate: crate::protocol::fp95::FP95Aggregate {
+                uav_id: fallback_uav_id,
+                ..Default::default()
+            },
+            last_seen: received_at,
+            frame94_sequence: 0,
+            deice_seen: None,
+        });
+        state
+            .aggregate
+            .merge(crate::protocol::fp95::ParsedSubFrame::Frame94(
+                crate::protocol::fp95::FP95Frame94::Sub2(deice),
+            ));
+        state.deice_seen = Some(received_at);
         state.last_seen = received_at;
     }
 
@@ -235,9 +281,21 @@ impl AppState {
         {
             *guard = None;
         }
-        guard.as_ref().map(|state| FP95EventPayload {
+        let state = guard.as_mut()?;
+        // 防除冰控制器单独掉线：清空子帧2，避免继续显示最后一次的值
+        let deice_stale = !keep_replay
+            && state
+                .deice_seen
+                .is_some_and(|seen| now.duration_since(seen) > FP95_DEICE_STALE_TIMEOUT);
+        if deice_stale {
+            if let Some(frame94) = state.aggregate.frame94.as_mut() {
+                frame94.sub2 = None;
+            }
+        }
+        Some(FP95EventPayload {
             aggregate: state.aggregate.clone(),
             frame94_sequence: state.frame94_sequence,
+            deice_stale,
         })
     }
 

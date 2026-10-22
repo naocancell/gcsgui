@@ -1,8 +1,9 @@
 //! 任管载荷控制与查询 Tauri 命令层
 
 use crate::protocol::payload::{
-    build_read_coils_cmd, build_write_coils_cmd, pack_payload_frame, MissionPayloadAggregate,
-    RelayStatus, CODE_UPLINK, PAYLOAD_ID_DEICE, PAYLOAD_ID_RELAY,
+    build_read_coils_cmd, build_write_coils_cmd, next_uplink_seq, pack_payload_frame,
+    pack_uplink_payload_frame, resolve_relay_base_mask, unix_now_ms, MissionPayloadAggregate,
+    PendingRelayMask, RelayStatus, CODE_UPLINK, PAYLOAD_ID_DEICE, PAYLOAD_ID_RELAY,
 };
 use crate::state::AppState;
 use crate::uplink::dispatcher::{broadcast_raw_payload, broadcast_raw_payload_poll};
@@ -21,11 +22,15 @@ pub async fn send_relay_control(
 
     // 根据协议图映射：b0~b7 对应线圈 9~16，b8~b15 对应线圈 1~8
     let bit_pos = RelayStatus::coil_to_bit_pos(relay_index);
-    let current_mask = state
-        .mission_payload_pool
-        .get(&uav_id)
-        .and_then(|agg| agg.relay.map(|r| r.mask))
-        .unwrap_or(0);
+
+    // 写线圈一次覆盖 16 路：串行化读-改-写，防止并发/连续操作互相覆盖
+    let mut pending = state.relay_pending.lock().await;
+    let now_ms = unix_now_ms();
+    let reported = state.mission_payload_pool.get(&uav_id).and_then(|agg| {
+        agg.relay
+            .map(|r| (r.mask, agg.device_updated_ms.relay.unwrap_or(0)))
+    });
+    let current_mask = resolve_relay_base_mask(reported, *pending, now_ms)?;
 
     let new_mask = if enabled {
         current_mask | (1 << bit_pos)
@@ -33,17 +38,36 @@ pub async fn send_relay_control(
         current_mask & !(1 << bit_pos)
     };
 
-    let inner_cmd = build_write_coils_cmd(new_mask);
-    let frame = pack_payload_frame(CODE_UPLINK, PAYLOAD_ID_RELAY, 0, &inner_cmd);
-    let res = broadcast_raw_payload(&state, &frame).await;
+    log::info!(
+        "[继电器] 单路切换 CH{relay_index:02} -> {}，掩码 0x{current_mask:04X} -> 0x{new_mask:04X}",
+        if enabled { "通电" } else { "断开" }
+    );
+    let res = send_relay_mask(state.inner(), new_mask).await;
     if res.is_ok() {
-        let state_clone = state.inner().clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            let inner_cmd = build_read_coils_cmd();
-            let query_frame = pack_payload_frame(CODE_UPLINK, PAYLOAD_ID_RELAY, 0, &inner_cmd);
-            let _ = broadcast_raw_payload(&state_clone, &query_frame).await;
+        *pending = Some(PendingRelayMask {
+            mask: new_mask,
+            sent_at_ms: now_ms,
         });
+    }
+    res
+}
+
+/// 下发写线圈指令，成功后 200ms 回读一次确认
+async fn send_relay_mask(state: &AppState, mask: u16) -> Result<(), String> {
+    let inner_cmd = build_write_coils_cmd(mask);
+    let frame = pack_uplink_payload_frame(PAYLOAD_ID_RELAY, &inner_cmd);
+    let res = broadcast_raw_payload(state, &frame).await;
+    match &res {
+        Err(e) => log::warn!("[继电器] 写线圈 0x{mask:04X} 下发失败: {e}"),
+        Ok(()) => {
+            let state_clone = state.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                let inner_cmd = build_read_coils_cmd();
+                let query_frame = pack_uplink_payload_frame(PAYLOAD_ID_RELAY, &inner_cmd);
+                let _ = broadcast_raw_payload(&state_clone, &query_frame).await;
+            });
+        }
     }
     res
 }
@@ -55,16 +79,13 @@ pub async fn send_relay_batch(
     _uav_id: u8,
     mask: u16,
 ) -> Result<(), String> {
-    let inner_cmd = build_write_coils_cmd(mask);
-    let frame = pack_payload_frame(CODE_UPLINK, PAYLOAD_ID_RELAY, 0, &inner_cmd);
-    let res = broadcast_raw_payload(&state, &frame).await;
+    let mut pending = state.relay_pending.lock().await;
+    log::info!("[继电器] 批量设置掩码 0x{mask:04X}");
+    let res = send_relay_mask(state.inner(), mask).await;
     if res.is_ok() {
-        let state_clone = state.inner().clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            let inner_cmd = build_read_coils_cmd();
-            let query_frame = pack_payload_frame(CODE_UPLINK, PAYLOAD_ID_RELAY, 0, &inner_cmd);
-            let _ = broadcast_raw_payload(&state_clone, &query_frame).await;
+        *pending = Some(PendingRelayMask {
+            mask,
+            sent_at_ms: unix_now_ms(),
         });
     }
     res
@@ -90,7 +111,7 @@ pub fn start_relay_status_poller(state: AppState) {
 
             if has_active_uplink && !state.replay_active() {
                 let inner_cmd = build_read_coils_cmd();
-                let frame = pack_payload_frame(CODE_UPLINK, PAYLOAD_ID_RELAY, 0, &inner_cmd);
+                let frame = pack_uplink_payload_frame(PAYLOAD_ID_RELAY, &inner_cmd);
                 let _ = broadcast_raw_payload_poll(&state, &frame).await;
             }
         }
@@ -104,7 +125,7 @@ pub async fn query_relay_status(
     _uav_id: u8,
 ) -> Result<(), String> {
     let inner_cmd = build_read_coils_cmd();
-    let frame = pack_payload_frame(CODE_UPLINK, PAYLOAD_ID_RELAY, 0, &inner_cmd);
+    let frame = pack_uplink_payload_frame(PAYLOAD_ID_RELAY, &inner_cmd);
     broadcast_raw_payload(&state, &frame).await
 }
 
@@ -175,12 +196,12 @@ pub fn build_propeller_deice_uplink_payload(work_mode: u8, param: u16) -> [u8; 1
 /// - 协议识别码：0x0A (1B, CODE_UPLINK 上行)
 /// - 载荷ID：0xC6 (1B, PAYLOAD_ID_DEICE 电防冰控制器)
 /// - 数据长度：12 (2B, u16 LE)
-/// - 帧计数：0 (1B)
+/// - 帧计数：0~255 (1B，按载荷 ID 递增，见 `next_uplink_seq`)
 /// - 有效数据内容：12 字节标准控制帧 (DFB-2000-48-A 规范)
 /// - 和校验：帧头至有效数据内容所有字节累加和取低8位 (1B)
-pub fn build_propeller_deice_outer_frame(work_mode: u8, param: u16) -> Vec<u8> {
+pub fn build_propeller_deice_outer_frame(work_mode: u8, param: u16, seq: u8) -> Vec<u8> {
     let inner_cmd = build_propeller_deice_cmd(work_mode, param);
-    pack_payload_frame(CODE_UPLINK, PAYLOAD_ID_DEICE, 0, &inner_cmd)
+    pack_payload_frame(CODE_UPLINK, PAYLOAD_ID_DEICE, seq, &inner_cmd)
 }
 
 /// 按工作模式解析内层控制帧的参数字段（uint16）。
@@ -194,12 +215,16 @@ pub fn resolve_propeller_deice_param(
 ) -> Result<u16, String> {
     match work_mode {
         0x00 => Ok(0x0000),
-        0x01 => Ok(target_power), // 0: 减小 1%, 1: 增大 1%
+        // 0: 减小 1%, 1: 增大 1%
+        0x01 if target_power <= 1 => Ok(target_power),
+        0x01 => Err(format!(
+            "指令调节参数只能为 0（减小 1%）或 1（增大 1%）: {target_power}"
+        )),
         0x02 => Ok(target_power), // 目标功率 (W)
         // 目标温度 (℃)
         0x03 => u16::try_from(target_temp)
             .map_err(|_| format!("恒温模式目标温度不能为负值: {target_temp}℃")),
-        _ => Ok(target_power),
+        _ => Err(format!("未知的防除冰工作模式: 0x{work_mode:02X}")),
     }
 }
 
@@ -218,8 +243,14 @@ pub async fn send_propeller_deice_command(
 ) -> Result<(), String> {
     let param = resolve_propeller_deice_param(work_mode, target_power, target_temp)?;
 
-    let frame = build_propeller_deice_outer_frame(work_mode, param);
-    broadcast_raw_payload(&state, &frame).await
+    let seq = next_uplink_seq(PAYLOAD_ID_DEICE);
+    let frame = build_propeller_deice_outer_frame(work_mode, param, seq);
+    log::info!("[防除冰] 下发模式 0x{work_mode:02X} 参数 {param}（帧计数 {seq}）");
+    let res = broadcast_raw_payload(&state, &frame).await;
+    if let Err(e) = &res {
+        log::warn!("[防除冰] 模式 0x{work_mode:02X} 下发失败: {e}");
+    }
+    res
 }
 
 #[cfg(test)]
@@ -308,13 +339,13 @@ mod tests {
         use crate::protocol::payload::unpack_payload_frame;
 
         // 构造恒功率模式 2000W 控制帧
-        let frame = build_propeller_deice_outer_frame(0x02, 2000);
+        let frame = build_propeller_deice_outer_frame(0x02, 2000, 7);
         assert_eq!(frame.len(), 20, "AA55外层帧头8字节 + 12字节内层控制帧 = 20字节");
         assert_eq!(&frame[0..2], &[0xAA, 0x55]);
         assert_eq!(frame[2], CODE_UPLINK);
         assert_eq!(frame[3], PAYLOAD_ID_DEICE);
         assert_eq!(u16::from_le_bytes([frame[4], frame[5]]), 12);
-        assert_eq!(frame[6], 0); // 帧计数
+        assert_eq!(frame[6], 7); // 帧计数
 
         let unpacked = unpack_payload_frame(&frame).expect("AA55外层解包成功");
         assert_eq!(unpacked.direction_code, CODE_UPLINK);
@@ -335,5 +366,13 @@ mod tests {
         assert_eq!(resolve_propeller_deice_param(0x02, 2000, -10), Ok(2000));
         assert_eq!(resolve_propeller_deice_param(0x01, 1, -10), Ok(1));
         assert_eq!(resolve_propeller_deice_param(0x00, 2000, 15), Ok(0));
+    }
+
+    #[test]
+    fn test_resolve_deice_param_rejects_invalid_mode_and_adjust_step() {
+        assert_eq!(resolve_propeller_deice_param(0x01, 0, 0), Ok(0));
+        assert!(resolve_propeller_deice_param(0x01, 2, 0).is_err());
+        assert!(resolve_propeller_deice_param(0x04, 2000, 0).is_err());
+        assert!(resolve_propeller_deice_param(0xFF, 0, 0).is_err());
     }
 }

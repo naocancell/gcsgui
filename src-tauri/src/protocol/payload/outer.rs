@@ -10,6 +10,7 @@
 //! - 校验：和校验，帧头至有效数据内容所有字节累加和低8位 (1字节)
 
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 pub const PAYLOAD_HEADER: [u8; 2] = [0xAA, 0x55];
 pub const CODE_UPLINK: u8 = 0x0A;
@@ -56,6 +57,24 @@ pub fn pack_payload_frame(
     let checksum = calculate_checksum(&frame);
     frame.push(checksum);
     frame
+}
+
+/// 上行帧计数器：按载荷 ID（0xC0~0xC6）独立递增，0~255 循环。
+///
+/// 同一帧会广播到所有上行链路，多链路收到的是相同帧计数，机载端可据此去重。
+static UPLINK_SEQ: [AtomicU8; 7] = [const { AtomicU8::new(0) }; 7];
+
+/// 取下一个上行帧计数（非 0xC0~0xC6 的载荷 ID 固定返回 0）
+pub fn next_uplink_seq(payload_id: u8) -> u8 {
+    let idx = payload_id.wrapping_sub(PAYLOAD_ID_ATMOSPHERE) as usize;
+    UPLINK_SEQ
+        .get(idx)
+        .map_or(0, |counter| counter.fetch_add(1, Ordering::Relaxed))
+}
+
+/// 打包上行外层报文，并自动分配帧计数
+pub fn pack_uplink_payload_frame(payload_id: u8, data: &[u8]) -> Vec<u8> {
+    pack_payload_frame(CODE_UPLINK, payload_id, next_uplink_seq(payload_id), data)
 }
 
 /// 解包外层报文（传入必须是一包完整数据）
@@ -119,6 +138,16 @@ mod tests {
         assert_eq!(unpacked.payload_id, PAYLOAD_ID_BUS_SENSORS);
         assert_eq!(unpacked.seq_num, 12);
         assert_eq!(unpacked.data, raw_data);
+    }
+
+    #[test]
+    fn test_uplink_seq_increments_per_payload_id() {
+        let a0 = pack_uplink_payload_frame(PAYLOAD_ID_DEICE, &[0x01]);
+        let a1 = pack_uplink_payload_frame(PAYLOAD_ID_DEICE, &[0x01]);
+        assert_eq!(a0[2], CODE_UPLINK);
+        assert_eq!(a1[6], a0[6].wrapping_add(1), "同一载荷 ID 帧计数应递增");
+        assert!(unpack_payload_frame(&a1).is_ok(), "自动帧计数后校验仍正确");
+        assert_eq!(next_uplink_seq(0x00), 0, "未知载荷 ID 固定为 0");
     }
 
     #[test]

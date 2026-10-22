@@ -92,6 +92,46 @@ impl RelayStatus {
 
 /// 构建读线圈上行请求报文（读取 16 路继电器）
 /// 最新协议示例：01 01 00 00 00 10 3D C6
+/// 单路切换后、回报确认前的“期望掩码”。
+///
+/// 写线圈指令一次覆盖全部 16 路，单路切换必须基于最新掩码做读-改-写；
+/// 连续操作时下一次应基于上一次已下发的掩码，而不是尚未刷新的回报。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingRelayMask {
+    pub mask: u16,
+    pub sent_at_ms: u64,
+}
+
+/// 写入后该时长内收到的回报可能是写入生效前发出的轮询应答，不作为确认
+pub const RELAY_SETTLE_MS: u64 = 300;
+/// 期望掩码最长保留时间，超时后以设备回报为准
+pub const RELAY_PENDING_TTL_MS: u64 = 3_000;
+
+/// 计算单路切换的基准掩码。
+///
+/// - `reported`：设备最近一次回报的 (掩码, 回报时间 ms)，已超时清空时为 `None`
+/// - `pending`：上一次已下发但尚未被回报确认的期望掩码
+///
+/// 两者都没有时拒绝操作，避免按全 0 掩码写入把其他回路全部断开。
+pub fn resolve_relay_base_mask(
+    reported: Option<(u16, u64)>,
+    pending: Option<PendingRelayMask>,
+    now_ms: u64,
+) -> Result<u16, String> {
+    if let Some(p) = pending {
+        let confirmed =
+            reported.is_some_and(|(_, updated_ms)| updated_ms > p.sent_at_ms + RELAY_SETTLE_MS);
+        let expired = now_ms.saturating_sub(p.sent_at_ms) > RELAY_PENDING_TTL_MS;
+        if !confirmed && !expired {
+            return Ok(p.mask);
+        }
+    }
+    reported.map(|(mask, _)| mask).ok_or_else(|| {
+        "尚未收到继电器状态回报，为避免误断其他回路已拒绝单路切换，请稍后重试或使用全部通电/断开"
+            .to_string()
+    })
+}
+
 pub fn build_read_coils_cmd() -> [u8; 8] {
     let mut cmd = [0u8; 8];
     cmd[0] = RELAY_DEVICE_ID;
@@ -183,6 +223,45 @@ pub fn parse_relay_response(data: &[u8]) -> Result<Option<RelayStatus>, String> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_resolve_relay_base_mask() {
+        // 从未收到回报且无期望掩码：拒绝，避免按 0 掩码误断全部回路
+        assert!(resolve_relay_base_mask(None, None, 1_000).is_err());
+
+        // 只有回报：以回报为准
+        assert_eq!(
+            resolve_relay_base_mask(Some((0x00F0, 900)), None, 1_000),
+            Ok(0x00F0)
+        );
+
+        // 连续切换：回报尚未刷新时基于上一次已下发的掩码
+        let pending = PendingRelayMask {
+            mask: 0x00F1,
+            sent_at_ms: 1_000,
+        };
+        assert_eq!(
+            resolve_relay_base_mask(Some((0x00F0, 900)), Some(pending), 1_100),
+            Ok(0x00F1)
+        );
+        // 写入后 300ms 内的回报可能是旧轮询应答，不作为确认
+        assert_eq!(
+            resolve_relay_base_mask(Some((0x00F0, 1_200)), Some(pending), 1_250),
+            Ok(0x00F1)
+        );
+        // 写入生效后的回报到达：以设备实际回报为准
+        assert_eq!(
+            resolve_relay_base_mask(Some((0x00F3, 1_400)), Some(pending), 1_450),
+            Ok(0x00F3)
+        );
+        // 期望掩码超时且回报已清空：拒绝
+        assert!(resolve_relay_base_mask(None, Some(pending), 4_100).is_err());
+        // 回报暂时缺失但期望掩码仍有效：继续基于期望掩码
+        assert_eq!(
+            resolve_relay_base_mask(None, Some(pending), 2_000),
+            Ok(0x00F1)
+        );
+    }
+
     use super::*;
 
     #[test]

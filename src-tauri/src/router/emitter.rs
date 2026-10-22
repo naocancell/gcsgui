@@ -7,6 +7,7 @@ pub async fn start_emitter(app_handle: AppHandle, app_state: AppState) {
     let mut interval = interval(Duration::from_millis(100)); // 10Hz
     let evict_timeout = std::time::Duration::from_secs(10); // 10秒死链剔除阈值
     let mut tick_count = 0_u64;
+    let mut payload_was_present = false;
 
     loop {
         interval.tick().await;
@@ -42,6 +43,11 @@ pub async fn start_emitter(app_handle: AppHandle, app_state: AppState) {
                     true
                 }
             });
+            // 单个载荷子设备掉线：清空该设备数据，其余设备照常显示
+            let now_ms = crate::protocol::payload::unix_now_ms();
+            for mut agg in app_state.mission_payload_pool.iter_mut() {
+                agg.prune_stale_devices(now_ms, crate::protocol::payload::PAYLOAD_DEVICE_STALE_MS);
+            }
         }
 
         // 推送 UAVInfo 原始状态
@@ -81,11 +87,13 @@ pub async fn start_emitter(app_handle: AppHandle, app_state: AppState) {
             .iter()
             .map(|kv| kv.value().clone())
             .collect();
-        if !payload_list.is_empty() {
+        // 载荷池被整体剔除时再推送一次空列表，通知前端清空残留数据
+        if !payload_list.is_empty() || payload_was_present {
             if let Err(e) = app_handle.emit("mission-payload-event", &payload_list) {
                 log_throttled_emit_error("mission-payload-event", &e);
             }
         }
+        payload_was_present = !payload_list.is_empty();
 
         if should_emit_health(tick_count) {
             let snapshot = app_state.rx_health_snapshot();
