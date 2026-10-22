@@ -503,6 +503,45 @@ impl UplinkHandle {
     }
 }
 
+fn handle_message(core: &mut UplinkCore, message: UplinkMessage) {
+    match message {
+        UplinkMessage::SetAircraftId { aircraft_id, reply } => {
+            core.set_aircraft_id(aircraft_id);
+            let _ = reply.send(());
+        }
+        UplinkMessage::UpdateControl { control, reply } => {
+            core.update_control(control);
+            let _ = reply.send(());
+        }
+        UplinkMessage::UpdatePeriodic { periodic, reply } => {
+            let _ = reply.send(core.update_periodic(periodic));
+        }
+        UplinkMessage::SubmitCommand {
+            command,
+            policy,
+            reply,
+        } => {
+            let _ = reply.send(core.submit_command(command, policy));
+        }
+        UplinkMessage::SubmitFlightSwitch { command, reply } => {
+            let _ = reply.send(core.submit_flight_switch(command));
+        }
+        UplinkMessage::ClearCommand { reply } => {
+            core.clear_command();
+            let _ = reply.send(());
+        }
+        UplinkMessage::ClearCommandIf {
+            function_code,
+            reply,
+        } => {
+            let _ = reply.send(core.clear_command_if(function_code));
+        }
+        UplinkMessage::Status { reply } => {
+            let _ = reply.send(core.status());
+        }
+    }
+}
+
 fn build_actor(
     sink: Arc<dyn UplinkFrameSink>,
     aircraft_id: u8,
@@ -513,6 +552,7 @@ fn build_actor(
         let mut interval = tokio::time::interval(Duration::from_millis(20));
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         interval.tick().await;
+        let mut tick_panics: u32 = 0;
 
         loop {
             tokio::select! {
@@ -520,37 +560,26 @@ fn build_actor(
                     let Some(message) = message else {
                         break;
                     };
-                    match message {
-                        UplinkMessage::SetAircraftId { aircraft_id, reply } => {
-                            core.set_aircraft_id(aircraft_id);
-                            let _ = reply.send(());
-                        }
-                        UplinkMessage::UpdateControl { control, reply } => {
-                            core.update_control(control);
-                            let _ = reply.send(());
-                        }
-                        UplinkMessage::UpdatePeriodic { periodic, reply } => {
-                            let _ = reply.send(core.update_periodic(periodic));
-                        }
-                        UplinkMessage::SubmitCommand { command, policy, reply } => {
-                            let _ = reply.send(core.submit_command(command, policy));
-                        }
-                        UplinkMessage::SubmitFlightSwitch { command, reply } => {
-                            let _ = reply.send(core.submit_flight_switch(command));
-                        }
-                        UplinkMessage::ClearCommand { reply } => {
-                            core.clear_command();
-                            let _ = reply.send(());
-                        }
-                        UplinkMessage::ClearCommandIf { function_code, reply } => {
-                            let _ = reply.send(core.clear_command_if(function_code));
-                        }
-                        UplinkMessage::Status { reply } => {
-                            let _ = reply.send(core.status());
+                    let handled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        handle_message(&mut core, message)
+                    }));
+                    if handled.is_err() {
+                        // 单条指令处理 panic 不得让上行任务静默死亡（回复通道随之丢弃，调用方会收到错误）
+                        log::error!("[Uplink] 处理上行消息时发生 panic，已丢弃该消息并继续运行");
+                    }
+                }
+                _ = interval.tick() => {
+                    let ticked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        core.tick(sink.as_ref())
+                    }));
+                    if ticked.is_err() {
+                        tick_panics = tick_panics.wrapping_add(1);
+                        // 20ms 周期：首次及此后每 500 次（约 10s）记录一次，避免刷屏
+                        if tick_panics % 500 == 1 {
+                            log::error!("[Uplink] 上行周期发送发生 panic（累计 {tick_panics} 次），继续运行");
                         }
                     }
                 }
-                _ = interval.tick() => core.tick(sink.as_ref()),
             }
         }
     };

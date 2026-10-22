@@ -1,9 +1,9 @@
 use std::io::{Read, Write};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, mpsc::Sender};
+use tokio::sync::mpsc::Sender;
 
 use crate::error::CommsError;
 use crate::event::{LinkEvent, LinkStatus};
@@ -24,8 +24,32 @@ pub fn list_available_ports() -> Result<Vec<serialport::SerialPortInfo>, CommsEr
 
 pub struct SerialLink {
     name: String,
-    writer: Arc<Mutex<Box<dyn serialport::SerialPort>>>,
+    /// 串口写是阻塞 IO：用标准库互斥锁 + spawn_blocking 发送，避免阻塞 tokio 工作线程。
+    /// 读线程检测到设备异常时置为 None，立即释放句柄，便于同名端口重新打开（Windows 串口独占）
+    writer: Arc<Mutex<Option<Box<dyn serialport::SerialPort>>>>,
     is_running: Arc<AtomicBool>,
+}
+
+/// 打开串口（读写超时 50ms）。
+///
+/// Unix 下 `set_exclusive` 只在原生 `TTYPort` 上提供，需先 `open_native` 取消独占后再装箱；
+/// 直接在 `Box<dyn SerialPort>` 上调用会导致 Linux/macOS 编译失败。
+#[cfg(unix)]
+fn open_port(config: &SerialConfig) -> Result<Box<dyn serialport::SerialPort>, CommsError> {
+    let mut port = serialport::new(&config.port_name, config.baud_rate)
+        .timeout(Duration::from_millis(50))
+        .open_native()
+        .map_err(CommsError::Serial)?;
+    port.set_exclusive(false).map_err(CommsError::Serial)?;
+    Ok(Box::new(port))
+}
+
+#[cfg(not(unix))]
+fn open_port(config: &SerialConfig) -> Result<Box<dyn serialport::SerialPort>, CommsError> {
+    serialport::new(&config.port_name, config.baud_rate)
+        .timeout(Duration::from_millis(50))
+        .open()
+        .map_err(CommsError::Serial)
 }
 
 impl SerialLink {
@@ -33,17 +57,12 @@ impl SerialLink {
         config: SerialConfig,
         event_tx: Sender<LinkEvent>,
     ) -> Result<Arc<Self>, CommsError> {
-        let port = serialport::new(&config.port_name, config.baud_rate)
-            .timeout(Duration::from_millis(50))
-            .open()
-            .map_err(CommsError::Serial)?;
-
-        #[cfg(unix)]
-        port.set_exclusive(false).map_err(CommsError::Serial)?;
+        let port = open_port(&config)?;
 
         // let (mut reader, writer) = tokio::io::split(port);
         let mut reader = port.try_clone().map_err(CommsError::Serial)?;
-        let writer = Arc::new(Mutex::new(port));
+        let writer = Arc::new(Mutex::new(Some(port)));
+        let fault_writer = writer.clone();
         let is_running = Arc::new(AtomicBool::new(true));
 
         let link = Arc::new(Self {
@@ -99,6 +118,11 @@ impl SerialLink {
                     }
                     Err(e) => {
                         log::error!("串口链路 [{}] 读取异常 (可能已拔出): {}", rx_name, e);
+                        // 释放写句柄：读句柄随线程退出释放，两者都关闭后端口才能被重新打开
+                        fault_writer
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .take();
                         let _ = rx_tx.blocking_send(LinkEvent::StatusChanged {
                             link_name: rx_name.clone(),
                             status: LinkStatus::Faulted(e.to_string()),
@@ -132,10 +156,21 @@ impl TransportLink for SerialLink {
     }
 
     async fn send(&self, payload: &[u8]) -> Result<usize, CommsError> {
-        let mut w = self.writer.lock().await;
-        w.write_all(payload).map_err(CommsError::Io)?;
-        w.flush().map_err(CommsError::Io)?;
-        Ok(payload.len())
+        let writer = self.writer.clone();
+        let data = payload.to_vec();
+        tokio::task::spawn_blocking(move || {
+            let mut guard = writer
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let Some(w) = guard.as_mut() else {
+                return Err(CommsError::LinkClosed);
+            };
+            w.write_all(&data)?;
+            w.flush()?;
+            Ok(data.len())
+        })
+        .await
+        .map_err(|e| CommsError::LinkFaulted(format!("串口发送任务异常: {e}")))?
     }
 
     fn stop(&self) {

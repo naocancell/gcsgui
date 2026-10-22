@@ -14,6 +14,21 @@ struct TimedFP95Aggregate {
     frame94_sequence: u64,
     /// 防除冰子帧（94/子帧2 或 0xC6 载荷）最近一次刷新时间
     deice_seen: Option<Instant>,
+    /// 0x80/0x81/0x83/0x84 各帧最近一次刷新时间：0xC6 载荷会持续刷新 last_seen，
+    /// 需按帧单独判定超时，避免飞控帧中断后仍把最后一次的位置/状态当成实时数据显示
+    frame_seen: [Option<Instant>; 4],
+}
+
+/// frame_seen 下标：0x80 / 0x81 / 0x83 / 0x84
+fn fp95_frame_slot(parsed: &crate::protocol::fp95::ParsedSubFrame) -> Option<usize> {
+    use crate::protocol::fp95::ParsedSubFrame;
+    match parsed {
+        ParsedSubFrame::Frame80(_) => Some(0),
+        ParsedSubFrame::Frame81(_) => Some(1),
+        ParsedSubFrame::Frame83(_) => Some(2),
+        ParsedSubFrame::Frame84(_) => Some(3),
+        ParsedSubFrame::Frame94(_) => None,
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -167,6 +182,9 @@ pub struct AppState {
 
     /// TX 层：继电器写线圈串行锁 + 已下发未确认的期望掩码（防读-改-写互相覆盖）
     pub relay_pending: Arc<tokio::sync::Mutex<Option<crate::protocol::payload::PendingRelayMask>>>,
+
+    /// 通信配置保存/热重载串行锁：防止两次保存并发热重载导致链路重复启动或互相停止
+    pub comms_config_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AppState {
@@ -187,6 +205,7 @@ impl AppState {
             replay: Arc::new(crate::recorder::replay::ReplayEngine::new()),
             replay_status: Arc::new(RwLock::new(None)),
             relay_pending: Arc::new(tokio::sync::Mutex::new(None)),
+            comms_config_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -217,6 +236,7 @@ impl AppState {
             last_seen: received_at,
             frame94_sequence: 0,
             deice_seen: None,
+            frame_seen: [None; 4],
         });
         state.aggregate.uav_id = uav_id;
         match &parsed {
@@ -233,6 +253,9 @@ impl AppState {
             _ => {}
         }
 
+        if let Some(slot) = fp95_frame_slot(&parsed) {
+            state.frame_seen[slot] = Some(received_at);
+        }
         state.aggregate.merge(parsed);
         state.last_seen = received_at;
     }
@@ -256,6 +279,7 @@ impl AppState {
             last_seen: received_at,
             frame94_sequence: 0,
             deice_seen: None,
+            frame_seen: [None; 4],
         });
         state
             .aggregate
@@ -282,6 +306,23 @@ impl AppState {
             *guard = None;
         }
         let state = guard.as_mut()?;
+        if !keep_replay {
+            let expired =
+                |seen: Option<Instant>| seen.is_some_and(|seen| now.duration_since(seen) > timeout);
+            let aggregate = &mut state.aggregate;
+            if expired(state.frame_seen[0]) {
+                aggregate.frame80 = None;
+            }
+            if expired(state.frame_seen[1]) {
+                aggregate.frame81 = None;
+            }
+            if expired(state.frame_seen[2]) {
+                aggregate.frame83 = None;
+            }
+            if expired(state.frame_seen[3]) {
+                aggregate.frame84 = None;
+            }
+        }
         // 防除冰控制器单独掉线：清空子帧2，避免继续显示最后一次的值
         let deice_stale = !keep_replay
             && state
@@ -355,5 +396,30 @@ impl AppState {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn fp95_frames_expire_individually_while_payload_keeps_aggregate_alive() {
+        let state = AppState::new();
+        let t0 = Instant::now();
+        let frame83 = crate::protocol::fp95::ParsedSubFrame::from_bytes(0x83, &[0u8; 25])
+            .expect("构造 0x83 帧失败");
+        state.merge_fp95(7, frame83, t0);
+
+        // 0xC6 载荷持续刷新聚合，但 0x83 飞控位置帧已中断 11s
+        let later = t0 + Duration::from_secs(11);
+        state.merge_fp95_deice(95, Default::default(), later);
+
+        let snapshot = state
+            .fp95_snapshot(later, Duration::from_secs(10))
+            .expect("载荷仍在刷新，聚合应保留");
+        assert!(snapshot.aggregate.frame83.is_none(), "0x83 超时应清空");
+        assert_eq!(snapshot.aggregate.uav_id, 7, "机号保持 FP95 帧上报值");
     }
 }

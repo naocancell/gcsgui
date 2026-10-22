@@ -1,8 +1,125 @@
+use crate::comms::{emit_link_status, LinkStatusEvent};
 use crate::parse_protocol;
 use crate::state;
+use comms_core::TransportLink;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+
+/// 串口异常断开后的自动重连间隔
+const SERIAL_RECONNECT_INTERVAL: Duration = Duration::from_secs(2);
+
+/// 链路仍是同名同代数的那一条（未被用户停止或重建）
+fn is_current_link(state: &state::AppState, name: &str, generation: u64) -> bool {
+    state
+        .active_links
+        .get(name)
+        .is_some_and(|link| link.generation == generation)
+}
+
+/// 串口链路事件循环：转发数据给路由；设备拔出等异常断开时通知前端并每 2s 自动重连，
+/// 重连成功后原地替换 transport（链路名/代数/录制会话不变）；用户停止链路后退出。
+async fn supervise_serial_link(
+    state: state::AppState,
+    router_tx: crate::comms::RouterTx,
+    config: comms_core::SerialConfig,
+    generation: u64,
+    mut event_rx: mpsc::Receiver<comms_core::LinkEvent>,
+) {
+    let link_name = config.name.clone();
+    loop {
+        let mut fault_reason = None;
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                comms_core::LinkEvent::Data {
+                    payload,
+                    received_at,
+                    ..
+                } => {
+                    let _ = router_tx
+                        .send(crate::comms::RawData {
+                            source_link: link_name.clone(),
+                            link_generation: generation,
+                            data: payload,
+                            received_at,
+                        })
+                        .await;
+                }
+                comms_core::LinkEvent::StatusChanged { status, .. } => {
+                    log::info!("串口链路 {} 底层状态变化: {:?}", link_name, status);
+                    match status {
+                        comms_core::LinkStatus::Faulted(reason) => {
+                            fault_reason = Some(reason);
+                            break;
+                        }
+                        comms_core::LinkStatus::Stopped => break,
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        let Some(reason) = fault_reason else { break };
+        if !is_current_link(&state, &link_name, generation) {
+            break;
+        }
+        log::warn!(
+            "[链路] 串口 {} 异常断开（{}），每 {}s 自动重连",
+            link_name,
+            reason,
+            SERIAL_RECONNECT_INTERVAL.as_secs()
+        );
+        emit_link_status(LinkStatusEvent {
+            link_name: link_name.clone(),
+            link_type: "SERIAL",
+            status: "faulted",
+            reason: Some(reason),
+        });
+
+        let mut attempts: u32 = 0;
+        loop {
+            tokio::time::sleep(SERIAL_RECONNECT_INTERVAL).await;
+            if !is_current_link(&state, &link_name, generation) {
+                log::info!("串口链路 {} 已被停止或重建，放弃自动重连", link_name);
+                return;
+            }
+            attempts += 1;
+            let (event_tx, next_rx) = mpsc::channel::<comms_core::LinkEvent>(100);
+            match comms_core::SerialLink::start(config.clone(), event_tx).await {
+                Ok(transport) => {
+                    let replaced = match state.active_links.get_mut(&link_name) {
+                        Some(mut link) if link.generation == generation => {
+                            link.transport = transport.clone();
+                            true
+                        }
+                        _ => false,
+                    };
+                    if !replaced {
+                        transport.stop();
+                        return;
+                    }
+                    log::info!(
+                        "[链路] 串口 {} 已自动重连（第 {} 次尝试）",
+                        link_name,
+                        attempts
+                    );
+                    emit_link_status(LinkStatusEvent {
+                        link_name: link_name.clone(),
+                        link_type: "SERIAL",
+                        status: "recovered",
+                        reason: None,
+                    });
+                    event_rx = next_rx;
+                    break;
+                }
+                Err(error) => {
+                    log::debug!("串口 {} 第 {} 次重连失败: {}", link_name, attempts, error);
+                }
+            }
+        }
+    }
+    log::info!("串口链路 {} 接收监听已结束", link_name);
+}
 
 pub async fn start_serial_internal(
     state: &state::AppState,
@@ -26,9 +143,9 @@ pub async fn start_serial_internal(
         buffer_size: 4096,
     };
 
-    let (event_tx, mut event_rx) = mpsc::channel::<comms_core::LinkEvent>(100);
+    let (event_tx, event_rx) = mpsc::channel::<comms_core::LinkEvent>(100);
 
-    let transport = comms_core::SerialLink::start(config, event_tx)
+    let transport = comms_core::SerialLink::start(config.clone(), event_tx)
         .await
         .map_err(|e| format!("启动串口内核失败: {}", e))?;
 
@@ -47,33 +164,13 @@ pub async fn start_serial_internal(
     state.active_links.insert(link_name.clone(), active_link);
     let _ = state.recorder.start_link(&link_name, protocol_type, "Serial");
 
-    let router_tx_clone = router_tx.clone();
-    let ln_clone = link_name.clone();
-
-    tauri::async_runtime::spawn(async move {
-        while let Some(event) = event_rx.recv().await {
-            match event {
-                comms_core::LinkEvent::Data {
-                    payload,
-                    received_at,
-                    ..
-                } => {
-                    let _ = router_tx_clone
-                        .send(crate::comms::RawData {
-                            source_link: ln_clone.clone(),
-                            link_generation: generation,
-                            data: payload,
-                            received_at,
-                        })
-                        .await;
-                }
-                comms_core::LinkEvent::StatusChanged { status, .. } => {
-                    log::info!("串口链路 {} 底层状态变化: {:?}", ln_clone, status);
-                }
-            }
-        }
-        log::info!("串口链路 {} 接收监听已结束", ln_clone);
-    });
+    tauri::async_runtime::spawn(supervise_serial_link(
+        state.clone(),
+        router_tx.clone(),
+        config,
+        generation,
+        event_rx,
+    ));
 
     Ok("串口监听服务启动成功".to_string())
 }

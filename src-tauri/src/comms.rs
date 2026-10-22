@@ -10,7 +10,7 @@ pub enum ProtocolType {
     FP981C,
     /// 75 字节帧，无帧头帧尾，整包即帧
     UAVInfo,
-    /// 256 字节帧，有固定帧头帧尾
+    /// 32 字节帧，EB90 / 2323 包头（与任管载荷 AA55 帧混合同一链路）
     FP95,
     /// 伺服天线转台转发，32 字节帧，EB90 包头，单播发送
     ServoTurntable,
@@ -38,3 +38,28 @@ pub struct RawData {
 
 /// 全局数据汇聚通道
 pub type RouterTx = tokio::sync::mpsc::Sender<RawData>;
+
+/// 链路运行状态变化事件（Tauri 事件名 `link-status-changed`），供前端提示断线/恢复
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkStatusEvent {
+    pub link_name: String,
+    /// "SERIAL" / "UDP"
+    pub link_type: &'static str,
+    /// "faulted"（异常断开；串口会自动重连，UDP 需手动重启）/ "recovered"（串口已自动恢复）
+    pub status: &'static str,
+    pub reason: Option<String>,
+}
+
+pub const LINK_STATUS_EVENT: &str = "link-status-changed";
+
+/// 推送链路状态变化事件；应用句柄尚未就绪（如单元测试）时静默跳过
+pub fn emit_link_status(event: LinkStatusEvent) {
+    let Some(app) = crate::APP_HANDLE.get() else {
+        return;
+    };
+    use tauri::Emitter;
+    if let Err(error) = app.emit(LINK_STATUS_EVENT, event) {
+        log::warn!("推送链路状态事件失败: {error}");
+    }
+}

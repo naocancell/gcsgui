@@ -158,6 +158,8 @@ pub async fn save_comms_config(
     uplink: tauri::State<'_, crate::uplink::UplinkHandle>,
     mut config: CommsConfig,
 ) -> Result<String, crate::error::AppError> {
+    // 串行化保存与热重载：前端连续点击保存时，后一次等前一次链路切换完成后再执行
+    let _config_guard = state.comms_config_lock.lock().await;
     config.normalize();
     // 调用方未携带机号时沿用配置文件中的已有值，避免保存链路时把人工设置的机号冲掉
     if config.uplink_aircraft_id.is_none() {

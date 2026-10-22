@@ -28,6 +28,9 @@ pub(crate) fn parse_protocol(protocol: &str) -> Result<comms::ProtocolType, Stri
         "UAVInfo" => Ok(comms::ProtocolType::UAVInfo),
         "FP95" => Ok(comms::ProtocolType::FP95),
         "ServoTurntable" => Ok(comms::ProtocolType::ServoTurntable),
+        "PassthroughC0" => Ok(comms::ProtocolType::PassthroughC0),
+        "PassthroughC1" => Ok(comms::ProtocolType::PassthroughC1),
+        "PassthroughC2" => Ok(comms::ProtocolType::PassthroughC2),
         _ => Err(format!("未知的协议类型: {}", protocol)),
     }
 }
@@ -48,6 +51,46 @@ pub fn run() {
         }))
         .setup(|app| {
             let _ = APP_HANDLE.set(app.handle().clone());
+
+            // 最先初始化日志插件（强行创建目录并落盘），确保后续各子系统启动日志不丢失
+            use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
+            let log_dir = app
+                .path()
+                .app_log_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("./logs"));
+
+            let _ = std::fs::create_dir_all(&log_dir);
+
+            match app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .targets([
+                        Target::new(TargetKind::Stdout),
+                        Target::new(TargetKind::Folder {
+                            path: log_dir.clone(),
+                            file_name: Some("gcsgui".to_string()),
+                        }),
+                        Target::new(TargetKind::Webview),
+                    ])
+                    .max_file_size(20 * 1024 * 1024)
+                    .rotation_strategy(RotationStrategy::KeepSome(14))
+                    .timezone_strategy(TimezoneStrategy::UseLocal)
+                    .level(if cfg!(debug_assertions) {
+                        log::LevelFilter::Debug
+                    } else {
+                        log::LevelFilter::Info
+                    })
+                    .level_for("tao", log::LevelFilter::Warn)
+                    .level_for("wry", log::LevelFilter::Warn)
+                    .build(),
+            ) {
+                Err(e) => {
+                    eprintln!("初始化日志插件失败: {}", e);
+                }
+                _ => {
+                    log::info!("=== GCSGUI 地面站日志系统初始化成功 ===");
+                    log::info!("日志持久化保存路径: {:?}", log_dir);
+                }
+            }
 
             let app_state = state::AppState::new();
             app.manage(app_state.clone());
@@ -79,7 +122,7 @@ pub fn run() {
             let app_handle_emitter = app.handle().clone();
             let app_state_emitter = app_state.clone();
             tauri::async_runtime::spawn(async move {
-                router::emitter::start_emitter(app_handle_emitter, app_state_emitter).await;
+                router::emitter::supervise_emitter(app_handle_emitter, app_state_emitter).await;
             });
 
             // 启动串口热插拔监测后台任务
@@ -87,43 +130,6 @@ pub fn run() {
 
             // 启动 0xC3 继电器 0.5Hz 自主轮询上行任务（开始通信后自主轮询）
             crate::command::payload::start_relay_status_poller(app_state.clone());
-
-            // 开启软件日志插件（强行创建目录并落盘）
-            use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
-            let log_dir = app
-                .path()
-                .app_log_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("./logs"));
-
-            let _ = std::fs::create_dir_all(&log_dir);
-
-            match app.handle().plugin(
-                tauri_plugin_log::Builder::default()
-                    .targets([
-                        Target::new(TargetKind::Stdout),
-                        Target::new(TargetKind::Folder {
-                            path: log_dir.clone(),
-                            file_name: Some("gcsgui".to_string()),
-                        }),
-                        Target::new(TargetKind::Webview),
-                    ])
-                    .max_file_size(20 * 1024 * 1024)
-                    .rotation_strategy(RotationStrategy::KeepSome(14))
-                    .timezone_strategy(TimezoneStrategy::UseLocal)
-                    .level(if cfg!(debug_assertions) {
-                        log::LevelFilter::Debug
-                    } else {
-                        log::LevelFilter::Info
-                    })
-                    .level_for("tao", log::LevelFilter::Warn)
-                    .level_for("wry", log::LevelFilter::Warn)
-                    .build(),
-            ) { Err(e) => {
-                eprintln!("初始化日志插件失败: {}", e);
-            } _ => {
-                log::info!("=== GCSGUI 地面站日志系统初始化成功 ===");
-                log::info!("日志持久化保存路径: {:?}", log_dir);
-            }}
 
             // 初始化记录回放子系统数据存放目录
             let rec_dir = app

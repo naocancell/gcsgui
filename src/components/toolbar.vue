@@ -12,6 +12,7 @@ import {
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 import { useStaticStore } from '@/store/staticStore'
 import { useUavStore } from '@/store/uavStore'
@@ -21,6 +22,11 @@ import { getUnicode } from '@/types/entityoptions'
 import RouteManageViewer from '@/core/gis/RouteManageViewer'
 import { useMarkObstacle } from '@/hooks/useMarkObstacle'
 import { isTauri } from '@/utils/homeWindowData'
+import {
+  LINK_STATUS_EVENT,
+  describeLinkStatus,
+  type LinkStatusEvent,
+} from '@/utils/linkStatus'
 import {
   exitApplicationOnClose,
   restoreTelemetryWindow,
@@ -278,11 +284,25 @@ function handleDrawSelect(key: string) {
 }
 
 let mainCloseUnlisten: (() => void) | null = null
+let linkStatusUnlisten: UnlistenFn | null = null
 onMounted(async () => {
   if (isTauri()) {
     mainCloseUnlisten = await getCurrentWindow().onCloseRequested(async (e) => {
       await exitApplicationOnClose(e, () => invoke('close_app'))
     })
+    // 链路异常断开/自动恢复提示（串口拔出后后端每 2s 自动重连）
+    linkStatusUnlisten = await listen<LinkStatusEvent>(
+      LINK_STATUS_EVENT,
+      (event) => {
+        const notice = describeLinkStatus(event.payload)
+        if (!notice) return
+        if (notice.type === 'error') {
+          message.error(notice.content, { duration: 8000 })
+        } else {
+          message.success(notice.content)
+        }
+      },
+    )
   }
 })
 onBeforeUnmount(() => {
@@ -292,6 +312,8 @@ onBeforeUnmount(() => {
     mainCloseUnlisten()
     mainCloseUnlisten = null
   }
+  linkStatusUnlisten?.()
+  linkStatusUnlisten = null
 })
 </script>
 

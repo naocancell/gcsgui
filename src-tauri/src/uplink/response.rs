@@ -99,7 +99,7 @@ impl FP95ResponseCoordinator {
                 return;
             };
             if pending.aircraft_id != aircraft_id {
-                log::warn!(
+                log::debug!(
                     "忽略 FP95 0x80 回报：飞机 ID 不匹配，期望 {}，收到 {}，数据 {:02X?}",
                     pending.aircraft_id,
                     aircraft_id,
@@ -108,7 +108,7 @@ impl FP95ResponseCoordinator {
                 return;
             }
             if !Self::matches(&pending.expected, &data) {
-                log::warn!(
+                log::debug!(
                     "忽略 FP95 0x80 回报：不匹配当前等待事务，数据 {:02X?}",
                     data
                 );

@@ -1,4 +1,4 @@
-use bytes::BytesMut;
+use bytes::{Buf, BytesMut};
 use std::collections::{HashMap, HashSet};
 
 use crate::comms::{ProtocolType, RawData};
@@ -78,6 +78,7 @@ impl RouterCore {
         &mut self,
         raw: RawData,
         protocol: ProtocolType,
+        datagram: bool,
         active_protocol_links: HashSet<String>,
         app_state: &AppState,
         response_coordinator: &FP95ResponseCoordinator,
@@ -87,6 +88,11 @@ impl RouterCore {
             .entry(raw.source_link.clone())
             .or_insert_with(|| LinkBuffer::new(raw.link_generation, protocol));
         buffer.reset_if_source_changed(raw.link_generation, protocol);
+        if datagram && protocol == ProtocolType::UAVInfo {
+            // UAVInfo 无帧头无校验，UDP 链路按数据报对齐：每个数据报独立切帧，
+            // 避免一个残缺数据报让后续所有 75 字节帧永久错位
+            buffer.data.clear();
+        }
         buffer.data.extend_from_slice(&raw.data);
 
         match protocol {
@@ -99,7 +105,17 @@ impl RouterCore {
                 app_state,
             ),
             ProtocolType::UAVInfo => {
-                extract_and_process_uav_info(&mut buffer.data, raw.received_at, app_state)
+                extract_and_process_uav_info(&mut buffer.data, raw.received_at, app_state);
+                if datagram && !buffer.data.is_empty() {
+                    log::debug!(
+                        "链路 {} UAVInfo 数据报长度 {} 不是 75 的整数倍，丢弃尾部 {} 字节",
+                        raw.source_link,
+                        raw.data.len(),
+                        buffer.data.len()
+                    );
+                    app_state.metrics.inc_parse_err();
+                    buffer.data.clear();
+                }
             }
             ProtocolType::FP95 => extract_and_process_fp95_and_payload(
                 &mut buffer.data,
@@ -175,6 +191,8 @@ pub async fn start_router(
     let mut router = RouterCore::new(RxArbiterConfig::default());
     let mut maintenance = tokio::time::interval(Duration::from_millis(250));
     maintenance.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // 回放期间实时链路的数据只录制不解析，避免与回放画面混叠；仅在状态切换时打一次日志
+    let mut live_suppressed_logged = false;
 
     loop {
         tokio::select! {
@@ -195,17 +213,50 @@ pub async fn start_router(
                     *lock = raw.received_at;
                     (link.protocol, link.link_type.clone())
                 };
-                let active = active_links_for_protocol(&app_state, protocol);
                 // 记录 tap：非阻塞，按链路独立记录
                 app_state
                     .recorder
                     .try_record(&raw, protocol, Some(&link_type));
-                router.process_raw(raw, protocol, active, &app_state, &response_coordinator);
+                let replay_active = app_state.replay_active();
+                if replay_active && link_type != REPLAY_LINK_TYPE {
+                    if !live_suppressed_logged {
+                        log::info!("[Replay] 回放进行中，实时链路数据仅录制、暂停解析");
+                        live_suppressed_logged = true;
+                    }
+                    continue;
+                }
+                if !replay_active && live_suppressed_logged {
+                    log::info!("[Replay] 回放已结束，实时链路数据恢复解析");
+                    live_suppressed_logged = false;
+                }
+                let datagram = link_type == "UDP";
+                let active = active_links_for_protocol(&app_state, protocol, replay_active);
+                let processed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    router.process_raw(
+                        raw,
+                        protocol,
+                        datagram,
+                        active,
+                        &app_state,
+                        &response_coordinator,
+                    );
+                }));
+                if processed.is_err() {
+                    // 单帧解析 panic 不得让整个路由任务静默退出；丢弃该链路缓冲后继续
+                    log::error!("[Router] 处理链路数据时发生 panic，已丢弃该批数据并继续运行");
+                    router.link_buffers.clear();
+                }
             }
             _ = maintenance.tick() => {
                 router.sync_link_generations(&active_link_generations(&app_state));
-                let active = active_links_by_protocol(&app_state);
-                app_state.replace_rx_health(router.maintenance(Instant::now(), &active));
+                let active = active_links_by_protocol(&app_state, app_state.replay_active());
+                let snapshot = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    router.maintenance(Instant::now(), &active)
+                }));
+                match snapshot {
+                    Ok(snapshot) => app_state.replace_rx_health(snapshot),
+                    Err(_) => log::error!("[Router] 链路健康维护发生 panic，本轮跳过"),
+                }
                 // 自动同步并清理已停用链路的录制会话
                 app_state.recorder.sync_active_links(&app_state.active_links);
             }
@@ -213,18 +264,36 @@ pub async fn start_router(
     }
 }
 
-fn active_links_for_protocol(app_state: &AppState, protocol: ProtocolType) -> HashSet<String> {
+/// 回放虚拟链路的 link_type（见 recorder::replay::register_virtual_link）
+const REPLAY_LINK_TYPE: &str = "Replay";
+
+/// 回放期间仅回放虚拟链路参与仲裁，实时链路不计入期望链路（否则会被误记丢帧）
+fn link_participates(link: &crate::state::ActiveLink, replay_active: bool) -> bool {
+    !replay_active || link.link_type == REPLAY_LINK_TYPE
+}
+
+fn active_links_for_protocol(
+    app_state: &AppState,
+    protocol: ProtocolType,
+    replay_active: bool,
+) -> HashSet<String> {
     app_state
         .active_links
         .iter()
-        .filter(|link| link.protocol == protocol)
+        .filter(|link| link.protocol == protocol && link_participates(link, replay_active))
         .map(|link| link.key().clone())
         .collect()
 }
 
-fn active_links_by_protocol(app_state: &AppState) -> HashMap<ProtocolType, HashSet<String>> {
+fn active_links_by_protocol(
+    app_state: &AppState,
+    replay_active: bool,
+) -> HashMap<ProtocolType, HashSet<String>> {
     let mut result: HashMap<ProtocolType, HashSet<String>> = HashMap::new();
     for link in app_state.active_links.iter() {
+        if !link_participates(&link, replay_active) {
+            continue;
+        }
         result
             .entry(link.protocol)
             .or_default()
@@ -253,21 +322,27 @@ fn extract_and_process_fp981c(
 ) {
     while let Some(header_idx) = find_fp981c_header(buffer) {
         if header_idx > 0 {
-            let _ = buffer.split_to(header_idx); // O(1) 零拷贝丢弃头部垃圾
+            buffer.advance(header_idx); // 丢弃头部垃圾
         }
-        if buffer.len() >= 32 {
-            let frame = buffer.split_to(32); // O(1) 零拷贝切出整帧
-            process_fp981c_frame(
-                &frame,
-                source_link,
-                received_at,
-                active_links.clone(),
-                arbiter,
-                app_state,
-            );
-        } else {
+        if buffer.len() < 32 {
             break;
         }
+        // 先校验整帧 CRC：数据区里偶然出现的 EB 90 伪帧头校验失败时只滑过 1 字节，
+        // 不整段吞掉 32 字节，避免把紧随其后的真实帧一起丢弃
+        if !crate::protocol::fkd_crc::verify_fkd_crc(&buffer[..32], 0xEB, 0x90) {
+            app_state.metrics.inc_crc_fail();
+            buffer.advance(1);
+            continue;
+        }
+        let frame = buffer.split_to(32); // O(1) 零拷贝切出整帧
+        process_fp981c_frame(
+            &frame,
+            source_link,
+            received_at,
+            active_links.clone(),
+            arbiter,
+            app_state,
+        );
     }
     // 找不到头时保留末尾1字节防EB90被切断
     if find_fp981c_header(buffer).is_none() && buffer.len() > 1 {
@@ -344,8 +419,13 @@ fn extract_and_process_uav_info(buffer: &mut BytesMut, received_at: Instant, app
 
         match UAVInfo::from_bytes(&frame) {
             Ok(info) => {
+                // 机号超出 u8 范围说明帧错位或数据异常，截断成 u8 会凭空造出“幽灵飞机”
+                let Ok(uav_id) = u8::try_from(info.uav_id) else {
+                    app_state.metrics.inc_parse_err();
+                    log::debug!("UAVInfo 机号 {} 超出 0-255，已丢弃", info.uav_id);
+                    continue;
+                };
                 app_state.metrics.inc_ok();
-                let uav_id = info.uav_id as u8;
                 app_state.uav_pool.insert(uav_id, info);
                 app_state.uav_seen.insert(uav_id, received_at);
             }
@@ -384,6 +464,23 @@ fn find_next_fp95_or_payload_header(buffer: &[u8]) -> Option<MixedFp95Header> {
     None
 }
 
+/// 任管载荷外层帧最大有效数据长度：保证整帧不超过 4096 字节的链路缓冲上限
+const MAX_PAYLOAD_DATA_LEN: usize = 4096 - 8;
+
+/// AA55 帧头合理性：方向码为 0x0A/0x0B、载荷 ID 在 0xC0~0xC6、声明长度不超过缓冲上限
+fn plausible_payload_header(buffer: &[u8]) -> bool {
+    use crate::protocol::payload::{
+        CODE_DOWNLINK, CODE_UPLINK, PAYLOAD_ID_ATMOSPHERE, PAYLOAD_ID_DEICE,
+    };
+    if buffer.len() < 6 {
+        return false;
+    }
+    let data_len = u16::from_le_bytes([buffer[4], buffer[5]]) as usize;
+    matches!(buffer[2], CODE_UPLINK | CODE_DOWNLINK)
+        && (PAYLOAD_ID_ATMOSPHERE..=PAYLOAD_ID_DEICE).contains(&buffer[3])
+        && data_len <= MAX_PAYLOAD_DATA_LEN
+}
+
 fn extract_and_process_fp95_and_payload(
     buffer: &mut BytesMut,
     reassembler: &mut crate::protocol::payload::PayloadStreamReassembler,
@@ -398,44 +495,56 @@ fn extract_and_process_fp95_and_payload(
         match header {
             MixedFp95Header::Fp95(header_idx, h1, h2) => {
                 if header_idx > 0 {
-                    let _ = buffer.split_to(header_idx);
+                    buffer.advance(header_idx);
                 }
-                if buffer.len() >= 32 {
-                    let frame = buffer.split_to(32);
-                    process_fp95_frame(
-                        frame.as_ref(),
-                        (h1, h2),
-                        source_link,
-                        received_at,
-                        active_links.clone(),
-                        arbiter,
-                        app_state,
-                        response_coordinator,
-                    );
-                } else {
+                if buffer.len() < 32 {
                     break;
                 }
+                // 伪帧头（数据区里偶然出现 EB90/2323）CRC 必然失败：只滑过 1 字节继续找头
+                if !crate::protocol::fkd_crc::verify_fkd_crc(&buffer[..32], h1, h2) {
+                    app_state.metrics.inc_crc_fail();
+                    buffer.advance(1);
+                    continue;
+                }
+                let frame = buffer.split_to(32);
+                process_fp95_frame(
+                    frame.as_ref(),
+                    (h1, h2),
+                    source_link,
+                    received_at,
+                    active_links.clone(),
+                    arbiter,
+                    app_state,
+                    response_coordinator,
+                );
             }
             MixedFp95Header::Payload(header_idx) => {
                 if header_idx > 0 {
-                    let _ = buffer.split_to(header_idx);
+                    buffer.advance(header_idx);
                 }
                 if buffer.len() < 8 {
                     break; // 长度不足以读取头部和长度字段
                 }
+                // 帧头合理性检查：方向码/载荷 ID/长度任一不合理即视为伪帧头，只滑过 1 字节，
+                // 防止 FP95 数据区里的 AA 55 声明一个超长长度把后续真实帧全部“吞掉”
+                if !plausible_payload_header(buffer) {
+                    buffer.advance(1);
+                    continue;
+                }
                 let data_len = u16::from_le_bytes([buffer[4], buffer[5]]) as usize;
                 let total_len = 8 + data_len;
-                if buffer.len() >= total_len {
-                    let frame = buffer.split_to(total_len);
-                    process_payload_frame(
-                        frame.as_ref(),
-                        reassembler,
-                        app_state,
-                        received_at,
-                    );
-                } else {
+                if buffer.len() < total_len {
                     break;
                 }
+                let checksum =
+                    crate::protocol::payload::calculate_checksum(&buffer[..total_len - 1]);
+                if checksum != buffer[total_len - 1] {
+                    app_state.metrics.inc_crc_fail();
+                    buffer.advance(1);
+                    continue;
+                }
+                let frame = buffer.split_to(total_len);
+                process_payload_frame(frame.as_ref(), reassembler, app_state, received_at);
             }
         }
     }
@@ -813,6 +922,131 @@ mod tests {
         let sent = mock_transport.sent.lock().await;
         assert_eq!(sent.len(), 1, "应成功转发一帧数据至 PassthroughC0 链路");
         assert_eq!(sent[0], raw_c0_data);
+    }
+
+    fn valid_fp95_frame(seq: u8, uav_id: u8) -> [u8; 32] {
+        let mut frame = [0u8; 32];
+        frame[0] = 0xEB;
+        frame[1] = 0x90;
+        frame[2] = seq;
+        frame[3] = uav_id;
+        frame[4] = 0x80;
+        let crc = crate::protocol::fkd_crc::calculate_fkd_crc(&frame[2..30]);
+        frame[30..32].copy_from_slice(&crc);
+        frame
+    }
+
+    fn run_fp95_extract(buffer: &mut BytesMut, app_state: &AppState) {
+        let mut reassembler = crate::protocol::payload::PayloadStreamReassembler::new();
+        let mut arbiter = RxArbiter::new(RxArbiterConfig::default());
+        let coordinator = FP95ResponseCoordinator::default();
+        extract_and_process_fp95_and_payload(
+            buffer,
+            &mut reassembler,
+            "test_link",
+            Instant::now(),
+            HashSet::new(),
+            &mut arbiter,
+            app_state,
+            &coordinator,
+        );
+    }
+
+    #[test]
+    fn false_fp95_header_does_not_swallow_following_real_frame() {
+        let app_state = AppState::new();
+        let mut buffer = BytesMut::new();
+        // 伪帧头 EB 90 + 10 字节垃圾，紧跟一帧真实 FP95 帧
+        buffer.extend_from_slice(&[0xEB, 0x90]);
+        buffer.extend_from_slice(&[0u8; 10]);
+        buffer.extend_from_slice(&valid_fp95_frame(1, 9));
+
+        run_fp95_extract(&mut buffer, &app_state);
+
+        let metrics = app_state.metrics.snapshot();
+        assert_eq!(metrics.frames_crc_fail, 1, "伪帧头应只计一次 CRC 失败");
+        assert_eq!(
+            metrics.frames_ok + metrics.parse_err,
+            1,
+            "伪帧头后的真实帧必须被切出并解析"
+        );
+    }
+
+    #[test]
+    fn implausible_payload_header_does_not_stall_fp95_stream() {
+        let app_state = AppState::new();
+        let mut buffer = BytesMut::new();
+        // 伪 AA55 帧头声明 0xFFFF 超长数据，旧逻辑会一直等待直至缓冲溢出
+        buffer.extend_from_slice(&[0xAA, 0x55, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00]);
+        buffer.extend_from_slice(&valid_fp95_frame(1, 9));
+
+        run_fp95_extract(&mut buffer, &app_state);
+
+        let metrics = app_state.metrics.snapshot();
+        assert_eq!(metrics.frames_ok + metrics.parse_err, 1);
+        assert!(buffer.len() <= 1, "处理后不应残留等待中的伪载荷帧");
+    }
+
+    #[test]
+    fn plausible_payload_header_checks_direction_id_and_length() {
+        let header = |direction: u8, id: u8, len: u16| {
+            let [lo, hi] = len.to_le_bytes();
+            [0xAA, 0x55, direction, id, lo, hi]
+        };
+        assert!(plausible_payload_header(&header(0x0B, 0xC6, 14)));
+        assert!(plausible_payload_header(&header(0x0A, 0xC0, 0)));
+        assert!(!plausible_payload_header(&header(0x0C, 0xC3, 1)));
+        assert!(!plausible_payload_header(&header(0x0B, 0xC7, 1)));
+        assert!(!plausible_payload_header(&header(0x0B, 0xC3, 4089)));
+    }
+
+    #[test]
+    fn uav_info_datagram_misalignment_does_not_persist() {
+        let app_state = AppState::new();
+        let mut router = RouterCore::new(RxArbiterConfig::default());
+        let raw = |data: Vec<u8>| RawData {
+            source_link: "uav_udp".to_string(),
+            link_generation: 1,
+            data,
+            received_at: Instant::now(),
+        };
+        let mut frame = vec![0u8; 75];
+        frame[1..5].copy_from_slice(&7u32.to_le_bytes());
+        let coordinator = FP95ResponseCoordinator::default();
+
+        // 先来一个残缺数据报（74 字节），再来一个完整数据报
+        router.process_raw(
+            raw(vec![0xFF; 74]),
+            ProtocolType::UAVInfo,
+            true,
+            HashSet::new(),
+            &app_state,
+            &coordinator,
+        );
+        router.process_raw(
+            raw(frame),
+            ProtocolType::UAVInfo,
+            true,
+            HashSet::new(),
+            &app_state,
+            &coordinator,
+        );
+
+        assert!(app_state.uav_pool.contains_key(&7), "完整数据报应正常解析");
+        assert_eq!(app_state.uav_pool.len(), 1, "残缺数据报不得造成错位");
+    }
+
+    #[test]
+    fn uav_info_rejects_out_of_range_uav_id() {
+        let app_state = AppState::new();
+        let mut buffer = BytesMut::new();
+        let mut frame = vec![0u8; 75];
+        frame[1..5].copy_from_slice(&300u32.to_le_bytes());
+        buffer.extend_from_slice(&frame);
+
+        extract_and_process_uav_info(&mut buffer, Instant::now(), &app_state);
+
+        assert!(app_state.uav_pool.is_empty(), "机号超出 0-255 的帧应被丢弃");
     }
 
     #[test]
