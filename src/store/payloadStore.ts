@@ -111,7 +111,21 @@ export interface MissionPayloadAggregate {
   icingSensor: IcingSensorData | null
   deice?: FP95Frame94Sub2 | null
   lastUpdatedMs: number
+  /** 各子设备最近一次成功解析的时间（Unix ms），超时后后端会清空对应数据 */
+  deviceUpdatedMs?: Partial<Record<PayloadDeviceKey, number | null>>
 }
+
+export type PayloadDeviceKey =
+  | 'relay'
+  | 'boostModule'
+  | 'tempSensor1'
+  | 'tempSensor2'
+  | 'voltageSensor'
+  | 'currentSensor1'
+  | 'currentSensor2'
+  | 'environmentSensor'
+  | 'icingSensor'
+  | 'deice'
 
 export const usePayloadStore = defineStore('payloadStore', () => {
   const payloadMap = ref<Record<number, MissionPayloadAggregate>>({})
@@ -206,12 +220,18 @@ export const usePayloadStore = defineStore('payloadStore', () => {
   async function startListening() {
     if (unlisten) return
     try {
-      unlisten = await listen<MissionPayloadAggregate[]>('mission-payload-event', (event) => {
-        const list = event.payload || []
-        for (const item of list) {
-          payloadMap.value[item.uavId] = item
-        }
-      })
+      unlisten = await listen<MissionPayloadAggregate[]>(
+        'mission-payload-event',
+        (event) => {
+          // 后端每次推送的是完整快照：未出现在列表中的机号说明已被死链剔除，需同步移除
+          const list = event.payload || []
+          const next: Record<number, MissionPayloadAggregate> = {}
+          for (const item of list) {
+            next[item.uavId] = item
+          }
+          payloadMap.value = next
+        },
+      )
       logger.info('前端已挂载 MissionPayload 载荷数据监听服务')
     } catch (e) {
       logger.error('挂载 MissionPayload 监听失败:', e)

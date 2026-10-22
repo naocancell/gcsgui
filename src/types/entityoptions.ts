@@ -239,6 +239,8 @@ export type FP95Frame94Sub1 = {
 
   export type FP95EventPayload = FP95Aggregate & {
     frame94Sequence?: number
+    /** 防除冰控制器数据已超时（控制器单独掉线） */
+    deiceStale?: boolean
   }
 
   export interface FP981CFrameC1 {

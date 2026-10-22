@@ -455,11 +455,8 @@ fn process_payload_frame(
     match crate::protocol::payload::unpack_payload_frame(frame) {
         Ok(outer) => {
             app_state.metrics.inc_ok();
-            let uav_id = 95; // 默认机号
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0);
+            let uav_id = crate::protocol::payload::MISSION_PAYLOAD_UAV_ID;
+            let now_ms = crate::protocol::payload::unix_now_ms();
 
             let mut agg = app_state
                 .mission_payload_pool
@@ -469,13 +466,8 @@ fn process_payload_frame(
             reassembler.feed_payload(outer.payload_id, &outer.data, &mut agg, now_ms);
             if outer.payload_id == crate::protocol::payload::PAYLOAD_ID_DEICE {
                 if let Some(deice) = &agg.deice {
-                    app_state.merge_fp95(
-                        uav_id,
-                        crate::protocol::fp95::ParsedSubFrame::Frame94(
-                            crate::protocol::fp95::FP95Frame94::Sub2(deice.clone()),
-                        ),
-                        received_at,
-                    );
+                    // 载荷外层协议不带机号，合入 FP95 聚合时不得覆盖 FP95 帧上报的真实机号
+                    app_state.merge_fp95_deice(uav_id, deice.clone(), received_at);
                 }
             } else if matches!(
                 outer.payload_id,
@@ -672,29 +664,7 @@ fn process_passthrough_uplink(data: &[u8], payload_id: u8, app_state: &AppState)
         return;
     }
 
-    static SEQ_C0: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
-    static SEQ_C1: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
-    static SEQ_C2: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
-
-    let seq = match payload_id {
-        crate::protocol::payload::PAYLOAD_ID_ATMOSPHERE => {
-            SEQ_C0.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        }
-        crate::protocol::payload::PAYLOAD_ID_FLARE => {
-            SEQ_C1.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        }
-        crate::protocol::payload::PAYLOAD_ID_CLOUD_DROP => {
-            SEQ_C2.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        }
-        _ => 0,
-    };
-
-    let frame = crate::protocol::payload::pack_payload_frame(
-        crate::protocol::payload::CODE_UPLINK,
-        payload_id,
-        seq,
-        data,
-    );
+    let frame = crate::protocol::payload::pack_uplink_payload_frame(payload_id, data);
 
     let state_clone = app_state.clone();
     tokio::spawn(async move {

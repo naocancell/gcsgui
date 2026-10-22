@@ -28,6 +28,46 @@ pub struct MissionPayloadAggregate {
     pub icing_sensor: Option<IcingSensorData>,
     pub deice: Option<FP95Frame94Sub2>,
     pub last_updated_ms: u64,
+    /// 各子设备最近一次成功解析的时间（Unix ms），用于单设备掉线判定
+    #[serde(default)]
+    pub device_updated_ms: PayloadDeviceTimestamps,
+}
+
+/// 任管载荷数据在状态池中的机号。
+///
+/// 任管-载荷外层协议（AA 55）不携带飞机 ID，当前按单机部署固定为 95，
+/// 前端 payloadStore 的默认 activeUavId 与此保持一致。
+pub const MISSION_PAYLOAD_UAV_ID: u8 = 95;
+
+/// 载荷子设备单独的数据新鲜度时间戳（Unix ms，`None` 表示从未收到）
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayloadDeviceTimestamps {
+    pub relay: Option<u64>,
+    pub boost_module: Option<u64>,
+    pub temp_sensor1: Option<u64>,
+    pub temp_sensor2: Option<u64>,
+    pub voltage_sensor: Option<u64>,
+    pub current_sensor1: Option<u64>,
+    pub current_sensor2: Option<u64>,
+    pub environment_sensor: Option<u64>,
+    pub icing_sensor: Option<u64>,
+    pub deice: Option<u64>,
+}
+
+/// 单个载荷子设备超过该时长未更新即视为掉线，清空其数据（与整机死链剔除阈值一致）
+pub const PAYLOAD_DEVICE_STALE_MS: u64 = 10_000;
+
+/// 当前 Unix 时间（ms），载荷聚合时间戳统一使用该时钟
+pub fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn is_stale(updated_ms: Option<u64>, now_ms: u64, timeout_ms: u64) -> bool {
+    updated_ms.is_some_and(|t| now_ms.saturating_sub(t) > timeout_ms)
 }
 
 impl MissionPayloadAggregate {
@@ -36,6 +76,33 @@ impl MissionPayloadAggregate {
             uav_id,
             ..Default::default()
         }
+    }
+
+    /// 清空超时未更新的子设备数据，避免单个设备掉线后仍显示最后一次的值。
+    ///
+    /// 返回被清空的子设备数量。时间戳保留，便于前端区分“从未收到”和“已掉线”。
+    pub fn prune_stale_devices(&mut self, now_ms: u64, timeout_ms: u64) -> usize {
+        let ts = self.device_updated_ms;
+        let mut pruned = 0;
+        macro_rules! prune {
+            ($field:ident) => {
+                if self.$field.is_some() && is_stale(ts.$field, now_ms, timeout_ms) {
+                    self.$field = None;
+                    pruned += 1;
+                }
+            };
+        }
+        prune!(relay);
+        prune!(boost_module);
+        prune!(temp_sensor1);
+        prune!(temp_sensor2);
+        prune!(voltage_sensor);
+        prune!(current_sensor1);
+        prune!(current_sensor2);
+        prune!(environment_sensor);
+        prune!(icing_sensor);
+        prune!(deice);
+        pruned
     }
 }
 
@@ -97,6 +164,7 @@ impl PayloadStreamReassembler {
                     let frame = buf[..needed_len].to_vec();
                     if let Ok(Some(status)) = parse_relay_response(&frame) {
                         aggregate.relay = Some(status);
+                        aggregate.device_updated_ms.relay = Some(now_ms);
                         aggregate.last_updated_ms = now_ms;
                         buf.drain(..needed_len);
                     } else if parse_relay_response(&frame).is_ok() {
@@ -138,25 +206,32 @@ impl PayloadStreamReassembler {
                         Ok(data) => {
                             match data {
                                 Bus0xC4DeviceData::BoostModule(d) => {
-                                    aggregate.boost_module = Some(d)
+                                    aggregate.boost_module = Some(d);
+                                    aggregate.device_updated_ms.boost_module = Some(now_ms);
                                 }
                                 Bus0xC4DeviceData::TempSensor1(d) => {
-                                    aggregate.temp_sensor1 = Some(d)
+                                    aggregate.temp_sensor1 = Some(d);
+                                    aggregate.device_updated_ms.temp_sensor1 = Some(now_ms);
                                 }
                                 Bus0xC4DeviceData::TempSensor2(d) => {
-                                    aggregate.temp_sensor2 = Some(d)
+                                    aggregate.temp_sensor2 = Some(d);
+                                    aggregate.device_updated_ms.temp_sensor2 = Some(now_ms);
                                 }
                                 Bus0xC4DeviceData::VoltageSensor(d) => {
-                                    aggregate.voltage_sensor = Some(d)
+                                    aggregate.voltage_sensor = Some(d);
+                                    aggregate.device_updated_ms.voltage_sensor = Some(now_ms);
                                 }
                                 Bus0xC4DeviceData::CurrentSensor1(d) => {
-                                    aggregate.current_sensor1 = Some(d)
+                                    aggregate.current_sensor1 = Some(d);
+                                    aggregate.device_updated_ms.current_sensor1 = Some(now_ms);
                                 }
                                 Bus0xC4DeviceData::CurrentSensor2(d) => {
-                                    aggregate.current_sensor2 = Some(d)
+                                    aggregate.current_sensor2 = Some(d);
+                                    aggregate.device_updated_ms.current_sensor2 = Some(now_ms);
                                 }
                                 Bus0xC4DeviceData::EnvironmentSensor(d) => {
-                                    aggregate.environment_sensor = Some(d)
+                                    aggregate.environment_sensor = Some(d);
+                                    aggregate.device_updated_ms.environment_sensor = Some(now_ms);
                                 }
                             }
                             aggregate.last_updated_ms = now_ms;
@@ -179,6 +254,7 @@ impl PayloadStreamReassembler {
                     match parse_icing_frame(&frame) {
                         Ok(data) => {
                             aggregate.icing_sensor = Some(data);
+                            aggregate.device_updated_ms.icing_sensor = Some(now_ms);
                             aggregate.last_updated_ms = now_ms;
                             buf.drain(..8);
                         }
@@ -204,6 +280,7 @@ impl PayloadStreamReassembler {
                     match FP95Frame94Sub2::from_bytes(frame) {
                         Ok(data) => {
                             aggregate.deice = Some(data);
+                            aggregate.device_updated_ms.deice = Some(now_ms);
                             aggregate.last_updated_ms = now_ms;
                             buf.drain(..14);
                         }
@@ -243,6 +320,32 @@ mod tests {
         reassembler.feed_payload(PAYLOAD_ID_BUS_SENSORS, chunk2, &mut agg, 1001);
         assert!(agg.boost_module.is_some(), "拼包后应成功解析升压模块");
         assert_eq!(agg.boost_module.unwrap().input_voltage, 28.0);
+    }
+
+    #[test]
+    fn test_prune_stale_devices_only_clears_expired_device() {
+        let mut reassembler = PayloadStreamReassembler::new();
+        let mut agg = MissionPayloadAggregate::new(95);
+        let boost_frame = [
+            0x01, 0x03, 0x09, 0x0A, 0xF0, 0x03, 0xE8, 0x27, 0x10, 0x01, 0xF4, 0x5A, 0x9A, 0xB4,
+        ];
+        reassembler.feed_payload(PAYLOAD_ID_BUS_SENSORS, &boost_frame, &mut agg, 1_000);
+        assert_eq!(agg.device_updated_ms.boost_module, Some(1_000));
+
+        // 另一个设备在更晚时刻刷新
+        agg.relay = Some(RelayStatus::from_u16(0x00FF));
+        agg.device_updated_ms.relay = Some(9_000);
+
+        // 未超时：都保留
+        assert_eq!(agg.prune_stale_devices(10_000, PAYLOAD_DEVICE_STALE_MS), 0);
+        assert!(agg.boost_module.is_some());
+
+        // 升压模块超时被清空，继电器仍新鲜
+        assert_eq!(agg.prune_stale_devices(11_001, PAYLOAD_DEVICE_STALE_MS), 1);
+        assert!(agg.boost_module.is_none());
+        assert!(agg.relay.is_some());
+        // 时间戳保留，用于区分“从未收到”和“已掉线”
+        assert_eq!(agg.device_updated_ms.boost_module, Some(1_000));
     }
 
     #[test]

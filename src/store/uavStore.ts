@@ -659,9 +659,14 @@ export const useUavStore = defineStore('uav', () => {
           ...(prevFrame94 || {}),
           ...value.frame94,
           Sub1: value.frame94.Sub1 ?? prevFrame94?.Sub1 ?? null,
-          Sub2: value.frame94.Sub2 ?? prevFrame94?.Sub2 ?? null,
+          // 后端判定防除冰控制器掉线时不再沿用上一包，避免显示过期数据
+          Sub2: value.deiceStale
+            ? null
+            : (value.frame94.Sub2 ?? prevFrame94?.Sub2 ?? null),
         }
-      : prevFrame94
+      : value.deiceStale && prevFrame94
+        ? { ...prevFrame94, Sub2: null }
+        : prevFrame94
 
     fp95Aggregate.value = {
       ...value,
