@@ -24,15 +24,19 @@ use super::format;
 use super::format::{encode_header, encode_protocol, FileHeader, LinkEntry};
 
 /// tap → writer 内部事件
-enum TapRecordEvent {
-    RxRaw { timestamp_ns: u64, data: Vec<u8> },
+pub(super) enum TapRecordEvent {
+    RxRaw {
+        timestamp_ns: u64,
+        link_id: u16,
+        data: Vec<u8>,
+    },
 }
 
 /// 单条链路写任务的结果
-struct WriterResult {
-    records: u64,
-    bytes: u64,
-    error: Option<String>,
+pub(super) struct WriterResult {
+    pub(super) records: u64,
+    pub(super) bytes: u64,
+    pub(super) error: Option<String>,
 }
 
 /// 单条链路的录制会话
@@ -74,6 +78,8 @@ pub struct RecorderStatus {
     pub total_bytes: u64,
     pub total_records: u64,
     pub total_dropped: u64,
+    /// 按飞机号划分的校验数据记录会话
+    pub aircraft: Vec<super::validated::AircraftRecordStatus>,
 }
 
 /// 某链路停止录制后返回的会话摘要
@@ -116,12 +122,23 @@ pub fn generate_recording_path(dir: &Path, link_name: &str, protocol: ProtocolTy
     path
 }
 
+/// 未调用 init_dir 前的默认录制目录；单元测试改用系统临时目录，避免在仓库内生成录制文件
+fn default_recordings_dir() -> PathBuf {
+    if cfg!(test) {
+        std::env::temp_dir().join("gcsgui_test_recordings")
+    } else {
+        PathBuf::from("./recordings")
+    }
+}
+
 /// 记录服务：被 AppState 持有，全局管理各链路的自动录制会话
 #[derive(Clone)]
 pub struct RecorderService {
     recordings_dir: Arc<RwLock<PathBuf>>,
     sessions: Arc<dashmap::DashMap<String, Arc<SingleLinkSession>>>,
     lifecycle_lock: Arc<tokio::sync::Mutex<()>>,
+    /// 按飞机号划分的校验数据记录（见 [`super::validated`]）
+    pub(super) validated: super::validated::ValidatedRecorder,
 }
 
 impl Default for RecorderService {
@@ -133,9 +150,10 @@ impl Default for RecorderService {
 impl RecorderService {
     pub fn new() -> Self {
         Self {
-            recordings_dir: Arc::new(RwLock::new(PathBuf::from("./recordings"))),
+            recordings_dir: Arc::new(RwLock::new(default_recordings_dir())),
             sessions: Arc::new(dashmap::DashMap::new()),
             lifecycle_lock: Arc::new(tokio::sync::Mutex::new(())),
+            validated: super::validated::ValidatedRecorder::default(),
         }
     }
 
@@ -311,6 +329,7 @@ impl RecorderService {
                 summaries.push(s);
             }
         }
+        summaries.extend(self.stop_all_validated().await);
         summaries
     }
 
@@ -335,6 +354,8 @@ impl RecorderService {
                 }
             });
         }
+
+        self.sync_validated_sessions(active_links, Instant::now());
     }
 
     /// 非阻塞 tap：由 start_router 主循环调用，绝不阻塞实时链路
@@ -354,6 +375,7 @@ impl RecorderService {
                 .as_nanos() as u64;
             let event = TapRecordEvent::RxRaw {
                 timestamp_ns,
+                link_id: 0,
                 data: raw.data.clone(),
             };
             if session.tx.try_send(event).is_ok() {
@@ -378,6 +400,7 @@ impl RecorderService {
                         .as_nanos() as u64;
                     let event = TapRecordEvent::RxRaw {
                         timestamp_ns,
+                        link_id: 0,
                         data: raw.data.clone(),
                     };
                     if session.tx.try_send(event).is_ok() {
@@ -419,13 +442,15 @@ impl RecorderService {
             });
         }
 
+        let aircraft = self.validated_status();
         RecorderStatus {
-            active: !links.is_empty(),
+            active: !links.is_empty() || !aircraft.is_empty(),
             active_count: links.len(),
             links,
             total_bytes,
             total_records,
             total_dropped,
+            aircraft,
         }
     }
 
@@ -440,9 +465,9 @@ impl RecorderService {
     }
 }
 
-/// 异步落盘任务：消费单链路 tap 事件 → 编码追加 → 500ms 定时 flush。
+/// 异步落盘任务：消费单个录制文件的 tap 事件 → 编码追加 → 500ms 定时 flush。
 /// 通道关闭或收到 cancel 时排空、flush、fsync 后退出。
-async fn single_link_writer_task(
+pub(super) async fn single_link_writer_task(
     mut rx: mpsc::Receiver<TapRecordEvent>,
     mut file: BufWriter<File>,
     cancel: CancellationToken,
@@ -463,11 +488,11 @@ async fn single_link_writer_task(
                     break 'outer;
                 };
                 match event {
-                    TapRecordEvent::RxRaw { timestamp_ns, data } => {
+                    TapRecordEvent::RxRaw { timestamp_ns, link_id, data } => {
                         format::encode_record_into(&mut buf, &format::Record {
                             record_type: format::record_type::RX_RAW,
                             timestamp_ns,
-                            link_id: 0,
+                            link_id,
                             payload: &data,
                         });
                     }
@@ -475,11 +500,11 @@ async fn single_link_writer_task(
                 // 批量排空当前积压
                 loop {
                     match rx.try_recv() {
-                        Ok(TapRecordEvent::RxRaw { timestamp_ns, data }) => {
+                        Ok(TapRecordEvent::RxRaw { timestamp_ns, link_id, data }) => {
                             format::encode_record_into(&mut buf, &format::Record {
                                 record_type: format::record_type::RX_RAW,
                                 timestamp_ns,
-                                link_id: 0,
+                                link_id,
                                 payload: &data,
                             });
                         }
@@ -511,13 +536,18 @@ async fn single_link_writer_task(
     }
 
     // 退出前排空残留队列
-    while let Ok(TapRecordEvent::RxRaw { timestamp_ns, data }) = rx.try_recv() {
+    while let Ok(TapRecordEvent::RxRaw {
+        timestamp_ns,
+        link_id,
+        data,
+    }) = rx.try_recv()
+    {
         format::encode_record_into(
             &mut buf,
             &format::Record {
                 record_type: format::record_type::RX_RAW,
                 timestamp_ns,
-                link_id: 0,
+                link_id,
                 payload: &data,
             },
         );
