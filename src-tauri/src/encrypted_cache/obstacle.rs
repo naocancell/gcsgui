@@ -8,8 +8,10 @@ use tauri::{AppHandle, Manager};
 use super::crypto::{decrypt_data, encrypt_data};
 use super::storage;
 
-// 障碍物服务的基础地址
-const API_BASE: &str = "http://172.10.0.183:8890";
+// 障碍物服务的基础地址见 config::services（可由 services.json 覆盖）
+fn api_base() -> &'static str {
+    &crate::config::services::services().obstacle_base
+}
 // 本地缓存目录名，机场障碍物都放在这里
 const CACHE_DIRECTORY: &str = "obstacles-cache";
 // 本地缓存加密密钥，和加密模块保持一致。
@@ -60,16 +62,6 @@ pub struct AirportLoadResult {
     pub data: Value,
     pub source: String,
     pub stale: bool,
-}
-
-// 验证障碍物 JSON 是否为数组，并且顶层是合法的障碍物列表。
-fn validate_json(data: &[u8]) -> Result<Value, String> {
-    let value: Value =
-        serde_json::from_slice(data).map_err(|error| format!("障碍物 JSON 解析失败: {error}"))?;
-    if !value.is_array() {
-        return Err("障碍物 JSON 顶层必须是数组".to_string());
-    }
-    Ok(value)
 }
 
 // 把机场名称转换成安全的文件名，避免 Windows / 路径非法字符导致缓存文件名异常。
@@ -142,21 +134,20 @@ async fn cache_exists(app: &AppHandle, airport_name: &str) -> Result<bool, Strin
         .map_err(|error| format!("检查机场缓存失败: {error}"))
 }
 
-// 判断旧版共享缓存文件是否存在，兼容历史版本数据。
-// 创建统一的 HTTP 客户端，统一控制超时时间，避免远端服务卡住。
-async fn http_client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .map_err(|error| format!("创建障碍物 HTTP 客户端失败: {error}"))
+// 单次请求超时，避免远端服务卡住
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+// 复用全局 HTTP 客户端（连接池共享），每个请求单独设置超时
+fn http_get(url: String) -> reqwest::RequestBuilder {
+    crate::config::services::http_client()
+        .get(url)
+        .timeout(REQUEST_TIMEOUT)
 }
 
 // 调用机场服务获取机场列表，用于前端展示可选择机场
 async fn request_airports() -> Result<Vec<Value>, String> {
     // 创建现有包含建筑物的机场请求客户端
-    let response = http_client()
-        .await?
-        .get(format!("{API_BASE}/api/airports"))
+    let response = http_get(format!("{}/api/airports", api_base()))
         .header(ACCEPT, "application/json")
         .send()
         .await
@@ -175,12 +166,11 @@ async fn request_airports() -> Result<Vec<Value>, String> {
 // 远端接口返回 { metadata, obstacles }，这里会整理成 [metadata, obstacle1, obstacle2, ...] 的数组格式，
 // 方便前端统一按第 0 项 metadata 解析坐标类型（relative_bearing / absolute_coord）。
 async fn request_obstacles(selection: &AirportSelection) -> Result<Value, String> {
-    let response = http_client()
-        .await?
-        .get(format!(
-            "{API_BASE}/api/airports/{}/obstacles",
-            selection.id
-        ))
+    let response = http_get(format!(
+        "{}/api/airports/{}/obstacles",
+        api_base(),
+        selection.id
+    ))
         .header(ACCEPT, "application/json")
         .send()
         .await
@@ -208,8 +198,11 @@ async fn request_obstacles(selection: &AirportSelection) -> Result<Value, String
     } else {
         payload
     };
-    let raw = serde_json::to_vec(&data).map_err(|error| format!("序列化障碍物失败: {error}"))?;
-    validate_json(&raw)
+    // 已是解析好的 JSON，直接检查结构，无需再序列化后重新解析
+    if !data.is_array() {
+        return Err("障碍物 JSON 顶层必须是数组".to_string());
+    }
+    Ok(data)
 }
 
 // 从缓存中读取一个机场的 CacheEnvelope（解密 + 反序列化）。

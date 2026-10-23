@@ -180,6 +180,13 @@ pub struct AppState {
     /// 回放会话公共状态（pacing 循环写，emitter / command 读）
     pub replay_status: Arc<RwLock<Option<crate::recorder::replay::ReplayStatus>>>,
 
+    /// 回放快进逻辑时钟：seek 快进段按记录时间戳推进的“当前时刻”，快进结束后为 None。
+    /// 路由维护与推送器据此判定超时，避免历史帧在同一毫秒涌入导致观察窗/超时判定失真
+    replay_clock: Arc<Mutex<Option<Instant>>>,
+
+    /// RX 状态代次：reset_rx_pools 时递增，路由任务据此清空序号仲裁状态与切帧缓冲
+    rx_epoch: Arc<AtomicU64>,
+
     /// TX 层：继电器写线圈串行锁 + 已下发未确认的期望掩码（防读-改-写互相覆盖）
     pub relay_pending: Arc<tokio::sync::Mutex<Option<crate::protocol::payload::PendingRelayMask>>>,
 
@@ -204,6 +211,8 @@ impl AppState {
             recorder: Arc::new(crate::recorder::RecorderService::new()),
             replay: Arc::new(crate::recorder::replay::ReplayEngine::new()),
             replay_status: Arc::new(RwLock::new(None)),
+            replay_clock: Arc::new(Mutex::new(None)),
+            rx_epoch: Arc::new(AtomicU64::new(0)),
             relay_pending: Arc::new(tokio::sync::Mutex::new(None)),
             comms_config_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
@@ -218,6 +227,28 @@ impl AppState {
         self.fp981c_seen.clear();
         self.mission_payload_seen.clear();
         *self.fp95_state.lock().expect("FP95 state mutex poisoned") = None;
+        self.rx_epoch.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// 当前 RX 状态代次（见 [`AppState::reset_rx_pools`]）
+    pub fn rx_epoch(&self) -> u64 {
+        self.rx_epoch.load(Ordering::Relaxed)
+    }
+
+    /// 设置/清除回放快进逻辑时钟（仅 pacing 循环调用）
+    pub fn set_replay_clock(&self, instant: Option<Instant>) {
+        *self
+            .replay_clock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = instant;
+    }
+
+    /// RX 超时判定使用的“当前时刻”：回放快进段取逻辑时钟，其余时间为真实时钟
+    pub fn clock_now(&self) -> Instant {
+        self.replay_clock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(Instant::now)
     }
 
     pub fn allocate_link_generation(&self) -> u64 {
@@ -421,5 +452,19 @@ mod tests {
             .expect("载荷仍在刷新，聚合应保留");
         assert!(snapshot.aggregate.frame83.is_none(), "0x83 超时应清空");
         assert_eq!(snapshot.aggregate.uav_id, 7, "机号保持 FP95 帧上报值");
+    }
+
+    #[test]
+    fn replay_clock_overrides_now_and_reset_bumps_rx_epoch() {
+        let state = AppState::new();
+        let epoch = state.rx_epoch();
+        state.reset_rx_pools();
+        assert_eq!(state.rx_epoch(), epoch + 1, "清池应递增接收纪元");
+
+        let virtual_now = Instant::now() + Duration::from_secs(3600);
+        state.set_replay_clock(Some(virtual_now));
+        assert_eq!(state.clock_now(), virtual_now, "回放快进期间应使用虚拟时钟");
+        state.set_replay_clock(None);
+        assert!(state.clock_now() < virtual_now, "清除后恢复墙钟");
     }
 }

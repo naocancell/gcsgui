@@ -3,6 +3,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
+use comms_core::TxPriority;
+
 use crate::comms::ProtocolType;
 use crate::state::AppState;
 use crate::uplink::actor::UplinkFrameSink;
@@ -28,8 +30,12 @@ pub(crate) async fn broadcast_frame(state: &AppState, frame: [u8; 32]) {
     let mut sends = JoinSet::new();
     for (name, transport) in targets {
         sends.spawn(async move {
-            let result =
-                tokio::time::timeout(Duration::from_millis(100), transport.send(&frame)).await;
+            // 50Hz 周期帧：串口链路上让位于控制指令，积压时只保留最新帧
+            let result = tokio::time::timeout(
+                Duration::from_millis(100),
+                transport.send_with_priority(&frame, TxPriority::Periodic),
+            )
+            .await;
             (name, result)
         });
     }
@@ -37,6 +43,9 @@ pub(crate) async fn broadcast_frame(state: &AppState, frame: [u8; 32]) {
     while let Some(result) = sends.join_next().await {
         match result {
             Ok((_name, Ok(Ok(_)))) => {}
+            Ok((_name, Ok(Err(comms_core::CommsError::QueueFull)))) => {
+                // 被同链路更新的周期帧顶替，属正常节流
+            }
             Ok((name, Ok(Err(error)))) => {
                 log::warn!("上行链路 {name} 发送失败: {error}");
             }
@@ -50,17 +59,52 @@ pub(crate) async fn broadcast_frame(state: &AppState, frame: [u8; 32]) {
     }
 }
 
+/// 控制指令上行（继电器、防除冰、透传等）：串口链路上优先于周期帧与轮询帧发送
 pub async fn broadcast_raw_payload(state: &AppState, bytes: &[u8]) -> Result<(), String> {
-    broadcast_raw_payload_internal(state, bytes, true).await
+    broadcast_raw_payload_internal(state, bytes, TxPriority::Control, true).await
 }
 
+/// 后台轮询上行：优先级最低，链路忙时直接丢弃本次轮询
 pub async fn broadcast_raw_payload_poll(state: &AppState, bytes: &[u8]) -> Result<(), String> {
-    broadcast_raw_payload_internal(state, bytes, false).await
+    broadcast_raw_payload_internal(state, bytes, TxPriority::Background, false).await
+}
+
+/// 非阻塞投递上行载荷：按调用顺序进入各链路发送队列，不等待写入完成。
+/// 供路由热路径（透传上行）使用，避免每帧单独起异步任务导致乱序。
+pub fn try_broadcast_raw_payload(
+    state: &AppState,
+    bytes: &[u8],
+    priority: TxPriority,
+) -> Result<(), String> {
+    if state.replay_active() {
+        return Err("回放会话进行中，已禁止上行发送".to_string());
+    }
+
+    let mut targets = 0usize;
+    let mut failed_details = Vec::new();
+    for entry in state.active_links.iter() {
+        if !supports_uplink(entry.protocol) {
+            continue;
+        }
+        targets += 1;
+        if let Err(error) = entry.transport.try_send(bytes, priority) {
+            failed_details.push(format!("{}: {error}", entry.name));
+        }
+    }
+
+    if targets == 0 {
+        return Err("无活动的上行链路".to_string());
+    }
+    if failed_details.len() == targets {
+        return Err(format!("所有上行链路均投递失败 [{}]", failed_details.join("; ")));
+    }
+    Ok(())
 }
 
 async fn broadcast_raw_payload_internal(
     state: &AppState,
     bytes: &[u8],
+    priority: TxPriority,
     log_errors: bool,
 ) -> Result<(), String> {
     // 回放安全围栏：回放会话存在时禁止一切上行发送（防误触真实设备）
@@ -83,8 +127,11 @@ async fn broadcast_raw_payload_internal(
     for (name, transport) in targets {
         let frame = bytes.to_vec();
         sends.spawn(async move {
-            let result =
-                tokio::time::timeout(Duration::from_millis(100), transport.send(&frame)).await;
+            let result = tokio::time::timeout(
+                Duration::from_millis(100),
+                transport.send_with_priority(&frame, priority),
+            )
+            .await;
             (name, result)
         });
     }

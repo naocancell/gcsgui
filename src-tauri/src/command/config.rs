@@ -89,7 +89,8 @@ async fn apply_comms_hot_reload(
         let matching_config = new_config.serial.iter().find(|cfg| cfg.name == name);
         let should_remove = match matching_config {
             Some(cfg) if cfg.enabled => {
-                let expected_endpoint = format!("{}:{}", cfg.port_name, cfg.baud_rate);
+                let expected_endpoint =
+                    crate::command::serial::SerialSettings::from_config(cfg).endpoint_info();
                 match state.active_links.get(&name) { Some(link) => {
                     link.endpoint_info != expected_endpoint || link.protocol != cfg.protocol
                 } _ => {
@@ -102,7 +103,8 @@ async fn apply_comms_hot_reload(
         if should_remove {
             log::info!("[热重载] 停止变更或禁用的串口链路: {}", name);
             if let Some((_, link)) = state.active_links.remove(&name) {
-                link.transport.stop();
+                // 等读写线程退出、串口句柄完全释放后再继续，避免随后重新打开同一端口时被占用（OS error 5）
+                link.transport.shutdown().await;
                 let recorder = state.recorder.clone();
                 let n = name.clone();
                 tauri::async_runtime::spawn(async move {
@@ -120,8 +122,7 @@ async fn apply_comms_hot_reload(
                 state,
                 router_tx,
                 serial.name.clone(),
-                serial.port_name.clone(),
-                serial.baud_rate,
+                crate::command::serial::SerialSettings::from_config(serial),
                 serial.protocol,
             )
             .await

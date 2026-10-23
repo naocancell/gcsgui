@@ -2,7 +2,27 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 import { invokeSafe } from '@/utils/ipc'
 import { logger } from '@/utils/logger'
 
-const SERVICE_BASE = 'http://127.0.0.1:8890'
+// 模型服务根地址由后端统一配置（get_service_endpoints，可在应用配置目录 services.json 覆盖），
+// 获取失败时回退到默认地址，保证与后端下载白名单一致。
+const DEFAULT_SERVICE_BASE = 'http://172.10.0.183:8890'
+let serviceBasePromise: Promise<string> | undefined
+
+type ServiceEndpoints = {
+  nfzBase: string
+  obstacleBase: string
+}
+
+function getServiceBase(): Promise<string> {
+  if (!serviceBasePromise) {
+    serviceBasePromise = invokeSafe<ServiceEndpoints>('get_service_endpoints', undefined, { silent: true })
+      .then(endpoints => endpoints.obstacleBase.replace(/\/+$/, '') || DEFAULT_SERVICE_BASE)
+      .catch(error => {
+        logger.warn('获取模型服务地址失败，使用默认地址', error)
+        return DEFAULT_SERVICE_BASE
+      })
+  }
+  return serviceBasePromise
+}
 
 const commonModelTypes = [
   'house',
@@ -30,7 +50,8 @@ function loadModelCatalogOnce(): Promise<ModelMeta[]> {
     //如果还没有发送过请求 还没有缓存的 Promise
   if (!catalogPromise) {
     //发起请求  获取所有模型的列表
-    catalogPromise = fetch(`${SERVICE_BASE}/api/models`)
+    catalogPromise = getServiceBase()
+      .then(base => fetch(`${base}/api/models`))
       .then(response => {
         if (!response.ok) {
           throw new Error('模型目录请求失败')
@@ -63,16 +84,16 @@ function ensureModelPath(model: ModelMeta): Promise<string> {
  // 检查本地是否存在模型  不存在就请求 存在返回系统绝对路径地址
  // pending promise对象 = 获取绝对路径的任务
  // await pending 最终拿到模型绝对路径
- const pending = invokeSafe<string>(
+ const pending = getServiceBase().then(base => invokeSafe<string>(
     'ensure_model_cached',
     {
       modelId: model.id,
       obstacleType: model.obstacle_type,
       version,
-      downloadUrl: `${SERVICE_BASE}/api/models/${model.id}/file`,
+      downloadUrl: `${base}/api/models/${model.id}/file`,
     },
     { silent: true },
-  )
+  ))
   //给promise执行成功和失败使用的回调函数
   const clearPending = () => {
     if (modelPathPromises.get(cacheKey) === pending) {

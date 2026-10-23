@@ -10,6 +10,7 @@ pub use relay_c3::*;
 pub use sensors_c4::*;
 
 use serde::{Deserialize, Serialize};
+use bytes::{Buf, BytesMut};
 use std::collections::HashMap;
 
 /// 任管载荷全状态聚合模型（按无人机或全局维护）
@@ -112,7 +113,8 @@ impl MissionPayloadAggregate {
 /// 本重组器按载荷 ID 独立维护重组缓冲区，防止轮流下发时数据包交叉污染。
 #[derive(Debug, Default)]
 pub struct PayloadStreamReassembler {
-    buffers: HashMap<u8, Vec<u8>>,
+    /// 按载荷 ID 分别缓冲；BytesMut::advance 丢弃头部字节为 O(1)，不搬移剩余数据
+    buffers: HashMap<u8, BytesMut>,
 }
 
 impl PayloadStreamReassembler {
@@ -144,7 +146,7 @@ impl PayloadStreamReassembler {
                 // 0xC3 继电器：读线圈反馈 7 字节，写线圈反馈 8 字节
                 while buf.len() >= 7 {
                     if buf[0] != RELAY_DEVICE_ID {
-                        buf.remove(0);
+                        buf.advance(1);
                         continue;
                     }
                     let fc = buf[1];
@@ -153,7 +155,7 @@ impl PayloadStreamReassembler {
                     } else if fc == FC_WRITE_COILS {
                         8
                     } else {
-                        buf.remove(0);
+                        buf.advance(1);
                         continue;
                     };
 
@@ -166,13 +168,13 @@ impl PayloadStreamReassembler {
                         aggregate.relay = Some(status);
                         aggregate.device_updated_ms.relay = Some(now_ms);
                         aggregate.last_updated_ms = now_ms;
-                        buf.drain(..needed_len);
+                        buf.advance(needed_len);
                     } else if parse_relay_response(&frame).is_ok() {
                         // 写线圈确认，消费掉
-                        buf.drain(..needed_len);
+                        buf.advance(needed_len);
                     } else {
                         // 校验失败，滑动 1 字节
-                        buf.remove(0);
+                        buf.advance(1);
                     }
                 }
             }
@@ -182,7 +184,7 @@ impl PayloadStreamReassembler {
                     let dev_id = buf[0];
                     let fc = buf[1];
                     if !(1..=7).contains(&dev_id) || fc != 0x03 {
-                        buf.remove(0);
+                        buf.advance(1);
                         continue;
                     }
                     let needed_len = match dev_id {
@@ -194,7 +196,7 @@ impl PayloadStreamReassembler {
                         _ => 0,
                     };
                     if needed_len == 0 {
-                        buf.remove(0);
+                        buf.advance(1);
                         continue;
                     }
                     if buf.len() < needed_len {
@@ -235,10 +237,10 @@ impl PayloadStreamReassembler {
                                 }
                             }
                             aggregate.last_updated_ms = now_ms;
-                            buf.drain(..needed_len);
+                            buf.advance(needed_len);
                         }
                         Err(_) => {
-                            buf.remove(0);
+                            buf.advance(1);
                         }
                     }
                 }
@@ -247,7 +249,7 @@ impl PayloadStreamReassembler {
                 // 0xC5 结冰传感器：8 字节定长，0xEB 0x90 开头
                 while buf.len() >= 8 {
                     if buf[0] != 0xEB || buf[1] != 0x90 {
-                        buf.remove(0);
+                        buf.advance(1);
                         continue;
                     }
                     let frame = buf[..8].to_vec();
@@ -256,10 +258,10 @@ impl PayloadStreamReassembler {
                             aggregate.icing_sensor = Some(data);
                             aggregate.device_updated_ms.icing_sensor = Some(now_ms);
                             aggregate.last_updated_ms = now_ms;
-                            buf.drain(..8);
+                            buf.advance(8);
                         }
                         Err(_) => {
-                            buf.remove(0);
+                            buf.advance(1);
                         }
                     }
                 }
@@ -268,12 +270,12 @@ impl PayloadStreamReassembler {
                 // 0xC6 电防冰控制器：14 字节定长，0xEB 0x90 开头，14字节累加和 MOD 256 = 0
                 while buf.len() >= 14 {
                     if buf[0] != 0xEB || buf[1] != 0x90 {
-                        buf.remove(0);
+                        buf.advance(1);
                         continue;
                     }
                     let sum: u32 = buf[..14].iter().map(|&b| b as u32).sum();
                     if (sum % 256) != 0 {
-                        buf.remove(0);
+                        buf.advance(1);
                         continue;
                     }
                     let frame = &buf[..14];
@@ -282,10 +284,10 @@ impl PayloadStreamReassembler {
                             aggregate.deice = Some(data);
                             aggregate.device_updated_ms.deice = Some(now_ms);
                             aggregate.last_updated_ms = now_ms;
-                            buf.drain(..14);
+                            buf.advance(14);
                         }
                         Err(_) => {
-                            buf.remove(0);
+                            buf.advance(1);
                         }
                     }
                 }

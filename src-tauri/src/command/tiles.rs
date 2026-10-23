@@ -3,8 +3,15 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::thread;
+use std::time::Duration;
 use tauri::AppHandle;
+
+/// 静态服务的固定工作线程数：Cesium 会并发请求大量瓦片，用固定线程池代替“每个请求一个 OS 线程”
+const TILE_WORKERS: usize = 6;
+/// 单个连接的读写超时，避免异常客户端长期占住工作线程
+const TILE_IO_TIMEOUT: Duration = Duration::from_secs(10);
 use tauri_plugin_dialog::DialogExt;
 
 #[derive(Debug, Serialize)]
@@ -96,6 +103,14 @@ fn content_type(path: &Path) -> &'static str {
     }
 }
 
+fn write_headers(stream: &mut TcpStream, status: &str, content_type: &str, length: u64) -> bool {
+    // WebView 的页面来源不是 127.0.0.1，需要允许跨域读取瓦片
+    let headers = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {length}\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(headers.as_bytes()).is_ok()
+}
+
 fn write_response(
     stream: &mut TcpStream,
     status: &str,
@@ -103,18 +118,95 @@ fn write_response(
     body: &[u8],
     head_only: bool,
 ) {
-    // WebView 的页面来源不是 127.0.0.1，需要允许跨域读取瓦片
-    let headers = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
-    let _ = stream.write_all(headers.as_bytes());
-    if !head_only {
+    if write_headers(stream, status, content_type, body.len() as u64) && !head_only {
         let _ = stream.write_all(body);
     }
 }
 
-fn serve_request(mut stream: TcpStream, root: &Path) {
+/// 全局唯一的 3D Tiles 静态服务：一个端口 + 固定线程池，按挂载编号区分多个 tileset 根目录。
+/// 重复选择文件只新增/复用挂载点，不再每次新开端口和常驻线程。
+struct TileServer {
+    port: u16,
+    /// 挂载编号（下标）→ 根目录；同一目录复用编号，已加载的 tileset 继续可用
+    mounts: RwLock<Vec<PathBuf>>,
+}
+
+impl TileServer {
+    fn mount(&self, root: PathBuf) -> usize {
+        let mut mounts = self
+            .mounts
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(index) = mounts.iter().position(|existing| existing == &root) {
+            return index;
+        }
+        mounts.push(root);
+        mounts.len() - 1
+    }
+
+    fn root(&self, mount: usize) -> Option<PathBuf> {
+        self.mounts
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(mount)
+            .cloned()
+    }
+}
+
+fn tile_server() -> Result<Arc<TileServer>, String> {
+    static SERVER: Mutex<Option<Arc<TileServer>>> = Mutex::new(None);
+    let mut guard = SERVER.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(server) = guard.as_ref() {
+        return Ok(server.clone());
+    }
+
+    // 端口交给系统分配，避免和本机已有服务冲突
+    let listener =
+        TcpListener::bind("127.0.0.1:0").map_err(|e| format!("启动 3D Tiles 静态服务失败：{e}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| format!("获取静态服务端口失败：{e}"))?
+        .port();
+    let server = Arc::new(TileServer {
+        port,
+        mounts: RwLock::new(Vec::new()),
+    });
+
+    let (connection_tx, connection_rx) = mpsc::channel::<TcpStream>();
+    let connection_rx = Arc::new(Mutex::new(connection_rx));
+    for index in 0..TILE_WORKERS {
+        let connection_rx = connection_rx.clone();
+        let worker_server = server.clone();
+        thread::Builder::new()
+            .name(format!("tiles_http_{index}"))
+            .spawn(move || loop {
+                let next = connection_rx
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .recv();
+                let Ok(stream) = next else { break };
+                serve_request(stream, &worker_server);
+            })
+            .map_err(|e| format!("启动 3D Tiles 工作线程失败：{e}"))?;
+    }
+    thread::Builder::new()
+        .name("tiles_http_accept".to_string())
+        .spawn(move || {
+            for stream in listener.incoming().flatten() {
+                if connection_tx.send(stream).is_err() {
+                    break;
+                }
+            }
+        })
+        .map_err(|e| format!("启动 3D Tiles 监听线程失败：{e}"))?;
+
+    *guard = Some(server.clone());
+    Ok(server)
+}
+
+fn serve_request(mut stream: TcpStream, server: &TileServer) {
+    let _ = stream.set_read_timeout(Some(TILE_IO_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(TILE_IO_TIMEOUT));
     // 这个服务只给 Cesium 读文件，不做复杂的 HTTP 处理
     let mut request = [0_u8; 16 * 1024];
     let Ok(size) = stream.read(&mut request) else {
@@ -142,7 +234,16 @@ fn serve_request(mut stream: TcpStream, root: &Path) {
     }
 
     let path_part = target.split(['?', '#']).next().unwrap_or("");
-    let relative = match percent_decode(path_part.trim_start_matches('/')) {
+    // 路径格式：/{挂载编号}/{tileset 目录内的相对路径}
+    let (mount, rest) = path_part
+        .trim_start_matches('/')
+        .split_once('/')
+        .unwrap_or(("", ""));
+    let Some(root) = mount.parse::<usize>().ok().and_then(|mount| server.root(mount)) else {
+        write_response(&mut stream, "404 Not Found", "text/plain", b"not found", head_only);
+        return;
+    };
+    let relative = match percent_decode(rest) {
         Some(value) if !value.is_empty() => value,
         _ => {
             write_response(
@@ -177,7 +278,7 @@ fn serve_request(mut stream: TcpStream, root: &Path) {
         );
         return;
     };
-    if !canonical.starts_with(root) || !canonical.is_file() {
+    if !canonical.starts_with(&root) || !canonical.is_file() {
         write_response(
             &mut stream,
             "404 Not Found",
@@ -187,7 +288,7 @@ fn serve_request(mut stream: TcpStream, root: &Path) {
         );
         return;
     }
-    let Ok(body) = fs::read(&canonical) else {
+    let Ok(mut file) = fs::File::open(&canonical) else {
         write_response(
             &mut stream,
             "500 Internal Server Error",
@@ -197,30 +298,11 @@ fn serve_request(mut stream: TcpStream, root: &Path) {
         );
         return;
     };
-    write_response(
-        &mut stream,
-        "200 OK",
-        content_type(&canonical),
-        &body,
-        head_only,
-    );
-}
-
-fn start_static_server(root: PathBuf) -> Result<u16, String> {
-    // 端口交给系统分配，避免和本机已有服务冲突
-    let listener =
-        TcpListener::bind("127.0.0.1:0").map_err(|e| format!("启动 3D Tiles 静态服务失败：{e}"))?;
-    let port = listener
-        .local_addr()
-        .map_err(|e| format!("获取静态服务端口失败：{e}"))?
-        .port();
-    thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            let root = root.clone();
-            thread::spawn(move || serve_request(stream, &root));
-        }
-    });
-    Ok(port)
+    let length = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    // 流式发送文件内容，不再把整个瓦片一次性读入内存
+    if write_headers(&mut stream, "200 OK", content_type(&canonical), length) && !head_only {
+        let _ = std::io::copy(&mut file, &mut stream);
+    }
 }
 
 #[tauri::command]
@@ -265,8 +347,9 @@ pub fn pick_3d_tiles_file(app: AppHandle) -> Result<Option<LocalTilesetInfo>, St
     let relative = tileset
         .strip_prefix(&root)
         .map_err(|e| format!("计算 tileset 路径失败：{e}"))?;
-    // 静态服务的根目录就是 tileset.json 的父目录
-    let port = start_static_server(root)?;
+    // 静态服务的挂载根目录就是 tileset.json 的父目录
+    let server = tile_server()?;
+    let mount = server.mount(root.clone());
     let relative_url = percent_encode_path(relative);
     let name = file
         .parent()
@@ -275,7 +358,7 @@ pub fn pick_3d_tiles_file(app: AppHandle) -> Result<Option<LocalTilesetInfo>, St
         .unwrap_or("3D Tiles")
         .to_string();
     Ok(Some(LocalTilesetInfo {
-        url: format!("http://127.0.0.1:{port}/{relative_url}"),
+        url: format!("http://127.0.0.1:{}/{mount}/{relative_url}", server.port),
         name,
     }))
 }

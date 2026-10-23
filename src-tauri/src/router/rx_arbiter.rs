@@ -1,5 +1,6 @@
 use crate::comms::ProtocolType;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod health;
@@ -83,8 +84,9 @@ struct ArrivalRecord {
     first_link: String,
     first_received_at: Instant,
     seen_links: HashSet<String>,
+    /// 期望承载该帧的链路集合：同一批帧共享同一个快照（Arc），避免每帧深拷贝
     #[allow(dead_code)]
-    expected_links: HashSet<String>,
+    expected_links: Arc<HashSet<String>>,
     #[allow(dead_code)]
     expires_at: Instant,
 }
@@ -153,11 +155,14 @@ impl RxArbiter {
     pub fn observe(
         &mut self,
         observation: FrameObservation,
-        mut active_links: HashSet<String>,
+        active_links: impl Into<Arc<HashSet<String>>>,
     ) -> RxDecision {
+        let mut active_links: Arc<HashSet<String>> = active_links.into();
         self.close_expired_observations(observation.received_at);
         let stream = observation.stream;
-        active_links.insert(observation.source_link.clone());
+        if !active_links.contains(&observation.source_link) {
+            Arc::make_mut(&mut active_links).insert(observation.source_link.clone());
+        }
         self.ensure_link_runtimes(stream, &active_links, observation.received_at);
         self.mark_valid(&observation.source_link, stream, observation.received_at);
         if let Some((last_raw_sequence, last_extended_sequence, last_accepted_at, recovering)) =
@@ -258,10 +263,19 @@ impl RxArbiter {
         self.all_links_missing.get(&stream).copied().unwrap_or(0)
     }
 
+    /// 清空序号仲裁状态（回放启动/跳转时调用）：后续帧按新数据流重新建立序号，
+    /// 不再与跳转前的序号比较而被误判为旧帧；链路统计保持不变
+    pub fn reset_sequences(&mut self) {
+        self.streams.clear();
+        self.arrivals.clear();
+    }
+
     pub fn reset_link(&mut self, source_link: &str) {
         self.links.retain(|key, _| key.source_link != source_link);
         for record in self.arrivals.values_mut() {
-            record.expected_links.remove(source_link);
+            if record.expected_links.contains(source_link) {
+                Arc::make_mut(&mut record.expected_links).remove(source_link);
+            }
         }
     }
 
@@ -287,7 +301,7 @@ impl RxArbiter {
     fn insert_accepted(
         &mut self,
         observation: FrameObservation,
-        active_links: HashSet<String>,
+        active_links: Arc<HashSet<String>>,
         extended_sequence: u64,
     ) {
         let stream = observation.stream;
@@ -317,7 +331,7 @@ impl RxArbiter {
     fn observe_recovery(
         &mut self,
         observation: FrameObservation,
-        active_links: HashSet<String>,
+        active_links: Arc<HashSet<String>>,
         last_extended_sequence: u64,
     ) -> RxDecision {
         let stream = observation.stream;
@@ -481,4 +495,53 @@ fn ewma(previous: Option<f64>, sample: f64) -> f64 {
     previous.map_or(sample, |value| ALPHA * sample + (1.0 - ALPHA) * value)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
 
+    fn observation(link: &str, raw_sequence: u8, received_at: Instant) -> FrameObservation {
+        FrameObservation {
+            source_link: link.to_string(),
+            stream: StreamKey {
+                protocol: ProtocolType::FP95,
+                uav_id: 7,
+            },
+            frame_id: 0x83,
+            raw_sequence,
+            frame: [raw_sequence; 32],
+            received_at,
+        }
+    }
+
+    #[test]
+    fn reset_sequences_lets_rewound_stream_be_accepted() {
+        let mut arbiter = RxArbiter::new(RxArbiterConfig::default());
+        let links: Arc<HashSet<String>> = Arc::new(["UDP-A".to_string()].into());
+        let t0 = Instant::now();
+        let first = arbiter.observe(observation("UDP-A", 100, t0), links.clone());
+        assert!(matches!(first, RxDecision::Accept { .. }));
+
+        // 回放跳回较早位置：不清序号时，倒退的序号不应被当作新帧直接接受
+        let rewound = arbiter.observe(
+            observation("UDP-A", 50, t0 + Duration::from_millis(100)),
+            links.clone(),
+        );
+        assert!(!matches!(rewound, RxDecision::Accept { .. }), "{rewound:?}");
+
+        arbiter.reset_sequences();
+        let after_reset = arbiter.observe(
+            observation("UDP-A", 51, t0 + Duration::from_millis(200)),
+            links,
+        );
+        assert!(matches!(after_reset, RxDecision::Accept { .. }), "{after_reset:?}");
+    }
+
+    #[test]
+    fn observe_adds_unlisted_source_without_touching_shared_set() {
+        let mut arbiter = RxArbiter::new(RxArbiterConfig::default());
+        let links: Arc<HashSet<String>> = Arc::new(["UDP-A".to_string()].into());
+        let decision = arbiter.observe(observation("UDP-B", 1, Instant::now()), links.clone());
+        assert!(matches!(decision, RxDecision::Accept { .. }));
+        assert_eq!(links.len(), 1, "共享的活动链路集合不应被修改");
+    }
+}

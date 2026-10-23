@@ -96,11 +96,18 @@ pub async fn ensure_model_cached(
     let url = Url::parse(&download_url)
         .map_err(|e| format!("模型地址无效: {e}"))?;
 
-    if url.scheme() != "http"
-        || url.host_str() != Some("127.0.0.1")
+    // 只允许从配置的障碍物/模型服务下载（与障碍物数据同一服务，见 config::services）
+    let service = Url::parse(&crate::config::services::services().obstacle_base)
+        .map_err(|e| format!("模型服务地址配置无效: {e}"))?;
+    if url.scheme() != service.scheme()
+        || url.host_str() != service.host_str()
+        || url.port_or_known_default() != service.port_or_known_default()
         || !url.path().starts_with("/api/models/")
     {
-        return Err("不允许的模型地址".to_string());
+        return Err(format!(
+            "不允许的模型地址（仅允许 {}/api/models/）",
+            crate::config::services::services().obstacle_base
+        ));
     }
     // 模型存放的文件夹
     let directory = cache_dir(&app)?;
@@ -137,14 +144,10 @@ pub async fn ensure_model_cached(
         return Ok(target.to_string_lossy().to_string());
     }
 
-    //建立请求客户端
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
-
-    let response = client
+    // 复用全局 HTTP 客户端，单次下载最长 60s
+    let response = crate::config::services::http_client()
         .get(url)
+        .timeout(std::time::Duration::from_secs(60))
         .send()
         .await
         .map_err(|e| format!("下载模型失败: {e}"))?;
