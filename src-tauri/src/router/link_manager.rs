@@ -10,12 +10,20 @@ use crate::router::rx_arbiter::{
 use crate::state::AppState;
 use crate::uplink::FP95ResponseCoordinator;
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// 同协议活跃链路快照：链路集合变化前所有帧共享同一份，切帧循环里只克隆 Arc
+type ActiveLinkSet = Arc<HashSet<String>>;
 
 struct RouterCore {
     arbiter: RxArbiter,
     link_buffers: HashMap<String, LinkBuffer>,
     link_generations: HashMap<String, u64>,
+    /// (协议, 是否回放中) → 活跃链路快照；链路代数变化时整体失效
+    active_sets: HashMap<(ProtocolType, bool), ActiveLinkSet>,
+    /// 已应用的 RX 状态代次（见 AppState::reset_rx_pools）
+    rx_epoch: u64,
 }
 struct LinkBuffer {
     generation: u64,
@@ -50,7 +58,46 @@ impl RouterCore {
             arbiter: RxArbiter::new(config),
             link_buffers: HashMap::new(),
             link_generations: HashMap::new(),
+            active_sets: HashMap::new(),
+            rx_epoch: 0,
         }
+    }
+
+    /// 回放启动/跳转重置状态池后，同步清空序号仲裁状态与切帧缓冲，保证从零重演
+    fn sync_rx_epoch(&mut self, app_state: &AppState) {
+        let epoch = app_state.rx_epoch();
+        if epoch != self.rx_epoch {
+            self.rx_epoch = epoch;
+            self.arbiter.reset_sequences();
+            self.link_buffers.clear();
+        }
+    }
+
+    /// 活跃链路（名称 + 代数）与路由层记录不一致时才重建快照；常态下只遍历比较、不分配内存
+    fn refresh_links(&mut self, app_state: &AppState) {
+        let changed = app_state.active_links.len() != self.link_generations.len()
+            || app_state
+                .active_links
+                .iter()
+                .any(|link| self.link_generations.get(link.key()) != Some(&link.generation));
+        if changed {
+            self.sync_link_generations(&active_link_generations(app_state));
+            self.active_sets.clear();
+        }
+    }
+
+    fn active_links_for(
+        &mut self,
+        app_state: &AppState,
+        protocol: ProtocolType,
+        replay_active: bool,
+    ) -> ActiveLinkSet {
+        self.active_sets
+            .entry((protocol, replay_active))
+            .or_insert_with(|| {
+                Arc::new(active_links_for_protocol(app_state, protocol, replay_active))
+            })
+            .clone()
     }
 
     fn sync_link_generations(&mut self, active_link_generations: &HashMap<String, u64>) {
@@ -77,10 +124,10 @@ impl RouterCore {
 
     fn process_raw(
         &mut self,
-        raw: RawData,
+        raw: &RawData,
         protocol: ProtocolType,
         datagram: bool,
-        active_protocol_links: HashSet<String>,
+        active_protocol_links: ActiveLinkSet,
         app_state: &AppState,
         response_coordinator: &FP95ResponseCoordinator,
     ) {
@@ -204,7 +251,8 @@ pub async fn start_router(
         tokio::select! {
             raw = rx.recv() => {
                 let Some(raw) = raw else { break };
-                router.sync_link_generations(&active_link_generations(&app_state));
+                router.sync_rx_epoch(&app_state);
+                router.refresh_links(&app_state);
                 let (protocol, link_type) = {
                     let Some(link) = app_state.active_links.get(&raw.source_link) else {
                         continue;
@@ -236,10 +284,10 @@ pub async fn start_router(
                     live_suppressed_logged = false;
                 }
                 let datagram = link_type == "UDP";
-                let active = active_links_for_protocol(&app_state, protocol, replay_active);
+                let active = router.active_links_for(&app_state, protocol, replay_active);
                 let processed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     router.process_raw(
-                        raw,
+                        &raw,
                         protocol,
                         datagram,
                         active,
@@ -248,16 +296,19 @@ pub async fn start_router(
                     );
                 }));
                 if processed.is_err() {
-                    // 单帧解析 panic 不得让整个路由任务静默退出；丢弃该链路缓冲后继续
-                    log::error!("[Router] 处理链路数据时发生 panic，已丢弃该批数据并继续运行");
-                    router.link_buffers.clear();
+                    // 单帧解析 panic 不得让整个路由任务静默退出；只丢弃出错链路的缓冲，其他链路不受影响
+                    log::error!(
+                        "[Router] 处理链路 {} 数据时发生 panic，已丢弃该链路缓冲并继续运行",
+                        raw.source_link
+                    );
+                    router.link_buffers.remove(&raw.source_link);
                 }
             }
             _ = maintenance.tick() => {
-                router.sync_link_generations(&active_link_generations(&app_state));
+                router.refresh_links(&app_state);
                 let active = active_links_by_protocol(&app_state, app_state.replay_active());
                 let snapshot = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    router.maintenance(Instant::now(), &active)
+                    router.maintenance(app_state.clock_now(), &active)
                 }));
                 match snapshot {
                     Ok(snapshot) => app_state.replace_rx_health(snapshot),
@@ -322,7 +373,7 @@ fn extract_and_process_fp981c(
     buffer: &mut BytesMut,
     source_link: &str,
     received_at: Instant,
-    active_links: HashSet<String>,
+    active_links: ActiveLinkSet,
     arbiter: &mut RxArbiter,
     app_state: &AppState,
 ) {
@@ -361,7 +412,7 @@ fn process_fp981c_frame(
     frame: &[u8],
     source_link: &str,
     received_at: Instant,
-    active_links: HashSet<String>,
+    active_links: ActiveLinkSet,
     arbiter: &mut RxArbiter,
     app_state: &AppState,
 ) {
@@ -512,7 +563,7 @@ fn extract_and_process_fp95_and_payload(
     reassembler: &mut crate::protocol::payload::PayloadStreamReassembler,
     source_link: &str,
     received_at: Instant,
-    active_links: HashSet<String>,
+    active_links: ActiveLinkSet,
     arbiter: &mut RxArbiter,
     app_state: &AppState,
     response_coordinator: &FP95ResponseCoordinator,
@@ -641,7 +692,7 @@ fn process_fp95_frame(
     header: (u8, u8),
     source_link: &str,
     received_at: Instant,
-    active_links: HashSet<String>,
+    active_links: ActiveLinkSet,
     arbiter: &mut RxArbiter,
     app_state: &AppState,
     response_coordinator: &FP95ResponseCoordinator,
@@ -690,7 +741,10 @@ fn process_fp95_frame(
                 frame,
                 received_at,
             );
-            if let ParsedSubFrame::Frame80(frame80) = &parsed {
+            // 回放注入的历史 0x80 回报不得结算实时上行事务，也不得向前端发装订回执
+            if let ParsedSubFrame::Frame80(frame80) = &parsed
+                && !app_state.replay_active()
+            {
                 response_coordinator.deliver(uav_id, frame80.injection_response);
                 maybe_emit_pod_ack(uav_id, &frame80.injection_response);
             }
@@ -765,14 +819,48 @@ fn forward_to_servo_turntable(
         frame83.relative_altitude,
     );
 
+    // 同步投递到链路发送队列：按帧顺序发出，链路忙时丢弃旧帧，不再每帧起一个异步任务
     for transport in servo_transports {
-        tokio::spawn(async move {
-            if let Err(e) = transport.send(&payload).await {
-                log::warn!("伺服转台 UDP 坐标转发失败: {}", e);
-            }
-        });
+        if let Err(e) = transport.try_send(&payload, comms_core::TxPriority::Periodic) {
+            FORWARD_ERROR_LOG.warn(format_args!("伺服转台坐标转发失败: {e}"));
+        }
     }
 }
+
+/// 高频转发失败日志节流：同类失败每 5s 最多记一条，避免链路异常时按帧刷屏
+struct ThrottledLog {
+    last_ms: std::sync::atomic::AtomicU64,
+}
+
+impl ThrottledLog {
+    const INTERVAL_MS: u64 = 5_000;
+
+    const fn new() -> Self {
+        Self {
+            last_ms: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    fn warn(&self, message: std::fmt::Arguments<'_>) {
+        use std::sync::atomic::Ordering;
+        let now_ms = crate::protocol::payload::unix_now_ms();
+        let last = self.last_ms.load(Ordering::Relaxed);
+        if now_ms.saturating_sub(last) < Self::INTERVAL_MS {
+            return;
+        }
+        if self
+            .last_ms
+            .compare_exchange(last, now_ms, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            log::warn!("{message}");
+        }
+    }
+}
+
+static FORWARD_ERROR_LOG: ThrottledLog = ThrottledLog::new();
+static PASSTHROUGH_ERROR_LOG: ThrottledLog = ThrottledLog::new();
+static PASSTHROUGH_UPLINK_ERROR_LOG: ThrottledLog = ThrottledLog::new();
 
 /// 将解包出的透传载荷有效数据直接转发给对应的外部透传链路（UDP 或串口）
 fn forward_to_passthrough(app_state: &AppState, payload_id: u8, data: &[u8]) {
@@ -802,14 +890,12 @@ fn forward_to_passthrough(app_state: &AppState, payload_id: u8, data: &[u8]) {
         return;
     }
 
-    let payload = data.to_vec();
     for transport in transports {
-        let p = payload.clone();
-        tokio::spawn(async move {
-            if let Err(e) = transport.send(&p).await {
-                log::warn!("透传载荷 0x{:02X} 转发至外部链路失败: {}", payload_id, e);
-            }
-        });
+        if let Err(e) = transport.try_send(data, comms_core::TxPriority::Periodic) {
+            PASSTHROUGH_ERROR_LOG.warn(format_args!(
+                "透传载荷 0x{payload_id:02X} 转发至外部链路失败: {e}"
+            ));
+        }
     }
 }
 
@@ -826,12 +912,16 @@ fn process_passthrough_uplink(data: &[u8], payload_id: u8, app_state: &AppState)
 
     let frame = crate::protocol::payload::pack_uplink_payload_frame(payload_id, data);
 
-    let state_clone = app_state.clone();
-    tokio::spawn(async move {
-        if let Err(e) = crate::uplink::dispatcher::broadcast_raw_payload(&state_clone, &frame).await {
-            log::warn!("透传载荷 0x{:02X} 上行广播失败: {}", payload_id, e);
-        }
-    });
+    // 同步投递：外部设备的透传数据按到达顺序进入各上行链路的控制指令队列
+    if let Err(e) = crate::uplink::dispatcher::try_broadcast_raw_payload(
+        app_state,
+        &frame,
+        comms_core::TxPriority::Control,
+    ) {
+        PASSTHROUGH_UPLINK_ERROR_LOG.warn(format_args!(
+            "透传载荷 0x{payload_id:02X} 上行广播失败: {e}"
+        ));
+    }
 }
 
 fn accept_decision(decision: RxDecision, app_state: &AppState) -> bool {
@@ -904,7 +994,7 @@ mod tests {
             &mut reassembler,
             "test_link",
             Instant::now(),
-            HashSet::new(),
+            Arc::new(HashSet::new()),
             &mut arbiter,
             &app_state,
             &coordinator,
@@ -921,9 +1011,8 @@ mod tests {
     #[tokio::test]
     async fn test_passthrough_downlink_forward() {
         use std::any::Any;
-        use std::sync::Arc;
-        use tokio::sync::Mutex;
-        use comms_core::{CommsError, TransportLink};
+        use std::sync::{Arc, Mutex};
+        use comms_core::{CommsError, TransportLink, TxPriority};
 
         #[derive(Default, Clone)]
         struct MockTransport {
@@ -938,8 +1027,12 @@ mod tests {
                 "UDP"
             }
             async fn send(&self, payload: &[u8]) -> Result<usize, CommsError> {
-                self.sent.lock().await.push(payload.to_vec());
+                self.sent.lock().unwrap().push(payload.to_vec());
                 Ok(payload.len())
+            }
+            fn try_send(&self, payload: &[u8], _priority: TxPriority) -> Result<(), CommsError> {
+                self.sent.lock().unwrap().push(payload.to_vec());
+                Ok(())
             }
             fn stop(&self) {}
             fn as_any(&self) -> &dyn Any {
@@ -968,9 +1061,8 @@ mod tests {
             crate::protocol::payload::PAYLOAD_ID_ATMOSPHERE,
             &raw_c0_data,
         );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-        let sent = mock_transport.sent.lock().await;
+        // 同步投递：调用返回时数据已进入链路发送队列，无需等待异步任务
+        let sent = mock_transport.sent.lock().unwrap();
         assert_eq!(sent.len(), 1, "应成功转发一帧数据至 PassthroughC0 链路");
         assert_eq!(sent[0], raw_c0_data);
     }
@@ -996,7 +1088,7 @@ mod tests {
             &mut reassembler,
             "test_link",
             Instant::now(),
-            HashSet::new(),
+            Arc::new(HashSet::new()),
             &mut arbiter,
             app_state,
             &coordinator,
@@ -1067,18 +1159,18 @@ mod tests {
 
         // 先来一个残缺数据报（74 字节），再来一个完整数据报
         router.process_raw(
-            raw(vec![0xFF; 74]),
+            &raw(vec![0xFF; 74]),
             ProtocolType::UAVInfo,
             true,
-            HashSet::new(),
+            Arc::new(HashSet::new()),
             &app_state,
             &coordinator,
         );
         router.process_raw(
-            raw(frame),
+            &raw(frame),
             ProtocolType::UAVInfo,
             true,
-            HashSet::new(),
+            Arc::new(HashSet::new()),
             &app_state,
             &coordinator,
         );
@@ -1157,7 +1249,7 @@ mod tests {
         app_state.recorder.init_dir(dir.clone());
         let mut router = RouterCore::new(RxArbiterConfig::default());
         let coordinator = FP95ResponseCoordinator::default();
-        let links: HashSet<String> = ["UDP-A".to_string(), "UDP-B".to_string()].into();
+        let links: ActiveLinkSet = Arc::new(["UDP-A".to_string(), "UDP-B".to_string()].into());
         let raw = |link: &str, data: Vec<u8>| RawData {
             source_link: link.to_string(),
             link_generation: 1,
@@ -1181,7 +1273,7 @@ mod tests {
             ("UDP-A", payload.clone()),
         ] {
             router.process_raw(
-                raw(link, data),
+                &raw(link, data),
                 ProtocolType::FP95,
                 true,
                 links.clone(),

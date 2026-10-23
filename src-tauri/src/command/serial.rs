@@ -1,4 +1,5 @@
 use crate::comms::{emit_link_status, LinkStatusEvent};
+use crate::config::comms::ParityConfig;
 use crate::parse_protocol;
 use crate::state;
 use comms_core::TransportLink;
@@ -121,12 +122,104 @@ async fn supervise_serial_link(
     log::info!("串口链路 {} 接收监听已结束", link_name);
 }
 
+/// 串口打开失败时的重试次数与间隔：热重载停旧启新时旧句柄可能尚未被系统完全回收
+const SERIAL_OPEN_RETRIES: u32 = 3;
+const SERIAL_OPEN_RETRY_INTERVAL: Duration = Duration::from_millis(300);
+
+/// 串口物理参数（端口、波特率、数据位、停止位、校验位）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SerialSettings {
+    pub port_name: String,
+    pub baud_rate: u32,
+    pub data_bits: u8,
+    pub stop_bits: u8,
+    pub parity: ParityConfig,
+}
+
+impl SerialSettings {
+    pub fn from_config(config: &crate::config::comms::SerialConfig) -> Self {
+        Self {
+            port_name: config.port_name.clone(),
+            baud_rate: config.baud_rate,
+            data_bits: config.data_bits,
+            stop_bits: config.stop_bits,
+            parity: config.parity,
+        }
+    }
+
+    /// 链路端点描述（如 `COM3:115200:8N1`），热重载据此判断串口参数是否变化
+    pub fn endpoint_info(&self) -> String {
+        let parity = match self.parity {
+            ParityConfig::None => 'N',
+            ParityConfig::Odd => 'O',
+            ParityConfig::Even => 'E',
+        };
+        format!(
+            "{}:{}:{}{}{}",
+            self.port_name, self.baud_rate, self.data_bits, parity, self.stop_bits
+        )
+    }
+
+    fn to_core_config(&self, name: &str) -> Result<comms_core::SerialConfig, String> {
+        let data_bits = match self.data_bits {
+            5 => comms_core::DataBits::Five,
+            6 => comms_core::DataBits::Six,
+            7 => comms_core::DataBits::Seven,
+            8 => comms_core::DataBits::Eight,
+            other => return Err(format!("串口 [{name}] 数据位 {other} 无效（仅支持 5~8）")),
+        };
+        let stop_bits = match self.stop_bits {
+            1 => comms_core::StopBits::One,
+            2 => comms_core::StopBits::Two,
+            other => return Err(format!("串口 [{name}] 停止位 {other} 无效（仅支持 1 或 2）")),
+        };
+        let parity = match self.parity {
+            ParityConfig::None => comms_core::Parity::None,
+            ParityConfig::Odd => comms_core::Parity::Odd,
+            ParityConfig::Even => comms_core::Parity::Even,
+        };
+        Ok(comms_core::SerialConfig {
+            name: name.to_string(),
+            port_name: self.port_name.clone(),
+            baud_rate: self.baud_rate,
+            data_bits,
+            stop_bits,
+            parity,
+            buffer_size: 4096,
+        })
+    }
+}
+
+/// 打开串口，失败时短暂重试（旧句柄释放与系统回收之间可能有短暂窗口，Windows 下表现为 OS error 5）
+async fn open_serial_with_retry(
+    config: &comms_core::SerialConfig,
+    event_tx: mpsc::Sender<comms_core::LinkEvent>,
+) -> Result<Arc<comms_core::SerialLink>, comms_core::CommsError> {
+    let mut attempt = 0;
+    loop {
+        match comms_core::SerialLink::start(config.clone(), event_tx.clone()).await {
+            Ok(link) => return Ok(link),
+            Err(error) if attempt < SERIAL_OPEN_RETRIES => {
+                attempt += 1;
+                log::debug!(
+                    "串口 {} 打开失败（{}），{}ms 后第 {} 次重试",
+                    config.port_name,
+                    error,
+                    SERIAL_OPEN_RETRY_INTERVAL.as_millis(),
+                    attempt
+                );
+                tokio::time::sleep(SERIAL_OPEN_RETRY_INTERVAL).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 pub async fn start_serial_internal(
     state: &state::AppState,
     router_tx: &crate::comms::RouterTx,
     name: String,
-    port_name: String,
-    baud_rate: u32,
+    settings: SerialSettings,
     protocol_type: crate::comms::ProtocolType,
 ) -> Result<String, String> {
     let link_name = name.clone();
@@ -135,27 +228,20 @@ pub async fn start_serial_internal(
         return Err(format!("该串口链路 [{}] 已存在", link_name));
     }
 
+    let config = settings.to_core_config(&link_name)?;
     let generation = state.allocate_link_generation();
-    let config = comms_core::SerialConfig {
-        name: link_name.clone(),
-        port_name: port_name.clone(),
-        baud_rate,
-        buffer_size: 4096,
-    };
 
     let (event_tx, event_rx) = mpsc::channel::<comms_core::LinkEvent>(100);
 
-    let transport = comms_core::SerialLink::start(config.clone(), event_tx)
+    let transport = open_serial_with_retry(&config, event_tx)
         .await
         .map_err(|e| format!("启动串口内核失败: {}", e))?;
-
-    let endpoint_info = format!("{}:{}", port_name, baud_rate);
 
     let active_link = state::ActiveLink {
         link_type: "SERIAL".to_string(),
         name: link_name.clone(),
         generation,
-        endpoint_info,
+        endpoint_info: settings.endpoint_info(),
         protocol: protocol_type,
         transport,
         last_raw_rx: Arc::new(Mutex::new(Instant::now())),
@@ -176,6 +262,7 @@ pub async fn start_serial_internal(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn start_serial_listener(
     state: tauri::State<'_, state::AppState>,
     router_tx: tauri::State<'_, crate::comms::RouterTx>,
@@ -183,17 +270,19 @@ pub async fn start_serial_listener(
     port_name: String,
     baud_rate: u32,
     protocol: String,
+    data_bits: Option<u8>,
+    stop_bits: Option<u8>,
+    parity: Option<ParityConfig>,
 ) -> Result<String, String> {
     let protocol_type = parse_protocol(&protocol)?;
-    start_serial_internal(
-        &state,
-        &router_tx,
-        name,
+    let settings = SerialSettings {
         port_name,
         baud_rate,
-        protocol_type,
-    )
-    .await
+        data_bits: data_bits.unwrap_or(8),
+        stop_bits: stop_bits.unwrap_or(1),
+        parity: parity.unwrap_or_default(),
+    };
+    start_serial_internal(&state, &router_tx, name, settings, protocol_type).await
 }
 
 #[tauri::command]
@@ -248,4 +337,37 @@ pub fn get_available_ports() -> Result<Vec<String>, String> {
             p
         })
         .map_err(|e| format!("获取串口列表失败: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings(data_bits: u8, stop_bits: u8, parity: ParityConfig) -> SerialSettings {
+        SerialSettings {
+            port_name: "COM3".to_string(),
+            baud_rate: 115200,
+            data_bits,
+            stop_bits,
+            parity,
+        }
+    }
+
+    #[test]
+    fn endpoint_info_encodes_frame_format() {
+        assert_eq!(settings(8, 1, ParityConfig::None).endpoint_info(), "COM3:115200:8N1");
+        assert_eq!(settings(7, 2, ParityConfig::Even).endpoint_info(), "COM3:115200:7E2");
+    }
+
+    #[test]
+    fn to_core_config_validates_frame_format() {
+        let config = settings(7, 2, ParityConfig::Odd)
+            .to_core_config("链路1")
+            .expect("7O2 应合法");
+        assert_eq!(config.data_bits, comms_core::DataBits::Seven);
+        assert_eq!(config.stop_bits, comms_core::StopBits::Two);
+        assert_eq!(config.parity, comms_core::Parity::Odd);
+        assert!(settings(9, 1, ParityConfig::None).to_core_config("链路1").is_err());
+        assert!(settings(8, 3, ParityConfig::None).to_core_config("链路1").is_err());
+    }
 }

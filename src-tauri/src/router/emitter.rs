@@ -1,5 +1,4 @@
 use crate::state::AppState;
-use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 use tokio::time::{interval, Duration};
 
@@ -26,7 +25,8 @@ pub async fn start_emitter(app_handle: AppHandle, app_state: AppState) {
     loop {
         interval.tick().await;
         tick_count = tick_count.wrapping_add(1);
-        let now = Instant::now();
+        // 回放快进段使用逻辑时钟，超时剔除与录制时间一致
+        let now = app_state.clock_now();
 
         // 回放暂停或播完留存时跳过 10s 死链剔除，保住复盘画面
         let skip_eviction = app_state.replay_paused() || (!app_state.replay_active() && app_state.replay_retained());

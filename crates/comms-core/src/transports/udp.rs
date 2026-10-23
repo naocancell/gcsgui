@@ -153,6 +153,20 @@ impl TransportLink for UdpLink {
         Ok(n)
     }
 
+    fn try_send(&self, payload: &[u8], _priority: crate::transport::TxPriority) -> Result<(), CommsError> {
+        // 数据报一次写完、天然有序：系统发送缓冲满（WouldBlock）时丢弃本包
+        self.socket
+            .try_send_to(payload, self.target_addr)
+            .map(|_| ())
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::WouldBlock {
+                    CommsError::QueueFull
+                } else {
+                    CommsError::Io(error)
+                }
+            })
+    }
+
     fn stop(&self) {
         self.cancel_token.cancel();
     }

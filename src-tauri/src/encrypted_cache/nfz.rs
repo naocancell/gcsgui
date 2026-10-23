@@ -1,13 +1,12 @@
-use reqwest::header::{ACCEPT, USER_AGENT};
+use reqwest::header::ACCEPT;
 use serde_json::Value;
 use std::time::Duration;
 use tauri::AppHandle;
 
 use super::crypto::{decrypt_data, encrypt_data};
 use super::storage;
-/// 禁飞区 API 地址
-const API_URL: &str =
-    "http://172.10.0.183:8888/api/no-fly-zones";
+/// 禁飞区接口路径（服务根地址见 config::services）
+const API_PATH: &str = "/api/no-fly-zones";
 // AES-256-GCM 加密密钥，32 字节 暂时使用固定密钥，后续改为动态生成
 const AES_KEY: &[u8; 32] =
     b"0123456789abcdef0123456789abcdef";
@@ -30,14 +29,11 @@ fn validate_json(data: &[u8]) -> Result<Value, String> {
 }
 // 请求禁飞区数据，返回原始字节
 async fn request_data() -> Result<Vec<u8>, String> {
-    //创建请求客户端，设置超时时间 5 秒
-    let client = reqwest::Client::builder()
+    // 复用全局 HTTP 客户端，单次请求超时 5 秒
+    let url = format!("{}{API_PATH}", crate::config::services::services().nfz_base);
+    let response = crate::config::services::http_client()
+        .get(url)
         .timeout(Duration::from_secs(5))
-        .build()
-        .map_err(|error| format!("创建 HTTP 客户端失败: {error}"))?;
-    // 发送 GET 请求，设置请求头
-    let response = client
-        .get(API_URL)
         .header(ACCEPT, "application/json")
         .send()
         .await
@@ -56,16 +52,17 @@ async fn request_data() -> Result<Vec<u8>, String> {
         .map_err(|error| format!("读取禁飞区响应失败: {error}"))?
         .to_vec();
 
-    validate_json(&body)?;
+    // 由调用方统一校验一次
     Ok(body)
 }
 
 pub(crate) async fn fetch_and_cache(
     app: &AppHandle,
 ) -> Result<Value, String> {
-    //请求禁飞区数据，返回原始字节
+    // 请求禁飞区数据并先校验：校验不通过不会覆盖本地已有的有效缓存
     let plaintext = request_data().await?;
-    // 加密数据，返回加密后的字节
+    let zones = validate_json(&plaintext)?;
+    // 加密后落盘；返回值直接用已校验的明文，无需再解密一遍
     let encrypted = encrypt_data(&plaintext, AES_KEY, MAGIC)?;
 
     storage::save(
@@ -76,9 +73,7 @@ pub(crate) async fn fetch_and_cache(
     )
     .await?;
 
-    let decrypted = decrypt_data(&encrypted, AES_KEY, MAGIC)?;
-    //检验 JSON 数据是否为合法的禁飞区数据
-    validate_json(&decrypted)
+    Ok(zones)
 }
 // 从缓存中加载禁飞区数据，返回 JSON 值
 pub(crate) async fn load_cached(

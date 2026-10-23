@@ -16,4 +16,7 @@ pub enum CommsError {
 
     #[error("发包通道封闭或链路已关闭")]
     LinkClosed,
+
+    #[error("链路发送队列已满")]
+    QueueFull,
 }

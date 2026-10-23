@@ -79,6 +79,14 @@ impl comms_core::TransportLink for ReplayTransport {
     }
 }
 
+/// pacing 循环以任何方式退出时清除快进逻辑时钟
+struct ReplayClockGuard(AppState);
+impl Drop for ReplayClockGuard {
+    fn drop(&mut self) {
+        self.0.set_replay_clock(None);
+    }
+}
+
 struct FinishedGuard(Arc<AtomicBool>);
 impl Drop for FinishedGuard {
     fn drop(&mut self) {
@@ -515,6 +523,17 @@ async fn pacing_loop(
     let mut prev_ts: Option<u64> = None;
     let mut finished_naturally = false;
 
+    // seek 快进段的逻辑时刻：基准取“现在 − 目标位置”，快进记录按录制时间戳落在过去、
+    // 间隔与录制一致，快进到位那一刻恰好对齐当前时刻，之后切回真实时钟（单调不回退）。
+    // 这样仲裁器观察窗/断链重同步与子帧超时在快进段内仍按录制时间判定。
+    let fast_forward_base = if resume_position_ns > 0 {
+        Instant::now().checked_sub(Duration::from_nanos(resume_position_ns))
+    } else {
+        None
+    };
+    let mut fast_forwarding = fast_forward_base.is_some();
+    let _clock_guard = ReplayClockGuard(app_state.clone());
+
     loop {
         // 控制信号实时生效
         while speed_rx.has_changed().unwrap_or(false) {
@@ -576,11 +595,19 @@ async fn pacing_loop(
                     prev_ts = Some(rec.timestamp_ns);
                     continue;
                 };
+                let received_at = match fast_forward_base {
+                    Some(base) if rec.timestamp_ns < resume_position_ns => {
+                        let at = base + Duration::from_nanos(rec.timestamp_ns);
+                        app_state.set_replay_clock(Some(at));
+                        at
+                    }
+                    _ => Instant::now(),
+                };
                 let raw = RawData {
                     source_link: virtual_name.clone(),
                     link_generation: *generation,
                     data: rec.payload.clone(),
-                    received_at: Instant::now(),
+                    received_at,
                 };
                 if router_tx.send(raw).await.is_err() {
                     log::warn!("[Replay] RouterTx 已关闭，回放终止");
@@ -611,6 +638,11 @@ async fn pacing_loop(
         // 更新进度：快进段（恢复内部状态）不暴露中间进度，避免向前端推送 0~resume 之间的瞬态导致进度条乱跳
         prev_ts = Some(rec.timestamp_ns);
         cursor.advance();
+        if fast_forwarding && rec.timestamp_ns >= resume_position_ns {
+            // 快进到位：超时判定切回真实时钟
+            fast_forwarding = false;
+            app_state.set_replay_clock(None);
+        }
         if rec.timestamp_ns >= resume_position_ns {
             let mut guard = app_state
                 .replay_status
@@ -635,7 +667,9 @@ async fn pacing_loop(
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             guard.as_ref().map_or(0, |s| s.duration_ns)
         };
+        // 先注销虚拟链路再置 Stopped：观察到 replay_active() == false 时虚拟链路必已移除
         let virtual_names: Vec<String> = links.values().map(|(n, _)| n.clone()).collect();
+        ReplayEngine::unregister_virtual_links(&app_state, &virtual_names);
         ReplayEngine::set_status(
             &app_state,
             ReplayStatus {
@@ -647,7 +681,6 @@ async fn pacing_loop(
                 start_wall_ms,
             },
         );
-        ReplayEngine::unregister_virtual_links(&app_state, &virtual_names);
         log::info!("[Replay] 回放播完，标记为 Stopped 状态并自动收尾虚拟链路");
     }
 }

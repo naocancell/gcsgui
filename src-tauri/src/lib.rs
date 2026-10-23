@@ -92,6 +92,9 @@ pub fn run() {
                 }
             }
 
+            // 外部数据服务地址（禁飞区、障碍物/模型），可由 services.json 覆盖
+            config::services::init(app.handle());
+
             let app_state = state::AppState::new();
             app.manage(app_state.clone());
 
@@ -198,6 +201,7 @@ pub fn run() {
             load_selected_obstacles,
             ensure_model_cached,
             resolve_cached_model,
+            config::services::get_service_endpoints,
             pick_3d_tiles_file,
             send_relay_control,
             send_relay_batch,
@@ -217,6 +221,39 @@ pub fn run() {
             get_link_metrics,
             export_diagnostic_bundle,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                flush_recorder_on_exit(app);
+            }
+        });
+}
+
+/// 退出兜底：主窗口关闭正常走前端拦截 → close_app；若退出未经过 close_app
+/// （前端尚未挂载拦截、系统注销等），在事件循环结束前停止链路并收尾录制文件（最多等待 2s）。
+/// close_app 已收尾时这里没有剩余会话，会立即返回。
+fn flush_recorder_on_exit(app: &AppHandle) {
+    let Some(state) = app.try_state::<state::AppState>() else {
+        return;
+    };
+    let transports: Vec<_> = state
+        .active_links
+        .iter()
+        .map(|link| link.transport.clone())
+        .collect();
+    for transport in transports {
+        transport.stop();
+    }
+    let recorder = state.recorder.clone();
+    let result = tauri::async_runtime::block_on(async move {
+        tokio::time::timeout(std::time::Duration::from_secs(2), recorder.stop_all()).await
+    });
+    match result {
+        Ok(summaries) if !summaries.is_empty() => {
+            log::info!("[退出] 兜底保存 {} 个录制文件", summaries.len());
+        }
+        Ok(_) => {}
+        Err(_) => log::warn!("[退出] 兜底保存录制文件超时"),
+    }
 }
