@@ -8,20 +8,20 @@ export type RelayGroup = 'wing' | 'tail' | 'payload' | 'reserve'
 
 export interface RelayChannelDef {
   id: number
-  /** 协议图 3 原始名称 */
+  /** 协议表 4（继电器控制模块控制位置）原始名称 */
   name: string
   /** 大屏紧凑显示名称 */
   shortName: string
   /** 回路控制卡片显示名称（设计稿样式，不含通道号） */
   tileName: string
   group: RelayGroup
-  /** 该回路对应的 6.3 电压采集字段（无采集点则为 null） */
+  /** 该回路对应的表 3 电压采集字段（无采集点则为 null） */
   voltageKey: keyof VoltageSensorData | null
   /** 预留空回路：界面置灰且不可操作 */
   reserved?: boolean
 }
 
-/** 16 路回路真实物理名称（严格对应协议图 3 原始名称与通道号） */
+/** 16 路回路真实物理名称（严格对应协议表 4 原始名称与 IO 口编号） */
 export const RELAY_CHANNELS: RelayChannelDef[] = [
   {
     id: 1,
@@ -153,6 +153,11 @@ export const RELAY_CHANNELS: RelayChannelDef[] = [
     reserved: true,
   },
 ]
+
+/** 可控回路数：新协议读线圈数量为 15（第 16 路为空） */
+export const CONTROLLABLE_RELAY_COUNT = RELAY_CHANNELS.filter(
+  (ch) => !ch.reserved,
+).length
 
 export interface RelayGroupDef {
   key: RelayGroup

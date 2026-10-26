@@ -976,8 +976,8 @@ mod tests {
         let mut arbiter = RxArbiter::new(RxArbiterConfig::default());
         let coordinator = FP95ResponseCoordinator::default();
 
-        // 构造一包任管 0xC3 继电器响应帧（新版协议低字节在前）
-        let relay_inner = [0x01, 0x01, 0x02, 0xF0, 0x0F, 0xBD, 0xF8];
+        // 构造一包任管 0xC3 继电器读线圈反馈（协议示例：线圈 6 闭合）
+        let relay_inner = [0x00, 0x01, 0x02, 0x20, 0x00, 0x9D, 0xFC];
         let payload_frame = crate::protocol::payload::pack_payload_frame(
             crate::protocol::payload::CODE_DOWNLINK,
             crate::protocol::payload::PAYLOAD_ID_RELAY,
@@ -1005,7 +1005,7 @@ mod tests {
         assert!(agg.is_some(), "应成功解析并创建 95 号机载荷状态");
         let payload_data = agg.unwrap();
         assert!(payload_data.relay.is_some());
-        assert_eq!(payload_data.relay.unwrap().mask, 0xF00F);
+        assert_eq!(payload_data.relay.unwrap().mask, 0x2000);
     }
 
     #[tokio::test]

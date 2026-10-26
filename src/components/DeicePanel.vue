@@ -38,7 +38,7 @@
             加热总开关 · {{ heaterMasterText }}
           </span>
           <span class="chip chip-plain">
-            继电器已闭合 {{ closedRelayCount }}/16
+            继电器已闭合 {{ closedRelayCount }}/{{ CONTROLLABLE_RELAY_COUNT }}
           </span>
         </div>
 
@@ -419,6 +419,7 @@ import {
   usePayloadRelayControl,
 } from '@/composables/useDeiceDashboard'
 import {
+  CONTROLLABLE_RELAY_COUNT,
   CONST_POWER_TARGET_MAX,
   CONST_POWER_TARGET_MIN,
   CONST_TEMP_TARGET_MAX,

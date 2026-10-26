@@ -1,13 +1,16 @@
-//! 0xC4 1-3 总线挂载 7 种设备解析（RS-485 Modbus RTU）
+//! 0xC4 1-3 总线挂载 7 种设备解析（RS-485 Modbus RTU，115200）
 //!
-//! 设备ID映射：
-//! - 0x01: 100V 升压模块
-//! - 0x02: 温度采集模块 1
-//! - 0x03: 温度采集模块 2
-//! - 0x04: 电压采集模块
-//! - 0x05: 电流采集模块 1
-//! - 0x06: 电流采集模块 2
-//! - 0x07: 温湿度气压传感器
+//! 依据《FP-95防除冰航电系统通信协议》1.1 / 1.2，设备 ID（暂定）：
+//! - 0x01: 100V 升压模块（读 `01 03 00 00 00 01`，反馈 9 字节数据）
+//! - 0x02: 温度采集模块 1（左侧，读 `02 03 00 28 00 10`，16 路 i16 × 0.1℃）
+//! - 0x03: 温度采集模块 2（右侧，读 `03 03 00 28 00 10`）
+//! - 0x04: 电压采集模块（读 `04 03 00 00 00 18`，24 路 u16，量程 100V → × 0.01V）
+//! - 0x05: 电流采集模块 1（读 `05 03 00 08 00 08`，8 路 u16，量程 50A → × 0.005A）
+//! - 0x06: 电流采集模块 2（读 `06 03 00 08 00 08`）
+//! - 0x07: 温湿度气压传感器（读 `07 03 00 64 00 06`，3 个 f32，按协议示例为大端字节序）
+//!
+//! 采集位置见协议表 2（温度）、表 3（电压）、表 5（电流），"空" 通道不解析。
+//! CRC 兼容低字节在前 / 高字节在前（升压模块示例为高字节在前，其余为低字节在前）。
 
 use super::relay_c3::calculate_modbus_crc16;
 use serde::{Deserialize, Serialize};
@@ -29,20 +32,20 @@ pub struct BoostModuleData {
     pub temperature: f32,    // 温度 (℃, 接收值 - 40)
 }
 
-/// 温度采集模块 (ID: 0x02 / 0x03)
+/// 温度采集模块 (ID: 0x02 左侧 / 0x03 右侧)，字段后为协议表 2 的 IO 口编号
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TempSensorGroupData {
-    pub inner_wing_const: f32, // 内机翼常加热膜采温 (℃)
-    pub mid_wing_const: f32,   // 中机翼常加热膜采温 (℃)
-    pub outer_wing_const: f32, // 外机翼常加热膜采温 (℃)
-    pub inner_wing_heat: f32,  // 内机翼加热膜采温 (℃)
-    pub mid_wing_heat: f32,    // 中机翼加热膜采温 (℃)
-    pub outer_wing_heat: f32,  // 外机翼加热膜采温 (℃)
-    pub battery_a: f32,        // 电池1/3采温 (℃)
-    pub battery_b: f32,        // 电池2/4采温 (℃)
-    pub vertical_tail: f32,    // 垂尾加热膜采温 (℃)
-    pub horizontal_tail: f32,  // 平尾加热膜采温 (℃)
+    pub inner_wing_const: f32, // IO1  内机翼常加热膜采温 (℃)
+    pub mid_wing_const: f32,   // IO2  中机翼常加热膜采温 (℃)
+    pub outer_wing_const: f32, // IO5  外机翼常加热膜采温 (℃)
+    pub inner_wing_heat: f32,  // IO6  内机翼加热膜采温 (℃)
+    pub mid_wing_heat: f32,    // IO7  中机翼加热膜采温 (℃)
+    pub outer_wing_heat: f32,  // IO8  外机翼加热膜采温 (℃)
+    pub battery_a: f32,        // IO11 电池1（模块1）/电池3（模块2）采温 (℃)
+    pub battery_b: f32,        // IO12 电池2（模块1）/电池4（模块2）采温 (℃)
+    pub vertical_tail: f32,    // IO13 垂尾加热膜采温 (℃)
+    pub horizontal_tail: f32,  // IO14 平尾加热膜采温 (℃)
 }
 
 /// 电压采集模块 (ID: 0x04)
@@ -160,20 +163,22 @@ pub fn parse_bus_0xc4_frame(data: &[u8]) -> Result<Bus0xC4DeviceData, String> {
             if !verify_modbus_crc(&data[0..35], data[35], data[36]) {
                 return Err("温度采集 CRC 校验失败".to_string());
             }
-            let parse_temp = |offset: usize| -> f32 {
+            // IO 口 n（1~16）位于数据区第 n 个寄存器，有符号数 × 0.1℃
+            let parse_temp = |io: usize| -> f32 {
+                let offset = 3 + (io - 1) * 2;
                 (i16::from_be_bytes([data[offset], data[offset + 1]]) as f32) * 0.1
             };
             let group = TempSensorGroupData {
-                inner_wing_const: parse_temp(3),
-                mid_wing_const: parse_temp(5),
-                outer_wing_const: parse_temp(11),
-                inner_wing_heat: parse_temp(13),
-                mid_wing_heat: parse_temp(15),
-                outer_wing_heat: parse_temp(17),
-                battery_a: parse_temp(23),
-                battery_b: parse_temp(25),
-                vertical_tail: parse_temp(27),
-                horizontal_tail: parse_temp(29),
+                inner_wing_const: parse_temp(1),
+                mid_wing_const: parse_temp(2),
+                outer_wing_const: parse_temp(5),
+                inner_wing_heat: parse_temp(6),
+                mid_wing_heat: parse_temp(7),
+                outer_wing_heat: parse_temp(8),
+                battery_a: parse_temp(11),
+                battery_b: parse_temp(12),
+                vertical_tail: parse_temp(13),
+                horizontal_tail: parse_temp(14),
             };
             if dev_id == 0x02 {
                 Ok(Bus0xC4DeviceData::TempSensor1(group))
@@ -309,23 +314,95 @@ mod tests {
         }
     }
 
+    /// 协议示例温度数据区：-10、-20……-80, 80、70……10 ℃
+    const TEMP_EXAMPLE_DATA: [u8; 32] = [
+        0xFF, 0x9C, 0xFF, 0x38, 0xFE, 0xD4, 0xFE, 0x70, 0xFE, 0x0C, 0xFD, 0xA8, 0xFD, 0x44, 0xFC,
+        0xE0, 0x03, 0x20, 0x02, 0xBC, 0x02, 0x58, 0x01, 0xF4, 0x01, 0x90, 0x01, 0x2C, 0x00, 0xC8,
+        0x00, 0x64,
+    ];
+
+    fn frame_with(head: &[u8], data: &[u8], crc: [u8; 2]) -> Vec<u8> {
+        let mut f = head.to_vec();
+        f.extend_from_slice(data);
+        f.extend_from_slice(&crc);
+        f
+    }
+
     #[test]
     fn test_temp_sensor_example() {
-        // 文档示例: 02 03 20 FF 9C FF 38 FE D4 FE 70 FE 0C FD A8 FD 44 FC E0 03 20 02 BC 02 58 01 F4 01 90 01 2C 00 C8 00 64 E0 C3
-        let raw = [
-            0x02, 0x03, 0x20, 0xFF, 0x9C, 0xFF, 0x38, 0xFE, 0xD4, 0xFE, 0x70, 0xFE, 0x0C, 0xFD,
-            0xA8, 0xFD, 0x44, 0xFC, 0xE0, 0x03, 0x20, 0x02, 0xBC, 0x02, 0x58, 0x01, 0xF4, 0x01,
-            0x90, 0x01, 0x2C, 0x00, 0xC8, 0x00, 0x64, 0xE0, 0xC3,
-        ];
-        let parsed = parse_bus_0xc4_frame(&raw).expect("解析温度模块1");
-        if let Bus0xC4DeviceData::TempSensor1(data) = parsed {
-            // 0xFF9C = -100 -> -10.0℃
-            assert!((data.inner_wing_const - (-10.0)).abs() < 0.1);
-            // 0xFF38 = -200 -> -20.0℃
-            assert!((data.mid_wing_const - (-20.0)).abs() < 0.1);
-        } else {
+        // 协议示例：02 03 20 … 00 64 C3 E0（温度采集 1，左侧）
+        let raw = frame_with(&[0x02, 0x03, 0x20], &TEMP_EXAMPLE_DATA, [0xC3, 0xE0]);
+        let Bus0xC4DeviceData::TempSensor1(d) = parse_bus_0xc4_frame(&raw).expect("解析温度模块1")
+        else {
             panic!("类型不匹配");
+        };
+        // IO1/2/5/6/7/8/11/12/13/14 = -10/-20/-50/-60/-70/-80/60/50/40/30
+        let expect = [
+            (d.inner_wing_const, -10.0),
+            (d.mid_wing_const, -20.0),
+            (d.outer_wing_const, -50.0),
+            (d.inner_wing_heat, -60.0),
+            (d.mid_wing_heat, -70.0),
+            (d.outer_wing_heat, -80.0),
+            (d.battery_a, 60.0),
+            (d.battery_b, 50.0),
+            (d.vertical_tail, 40.0),
+            (d.horizontal_tail, 30.0),
+        ];
+        for (got, want) in expect {
+            assert!((got - want).abs() < 0.01, "{got} != {want}");
         }
+
+        // 协议示例：03 03 20 … 00 64 EF 20（温度采集 2，右侧）
+        let raw2 = frame_with(&[0x03, 0x03, 0x20], &TEMP_EXAMPLE_DATA, [0xEF, 0x20]);
+        assert!(matches!(
+            parse_bus_0xc4_frame(&raw2),
+            Ok(Bus0xC4DeviceData::TempSensor2(_))
+        ));
+    }
+
+    #[test]
+    fn test_voltage_sensor_example() {
+        // 协议示例：04 03 30 03 E8 … 0C E4 F4 7B，电压分别为 10、11……33V
+        let mut data = Vec::new();
+        for v in 10u16..=33 {
+            data.extend_from_slice(&(v * 100).to_be_bytes());
+        }
+        let raw = frame_with(&[0x04, 0x03, 0x30], &data, [0xF4, 0x7B]);
+        let Bus0xC4DeviceData::VoltageSensor(d) = parse_bus_0xc4_frame(&raw).expect("解析电压模块")
+        else {
+            panic!("类型不匹配");
+        };
+        assert!((d.right_inner_wing - 10.0).abs() < 0.01); // IO1
+        assert!((d.left_horizontal_tail - 19.0).abs() < 0.01); // IO10
+        assert!((d.v100_input - 21.0).abs() < 0.01); // IO12
+        assert!((d.battery_input - 22.0).abs() < 0.01); // IO13
+        assert!((d.v48_boost_module - 31.0).abs() < 0.01); // IO22
+    }
+
+    #[test]
+    fn test_current_sensor_examples() {
+        // 协议示例：05/06 03 10 03 E8 … 06 A4，电流分别为 5、5.5……8.5A
+        let mut data = Vec::new();
+        for i in 0u16..8 {
+            data.extend_from_slice(&(1000 + i * 100).to_be_bytes());
+        }
+        let raw1 = frame_with(&[0x05, 0x03, 0x10], &data, [0xF5, 0xFA]);
+        let Bus0xC4DeviceData::CurrentSensor1(c1) = parse_bus_0xc4_frame(&raw1).expect("电流1")
+        else {
+            panic!("类型不匹配");
+        };
+        assert!((c1.left_vertical_tail - 5.0).abs() < 0.001); // IO1
+        assert!((c1.wing_const_heat - 7.5).abs() < 0.001); // IO6
+
+        let raw2 = frame_with(&[0x06, 0x03, 0x10], &data, [0xB1, 0xBE]);
+        let Bus0xC4DeviceData::CurrentSensor2(c2) = parse_bus_0xc4_frame(&raw2).expect("电流2")
+        else {
+            panic!("类型不匹配");
+        };
+        assert!((c2.right_horizontal_tail - 5.0).abs() < 0.001); // IO1
+        assert!((c2.right_vertical_tail - 5.5).abs() < 0.001); // IO2
+        assert!((c2.low_voltage_supply - 7.5).abs() < 0.001); // IO6
     }
 
     #[test]

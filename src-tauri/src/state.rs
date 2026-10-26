@@ -187,8 +187,8 @@ pub struct AppState {
     /// RX 状态代次：reset_rx_pools 时递增，路由任务据此清空序号仲裁状态与切帧缓冲
     rx_epoch: Arc<AtomicU64>,
 
-    /// TX 层：继电器写线圈串行锁 + 已下发未确认的期望掩码（防读-改-写互相覆盖）
-    pub relay_pending: Arc<tokio::sync::Mutex<Option<crate::protocol::payload::PendingRelayMask>>>,
+    /// TX 层：继电器写线圈串行锁（批量逐路下发期间不与单路切换交错）
+    pub relay_write_lock: Arc<tokio::sync::Mutex<()>>,
 
     /// 通信配置保存/热重载串行锁：防止两次保存并发热重载导致链路重复启动或互相停止
     pub comms_config_lock: Arc<tokio::sync::Mutex<()>>,
@@ -213,7 +213,7 @@ impl AppState {
             replay_status: Arc::new(RwLock::new(None)),
             replay_clock: Arc::new(Mutex::new(None)),
             rx_epoch: Arc::new(AtomicU64::new(0)),
-            relay_pending: Arc::new(tokio::sync::Mutex::new(None)),
+            relay_write_lock: Arc::new(tokio::sync::Mutex::new(())),
             comms_config_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
