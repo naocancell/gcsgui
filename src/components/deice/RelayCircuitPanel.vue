@@ -28,8 +28,7 @@
           :key="ch.id"
           class="relay-tile"
           :class="{
-            'is-closed': !ch.reserved && isRelayClosed(ch.id),
-            'is-reserved': ch.reserved,
+            'is-closed': isRelayClosed(ch.id),
           }"
           :title="tileTitle(ch)"
         >
@@ -37,11 +36,10 @@
           <button
             class="tile-btn"
             type="button"
-            :disabled="ch.reserved || loadingSwitch === ch.id"
+            :disabled="loadingSwitch === ch.id"
             @click="handleToggleRelay(ch.id, !isRelayClosed(ch.id))"
           >
-            <template v-if="ch.reserved">—</template>
-            <template v-else-if="loadingSwitch === ch.id">下发中…</template>
+            <template v-if="loadingSwitch === ch.id">下发中…</template>
             <template v-else>
               {{ isRelayClosed(ch.id) ? '断开' : '通电' }}
             </template>
@@ -83,7 +81,6 @@ function pad(id: number) {
 
 function tileTitle(ch: RelayChannelDef): string {
   const head = `CH${pad(ch.id)} · ${ch.name}`
-  if (ch.reserved) return `${head} · 未配置`
   if (!isRelayClosed(ch.id)) return `${head} · 断开`
   const v = voltageText(ch.voltageKey)
   return `${head} · 通电中${v ? ` · ${v}V` : ''}`
@@ -173,9 +170,5 @@ function voltageText(key: keyof VoltageSensorData | null): string {
 
 .relay-tile.is-closed .tile-btn:hover:not(:disabled) {
   background: rgb(5 46 22 / 95%);
-}
-
-.relay-tile.is-reserved {
-  opacity: 0.35;
 }
 </style>

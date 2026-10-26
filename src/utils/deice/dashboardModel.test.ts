@@ -7,7 +7,6 @@ import {
   buildConstHeatRow,
   buildHeatStripRows,
   buildSparklinePoints,
-  dewPoint,
   normalizeConstPowerTarget,
   normalizeConstTempTarget,
   powerDeviationPercent,
@@ -16,22 +15,21 @@ import {
 } from './dashboardModel'
 
 describe('防除冰大屏数据映射', () => {
-  it('16 路继电器通道号连续且与协议名称一致', () => {
-    expect(RELAY_CHANNELS).toHaveLength(16)
+  it('15 路有效继电器通道号连续且与协议名称一致', () => {
+    expect(RELAY_CHANNELS).toHaveLength(15)
     RELAY_CHANNELS.forEach((ch, i) => expect(ch.id).toBe(i + 1))
     expect(RELAY_CHANNELS[0].name).toBe('右平尾加热膜供电')
     expect(RELAY_CHANNELS[7].name).toBe('机翼常加热膜供电')
-    expect(RELAY_CHANNELS[15].reserved).toBe(true)
     expect(RELAY_CHANNELS[14].name).toBe('桨叶防除冰控制')
     // 新协议读线圈数量 0x0F：可控 15 路
     expect(CONTROLLABLE_RELAY_COUNT).toBe(15)
   })
 
-  it('大屏 4 个分区完整覆盖 16 路且不重复', () => {
+  it('大屏 4 个分区完整覆盖 15 路且不重复', () => {
     const ids = RELAY_GROUPS.flatMap((g) => g.channels.map((c) => c.id))
-    expect(ids).toHaveLength(16)
-    expect(new Set(ids).size).toBe(16)
-    expect(RELAY_GROUPS.map((g) => g.channels.length)).toEqual([6, 4, 4, 2])
+    expect(ids).toHaveLength(15)
+    expect(new Set(ids).size).toBe(15)
+    expect(RELAY_GROUPS.map((g) => g.channels.length)).toEqual([6, 4, 4, 1])
   })
 
   it('加热分段按左=设备1、右=设备2映射温度/电压/电流与继电器', () => {
@@ -82,13 +80,11 @@ describe('防除冰大屏数据映射', () => {
     }
   })
 
-  it('露点、功率偏差、电压条等派生量计算正确且对非法值防御', () => {
-    expect(dewPoint(-12.4, 62)!).toBeCloseTo(-18.2, 1)
-    expect(dewPoint(null, 50)).toBeNull()
-    expect(dewPoint(10, 0)).toBeNull()
+  it('功率偏差、电压条等派生量计算正确且对非法值防御', () => {
     expect(powerDeviationPercent(2000, 1986)!).toBeCloseTo(-0.7, 5)
     expect(powerDeviationPercent(0, 100)).toBeNull()
-    expect(voltageBarPercent(75)).toBe(50)
+    expect(voltageBarPercent(50)).toBe(50)
+    expect(voltageBarPercent(75)).toBe(75)
     expect(voltageBarPercent(1000)).toBe(100)
     expect(voltageBarPercent(Number.NaN)).toBe(0)
     expect(voltageTier(99.8)).toBe('high')

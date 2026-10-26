@@ -3,7 +3,10 @@ import { useMessage } from 'naive-ui'
 import { usePayloadStore } from '@/store/payloadStore'
 import type { useUavStore } from '@/store/uavStore'
 import { logger } from '@/utils/logger'
-import { RELAY_CHANNELS } from '@/utils/deice/dashboardModel'
+import {
+  CONTROLLABLE_RELAY_COUNT,
+  RELAY_CHANNELS,
+} from '@/utils/deice/dashboardModel'
 
 /** 挂载载荷遥测监听，并在进入页面时主动巡检一次继电器初态 */
 export function usePayloadLink() {
@@ -32,12 +35,12 @@ export function usePayloadRelayControl() {
   const closedRelayCount = computed(() => {
     const channels = relayStatus.value?.channels
     if (!channels) return 0
-    return channels.filter(Boolean).length
+    return channels.slice(0, CONTROLLABLE_RELAY_COUNT).filter(Boolean).length
   })
 
   function isRelayClosed(index: number): boolean {
     const channels = relayStatus.value?.channels
-    if (!channels || index < 1 || index > 16) return false
+    if (!channels || index < 1 || index > CONTROLLABLE_RELAY_COUNT) return false
     return Boolean(channels[index - 1])
   }
 

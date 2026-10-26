@@ -17,11 +17,9 @@ export interface RelayChannelDef {
   group: RelayGroup
   /** 该回路对应的表 3 电压采集字段（无采集点则为 null） */
   voltageKey: keyof VoltageSensorData | null
-  /** 预留空回路：界面置灰且不可操作 */
-  reserved?: boolean
 }
 
-/** 16 路回路真实物理名称（严格对应协议表 4 原始名称与 IO 口编号） */
+/** 15 路有效回路真实物理名称（严格对应协议表 4 原始名称与 IO 口编号，第 16 路为空） */
 export const RELAY_CHANNELS: RelayChannelDef[] = [
   {
     id: 1,
@@ -143,21 +141,10 @@ export const RELAY_CHANNELS: RelayChannelDef[] = [
     group: 'payload',
     voltageKey: null,
   },
-  {
-    id: 16,
-    name: '空',
-    shortName: '预留（空）',
-    tileName: '备用回路',
-    group: 'reserve',
-    voltageKey: null,
-    reserved: true,
-  },
 ]
 
 /** 可控回路数：新协议读线圈数量为 15（第 16 路为空） */
-export const CONTROLLABLE_RELAY_COUNT = RELAY_CHANNELS.filter(
-  (ch) => !ch.reserved,
-).length
+export const CONTROLLABLE_RELAY_COUNT = RELAY_CHANNELS.length
 
 export interface RelayGroupDef {
   key: RelayGroup
@@ -170,7 +157,7 @@ function pick(ids: number[]): RelayChannelDef[] {
   return ids.map((id) => RELAY_CHANNELS[id - 1])
 }
 
-/** 大屏分区（设计稿顺序）：机翼 6 路 / 尾翼 4 路 / 载荷 4 路 / 常加与备用 2 路 */
+/** 大屏分区（设计稿顺序）：机翼 6 路 / 尾翼 4 路 / 载荷 4 路 / 常加热 1 路 */
 export const RELAY_GROUPS: RelayGroupDef[] = [
   {
     key: 'wing',
@@ -192,9 +179,9 @@ export const RELAY_GROUPS: RelayGroupDef[] = [
   },
   {
     key: 'reserve',
-    title: '常加热与备用回路',
-    columns: 2,
-    channels: pick([8, 16]),
+    title: '常加热供电回路',
+    columns: 1,
+    channels: pick([8]),
   },
 ]
 
@@ -339,7 +326,7 @@ export function buildHeatSegments(
   ]
 }
 
-/** 6.3 电压采集模块 11 路系统供电通道（协议原始顺序） */
+/** 表 3 电压采集模块 11 路系统供电通道（协议原始顺序） */
 export const SYSTEM_VOLTAGE_CHANNELS: {
   key: keyof VoltageSensorData
   name: string
@@ -357,8 +344,8 @@ export const SYSTEM_VOLTAGE_CHANNELS: {
   { key: 'cloudDropHeat', name: '云滴探测 · 加温电压' },
 ]
 
-/** 电压条满量程 (V) */
-export const VOLTAGE_BAR_FULL_SCALE = 150
+/** 电压条满量程 (V，协议 1.2.3.1 量程为 100V) */
+export const VOLTAGE_BAR_FULL_SCALE = 100
 
 export function voltageBarPercent(val: number | null | undefined): number {
   if (typeof val !== 'number' || !Number.isFinite(val) || val <= 0) return 0
@@ -373,26 +360,6 @@ export function voltageTier(
   if (val >= 60) return 'high'
   if (val >= 20) return 'mid'
   return 'low'
-}
-
-/** Magnus 公式计算露点温度 (℃) */
-export function dewPoint(
-  tempC: number | null | undefined,
-  rh: number | null | undefined,
-): number | null {
-  if (
-    typeof tempC !== 'number' ||
-    !Number.isFinite(tempC) ||
-    typeof rh !== 'number' ||
-    !Number.isFinite(rh) ||
-    rh <= 0
-  ) {
-    return null
-  }
-  const a = 17.62
-  const b = 243.12
-  const gamma = Math.log(Math.min(rh, 100) / 100) + (a * tempC) / (b + tempC)
-  return (b * gamma) / (a - gamma)
 }
 
 /** 实际功率相对目标功率偏差百分比 */

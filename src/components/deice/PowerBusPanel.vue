@@ -1,13 +1,13 @@
 <template>
   <section class="dd-card power-bus-card">
     <div class="dd-card-head">
-      <span class="dd-card-title" title="0xC4 · 6.1 / 6.5 / 6.3">
+      <span class="dd-card-title">
         电源与系统总线遥测
       </span>
     </div>
 
-    <!-- 6.1 升压模块 -->
-    <div class="dd-section-label" title="ID: 01">6.1 升压模块</div>
+    <!-- 升压模块 -->
+    <div class="dd-section-label" title="ID: 01">升压模块</div>
     <div class="dd-grid-2">
       <div class="dd-tile">
         <span class="dd-tile-label">输入电压</span>
@@ -44,7 +44,7 @@
           <span class="dd-unit">°C</span>
         </span>
       </div>
-      <div class="dd-tile" title="6.3 电压采集模块 · 电池输入电压">
+      <div class="dd-tile" title="电压采集模块 · 电池输入电压">
         <span class="dd-tile-label">电池输入电压</span>
         <span class="dd-tile-value c-green">
           {{ fmtFixed(batteryInput, 1) }}
@@ -58,7 +58,7 @@
           <span class="dd-unit">A</span>
         </span>
       </div>
-      <div class="dd-tile" title="6.5 温湿度气压传感器">
+      <div class="dd-tile" title="温湿度气压传感器">
         <span class="dd-tile-label">大气压</span>
         <span class="dd-tile-value">
           {{ pressureHpa }}
@@ -67,8 +67,8 @@
       </div>
     </div>
 
-    <!-- 6.5 温湿度气压传感器 & 结冰环境 -->
-    <div class="dd-section-label">6.5 温湿度气压传感器 &amp; 结冰环境</div>
+    <!-- 温湿度气压传感器 & 结冰环境 -->
+    <div class="dd-section-label">温湿度气压传感器 &amp; 结冰环境</div>
     <div class="dd-grid-2">
       <div class="dd-tile">
         <span class="dd-tile-label">结冰探测状态</span>
@@ -84,9 +84,9 @@
       </div>
     </div>
 
-    <!-- 6.3 电压采集模块 -->
+    <!-- 电压采集模块 -->
     <div class="dd-section-label" title="ID: 04 · 电源与特种载荷供电电压">
-      6.3 电压采集模块
+      电压采集模块
     </div>
     <div class="volt-list">
       <div v-for="ch in voltageRows" :key="ch.key" class="volt-row">
@@ -159,7 +159,7 @@ const lowVoltageSupplyCurrent = computed(() => {
   return typeof c === 'number' && Number.isFinite(c) ? c : null
 })
 
-// 电池输入电压已在 6.1 区域单独展示，电压条列表不再重复
+// 电池输入电压已在升压模块区域单独展示，电压条列表不再重复
 const voltageRows = computed(() => {
   const vs = payloadStore.currentPayload?.voltageSensor
   return SYSTEM_VOLTAGE_CHANNELS.filter((ch) => ch.key !== 'batteryInput').map(

@@ -205,7 +205,7 @@
           <BatteryTempStrip />
         </div>
 
-        <!-- 右栏：模式控制 / 回路控制 / 温压流矩阵 / 告警 / 结冰环境 -->
+        <!-- 右栏：模式控制 / 回路控制 / 温压流矩阵 / 告警 -->
         <div class="dash-col col-right">
           <!-- 防除冰工作模式与控制指令 (协议表 3 / 表 4) -->
           <section class="dd-card cmd-control-card">
@@ -398,8 +398,6 @@
               </div>
             </div>
           </section>
-
-          <IcingEnvironmentPanel />
         </div>
       </div>
     </n-config-provider>
@@ -431,7 +429,6 @@ import {
 import AirframeHeatMap from '@/components/deice/AirframeHeatMap.vue'
 import BatteryTempStrip from '@/components/deice/BatteryTempStrip.vue'
 import HeatingMatrixPanel from '@/components/deice/HeatingMatrixPanel.vue'
-import IcingEnvironmentPanel from '@/components/deice/IcingEnvironmentPanel.vue'
 import PowerBusPanel from '@/components/deice/PowerBusPanel.vue'
 import PowerTrendChart from '@/components/deice/PowerTrendChart.vue'
 import RelayCircuitPanel from '@/components/deice/RelayCircuitPanel.vue'
