@@ -7,7 +7,11 @@
         :class="relayStatus ? 'c-green' : 'c-muted'"
         :title="`回路掩码 ${maskText}`"
       >
-        {{ relayStatus ? `已闭合 ${closedRelayCount}/16` : '等待回路状态' }}
+        {{
+          relayStatus
+            ? `已闭合 ${closedRelayCount}/${CONTROLLABLE_RELAY_COUNT}`
+            : '等待回路状态'
+        }}
       </span>
     </div>
 
@@ -53,6 +57,7 @@ import { computed } from 'vue'
 import { usePayloadStore, type VoltageSensorData } from '@/store/payloadStore'
 import { usePayloadRelayControl } from '@/composables/useDeiceDashboard'
 import {
+  CONTROLLABLE_RELAY_COUNT,
   RELAY_GROUPS,
   type RelayChannelDef,
 } from '@/utils/deice/dashboardModel'

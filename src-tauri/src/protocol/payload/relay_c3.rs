@@ -1,18 +1,33 @@
-//! 0xC3 继电器控制器协议（Modbus RTU 变种）
+//! 0xC3 继电器控制器协议（Modbus RTU）
 //!
-//! 支持 16 路继电器状态读取与控制：
-//! - 读线圈（功能码 0x01）：读取当前 16 路继电器闭合/断开状态
-//! - 写线圈（功能码 0x0F）：设置 16 路继电器闭合/断开状态
+//! 依据《FP-95防除冰航电系统通信协议》1.2.6（设备 ID 0x00 暂定，波特率 115200）：
+//! - 读线圈（功能码 0x01）：`00 01 00 00 00 0F CRC`，读取 15 路（第 16 路为空）；
+//!   反馈 `00 01 02 <线圈1~8> <线圈9~16> CRC`，每字节 bit0 对应该组第一路
+//! - 写单个线圈（功能码 0x05）：`00 05 00 <00~0F> <FF/00> 00 CRC`，
+//!   地址 0x00~0x0F 对应继电器 1~16，0xFF00 打开、0x0000 关闭；设备反馈与指令一致
+//! - CRC16/Modbus，低字节在前
 
 use serde::{Deserialize, Serialize};
 
-pub const RELAY_DEVICE_ID: u8 = 0x01;
+/// 继电器控制器设备 ID（协议暂定 0x00）
+pub const RELAY_DEVICE_ID: u8 = 0x00;
 pub const FC_READ_COILS: u8 = 0x01;
-pub const FC_WRITE_COILS: u8 = 0x0F;
+pub const FC_WRITE_SINGLE_COIL: u8 = 0x05;
+/// 继电器总路数（第 16 路为空）
+pub const RELAY_CHANNEL_COUNT: u8 = 16;
+/// 读线圈数量（协议 0x000F：第 1~15 路），也是批量操作覆盖的路数
+pub const RELAY_READ_COIL_COUNT: u8 = 15;
+/// 读线圈反馈长度：ID + 功能码 + 字节数 + 2 字节状态 + CRC
+pub const RELAY_READ_RESPONSE_LEN: usize = 7;
+/// 写单个线圈指令/反馈长度
+pub const RELAY_WRITE_FRAME_LEN: usize = 8;
+
+const COIL_ON: u16 = 0xFF00;
+const COIL_OFF: u16 = 0x0000;
 
 /// Modbus CRC-16 (多项式 0xA001, 初始值 0xFFFF)
 ///
-/// 遵循标准 Modbus RTU 传输规则及最新版协议 V1.0(2)：低字节在前，高字节在后（Little-Endian）
+/// 返回 (低字节, 高字节)，Modbus RTU 传输时低字节在前
 pub fn calculate_modbus_crc16(data: &[u8]) -> (u8, u8) {
     let mut crc: u16 = 0xFFFF;
     for &byte in data {
@@ -25,19 +40,25 @@ pub fn calculate_modbus_crc16(data: &[u8]) -> (u8, u8) {
             }
         }
     }
-    // 返回 (低字节, 高字节)
     let low = (crc & 0xFF) as u8;
     let high = ((crc >> 8) & 0xFF) as u8;
     (low, high)
+}
+
+/// 校验末尾 2 字节 CRC（兼容低字节在前 / 高字节在前）
+fn crc_matches(frame: &[u8]) -> bool {
+    let n = frame.len();
+    let (l, h) = calculate_modbus_crc16(&frame[..n - 2]);
+    (frame[n - 2] == l && frame[n - 1] == h) || (frame[n - 2] == h && frame[n - 1] == l)
 }
 
 /// 继电器当前状态模型（16 路开关）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RelayStatus {
-    /// 16 位掩码，按协议图示定义：
-    /// - Bit8~Bit15: 对应线圈 1~8 (高字节 B8~B15)
-    /// - Bit0~Bit7:  对应线圈 9~16 (低字节 B0~B7)
+    /// 16 位掩码，按读线圈反馈的两个状态字节拼接（高字节在前）：
+    /// - Bit8~Bit15: 线圈 1~8（反馈第 1 个状态字节，bit8 = 线圈 1）
+    /// - Bit0~Bit7:  线圈 9~16（反馈第 2 个状态字节，bit0 = 线圈 9）
     pub mask: u16,
     /// 16 路各个开关布尔值数组（索引 0 对应线圈 1，索引 15 对应线圈 16）
     pub channels: [bool; 16],
@@ -45,7 +66,7 @@ pub struct RelayStatus {
 
 impl RelayStatus {
     /// 计算线圈编号 (1~16) 在 16 位掩码中的 bit 偏移 (0~15)
-    /// 协议规则：b0~b7 对应线圈 9~16，b8~b15 对应线圈 1~8
+    /// 规则：b8~b15 对应线圈 1~8，b0~b7 对应线圈 9~16
     pub fn coil_to_bit_pos(coil_index: u8) -> usize {
         if coil_index <= 8 {
             (coil_index - 1 + 8) as usize
@@ -55,9 +76,6 @@ impl RelayStatus {
     }
 
     /// 从 16 位掩码构建状态模型
-    /// 规则：
-    /// - b8~b15 映射到 channels[0..8] (线圈 1~8)
-    /// - b0~b7  映射到 channels[8..16] (线圈 9~16)
     pub fn from_u16(mask: u16) -> Self {
         let mut channels = [false; 16];
         for i in 0..8 {
@@ -88,91 +106,82 @@ impl RelayStatus {
     pub fn to_u16(&self) -> u16 {
         self.mask
     }
-}
 
-/// 构建读线圈上行请求报文（读取 16 路继电器）
-/// 最新协议示例：01 01 00 00 00 10 3D C6
-/// 单路切换后、回报确认前的“期望掩码”。
-///
-/// 写线圈指令一次覆盖全部 16 路，单路切换必须基于最新掩码做读-改-写；
-/// 连续操作时下一次应基于上一次已下发的掩码，而不是尚未刷新的回报。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PendingRelayMask {
-    pub mask: u16,
-    pub sent_at_ms: u64,
-}
-
-/// 写入后该时长内收到的回报可能是写入生效前发出的轮询应答，不作为确认
-pub const RELAY_SETTLE_MS: u64 = 300;
-/// 期望掩码最长保留时间，超时后以设备回报为准
-pub const RELAY_PENDING_TTL_MS: u64 = 3_000;
-
-/// 计算单路切换的基准掩码。
-///
-/// - `reported`：设备最近一次回报的 (掩码, 回报时间 ms)，已超时清空时为 `None`
-/// - `pending`：上一次已下发但尚未被回报确认的期望掩码
-///
-/// 两者都没有时拒绝操作，避免按全 0 掩码写入把其他回路全部断开。
-pub fn resolve_relay_base_mask(
-    reported: Option<(u16, u64)>,
-    pending: Option<PendingRelayMask>,
-    now_ms: u64,
-) -> Result<u16, String> {
-    if let Some(p) = pending {
-        let confirmed =
-            reported.is_some_and(|(_, updated_ms)| updated_ms > p.sent_at_ms + RELAY_SETTLE_MS);
-        let expired = now_ms.saturating_sub(p.sent_at_ms) > RELAY_PENDING_TTL_MS;
-        if !confirmed && !expired {
-            return Ok(p.mask);
-        }
+    /// 掩码中线圈 (1~16) 是否闭合
+    pub fn mask_has_coil(mask: u16, coil_index: u8) -> bool {
+        (1..=RELAY_CHANNEL_COUNT).contains(&coil_index)
+            && (mask >> Self::coil_to_bit_pos(coil_index)) & 1 == 1
     }
-    reported.map(|(mask, _)| mask).ok_or_else(|| {
-        "尚未收到继电器状态回报，为避免误断其他回路已拒绝单路切换，请稍后重试或使用全部通电/断开"
-            .to_string()
-    })
+
+    /// 更新单路状态（写单个线圈反馈确认后使用），编号越界时忽略
+    pub fn set_coil(&mut self, coil_index: u8, on: bool) {
+        if !(1..=RELAY_CHANNEL_COUNT).contains(&coil_index) {
+            return;
+        }
+        let bit = 1u16 << Self::coil_to_bit_pos(coil_index);
+        if on {
+            self.mask |= bit;
+        } else {
+            self.mask &= !bit;
+        }
+        self.channels[(coil_index - 1) as usize] = on;
+    }
 }
 
+/// 继电器控制器下行反馈
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayResponse {
+    /// 读线圈反馈：全部回路状态
+    Status(RelayStatus),
+    /// 写单个线圈反馈（与指令一致）：该路已按指令打开/关闭
+    CoilWritten { coil_index: u8, on: bool },
+}
+
+/// 构建读线圈指令：`00 01 00 00 00 0F 7D DF`
 pub fn build_read_coils_cmd() -> [u8; 8] {
-    let mut cmd = [0u8; 8];
-    cmd[0] = RELAY_DEVICE_ID;
-    cmd[1] = FC_READ_COILS;
-    cmd[2] = 0x00; // 起始地址高
-    cmd[3] = 0x00; // 起始地址低
-    cmd[4] = 0x00; // 数量高
-    cmd[5] = 0x10; // 数量低 (16)
-    let (crcl, crch) = calculate_modbus_crc16(&cmd[0..6]);
+    let mut cmd = [
+        RELAY_DEVICE_ID,
+        FC_READ_COILS,
+        0x00, // 起始地址高
+        0x00, // 起始地址低
+        0x00, // 数量高
+        RELAY_READ_COIL_COUNT,
+        0,
+        0,
+    ];
+    let (crcl, crch) = calculate_modbus_crc16(&cmd[..6]);
     cmd[6] = crcl;
     cmd[7] = crch;
     cmd
 }
 
-/// 构建写线圈上行控制报文（设置 16 路继电器）
-/// 最新协议示例：01 0F 00 00 00 10 02 0F F0 E7 94
-/// 注意：协议文档中：
-/// 第 8 字节为 B15~B8 (高字节)，第 9 字节为 B7~B0 (低字节)
-pub fn build_write_coils_cmd(mask: u16) -> [u8; 11] {
-    let mut cmd = [0u8; 11];
-    cmd[0] = RELAY_DEVICE_ID;
-    cmd[1] = FC_WRITE_COILS;
-    cmd[2] = 0x00; // 起始地址高
-    cmd[3] = 0x00; // 起始地址低
-    cmd[4] = 0x00; // 数量高
-    cmd[5] = 0x10; // 数量低 (16)
-    cmd[6] = 0x02; // 字节数 (2)
-    // 根据文档：字节8是B15~B8，字节9是B7~B0
-    cmd[7] = ((mask >> 8) & 0xFF) as u8;
-    cmd[8] = (mask & 0xFF) as u8;
-    let (crcl, crch) = calculate_modbus_crc16(&cmd[0..9]);
-    cmd[9] = crcl;
-    cmd[10] = crch;
-    cmd
+/// 构建写单个线圈指令（继电器编号 1~16）
+///
+/// 示例：第 6 路打开 `00 05 00 05 FF 00 9D EA`
+pub fn build_write_single_coil_cmd(coil_index: u8, on: bool) -> Result<[u8; 8], String> {
+    if !(1..=RELAY_CHANNEL_COUNT).contains(&coil_index) {
+        return Err(format!("继电器编号超出范围 (1~16): {coil_index}"));
+    }
+    let value = (if on { COIL_ON } else { COIL_OFF }).to_be_bytes();
+    let mut cmd = [
+        RELAY_DEVICE_ID,
+        FC_WRITE_SINGLE_COIL,
+        0x00,           // 起始地址高
+        coil_index - 1, // 起始地址低：0x00~0x0F 对应继电器 1~16
+        value[0],
+        value[1],
+        0,
+        0,
+    ];
+    let (crcl, crch) = calculate_modbus_crc16(&cmd[..6]);
+    cmd[6] = crcl;
+    cmd[7] = crch;
+    Ok(cmd)
 }
 
-/// 解析继电器控制器下行响应报文
-/// 读线圈反馈格式：01 01 02 F0 0F BD F8 (7 字节，最新版协议)
-/// 写线圈反馈格式：01 0F 00 00 00 10 54 07 (8 字节，最新版协议)
-pub fn parse_relay_response(data: &[u8]) -> Result<Option<RelayStatus>, String> {
-    if data.len() < 7 {
+/// 解析继电器控制器下行反馈（读线圈 7 字节 / 写单个线圈 8 字节）
+pub fn parse_relay_response(data: &[u8]) -> Result<RelayResponse, String> {
+    if data.len() < RELAY_READ_RESPONSE_LEN {
         return Err(format!("继电器报文长度过短: {}", data.len()));
     }
     if data[0] != RELAY_DEVICE_ID {
@@ -181,41 +190,38 @@ pub fn parse_relay_response(data: &[u8]) -> Result<Option<RelayStatus>, String> 
 
     match data[1] {
         FC_READ_COILS => {
-            if data.len() < 7 {
-                return Err("读线圈响应长度不足 7 字节".to_string());
+            let frame = &data[..RELAY_READ_RESPONSE_LEN];
+            if frame[2] != 2 {
+                return Err(format!("读线圈返回字节数异常: {}", frame[2]));
             }
-            let byte_count = data[2];
-            if byte_count != 2 {
-                return Err(format!("读线圈返回字节数异常: {}", byte_count));
+            if !crc_matches(frame) {
+                return Err("读线圈 CRC 校验失败".to_string());
             }
-            let (crcl, crch) = calculate_modbus_crc16(&data[0..5]);
-            let crc_ok = (data[5] == crcl && data[6] == crch) || (data[5] == crch && data[6] == crcl);
-            if !crc_ok {
-                return Err(format!(
-                    "读线圈 CRC 校验失败: 收到 {:02X}{:02X}, 计算得到 低={:02X} 高={:02X}",
-                    data[5], data[6], crcl, crch
-                ));
-            }
-            // 字节3是B15~B8，字节4是B7~B0
-            let high = data[3] as u16;
-            let low = data[4] as u16;
-            let mask = (high << 8) | low;
-            Ok(Some(RelayStatus::from_u16(mask)))
+            // 第 1 个状态字节 = 线圈 1~8，第 2 个 = 线圈 9~16
+            let mask = u16::from_be_bytes([frame[3], frame[4]]);
+            Ok(RelayResponse::Status(RelayStatus::from_u16(mask)))
         }
-        FC_WRITE_COILS => {
-            if data.len() < 8 {
-                return Err("写线圈响应长度不足 8 字节".to_string());
+        FC_WRITE_SINGLE_COIL => {
+            if data.len() < RELAY_WRITE_FRAME_LEN {
+                return Err("写线圈反馈长度不足 8 字节".to_string());
             }
-            let (crcl, crch) = calculate_modbus_crc16(&data[0..6]);
-            let crc_ok = (data[6] == crcl && data[7] == crch) || (data[6] == crch && data[7] == crcl);
-            if !crc_ok {
-                return Err(format!(
-                    "写线圈 CRC 校验失败: 收到 {:02X}{:02X}, 计算得到 低={:02X} 高={:02X}",
-                    data[6], data[7], crcl, crch
-                ));
+            let frame = &data[..RELAY_WRITE_FRAME_LEN];
+            if !crc_matches(frame) {
+                return Err("写线圈 CRC 校验失败".to_string());
             }
-            // 写线圈确认帧，无需更新状态
-            Ok(None)
+            let address = u16::from_be_bytes([frame[2], frame[3]]);
+            if address >= RELAY_CHANNEL_COUNT as u16 {
+                return Err(format!("写线圈地址超出范围: 0x{address:04X}"));
+            }
+            let on = match u16::from_be_bytes([frame[4], frame[5]]) {
+                COIL_ON => true,
+                COIL_OFF => false,
+                other => return Err(format!("写线圈状态值异常: 0x{other:04X}")),
+            };
+            Ok(RelayResponse::CoilWritten {
+                coil_index: address as u8 + 1,
+                on,
+            })
         }
         other => Err(format!("未知继电器功能码: 0x{:02X}", other)),
     }
@@ -223,136 +229,121 @@ pub fn parse_relay_response(data: &[u8]) -> Result<Option<RelayStatus>, String> 
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn test_resolve_relay_base_mask() {
-        // 从未收到回报且无期望掩码：拒绝，避免按 0 掩码误断全部回路
-        assert!(resolve_relay_base_mask(None, None, 1_000).is_err());
-
-        // 只有回报：以回报为准
-        assert_eq!(
-            resolve_relay_base_mask(Some((0x00F0, 900)), None, 1_000),
-            Ok(0x00F0)
-        );
-
-        // 连续切换：回报尚未刷新时基于上一次已下发的掩码
-        let pending = PendingRelayMask {
-            mask: 0x00F1,
-            sent_at_ms: 1_000,
-        };
-        assert_eq!(
-            resolve_relay_base_mask(Some((0x00F0, 900)), Some(pending), 1_100),
-            Ok(0x00F1)
-        );
-        // 写入后 300ms 内的回报可能是旧轮询应答，不作为确认
-        assert_eq!(
-            resolve_relay_base_mask(Some((0x00F0, 1_200)), Some(pending), 1_250),
-            Ok(0x00F1)
-        );
-        // 写入生效后的回报到达：以设备实际回报为准
-        assert_eq!(
-            resolve_relay_base_mask(Some((0x00F3, 1_400)), Some(pending), 1_450),
-            Ok(0x00F3)
-        );
-        // 期望掩码超时且回报已清空：拒绝
-        assert!(resolve_relay_base_mask(None, Some(pending), 4_100).is_err());
-        // 回报暂时缺失但期望掩码仍有效：继续基于期望掩码
-        assert_eq!(
-            resolve_relay_base_mask(None, Some(pending), 2_000),
-            Ok(0x00F1)
-        );
-    }
-
     use super::*;
 
     #[test]
     fn test_read_coils_cmd() {
-        let cmd = build_read_coils_cmd();
-        // 验证与新版协议(2)示例一致：01 01 00 00 00 10 3D C6
-        assert_eq!(cmd, [0x01, 0x01, 0x00, 0x00, 0x00, 0x10, 0x3D, 0xC6]);
+        // 协议示例：00 01 00 00 00 0F 7D DF
+        assert_eq!(
+            build_read_coils_cmd(),
+            [0x00, 0x01, 0x00, 0x00, 0x00, 0x0F, 0x7D, 0xDF]
+        );
+    }
+
+    #[test]
+    fn test_write_single_coil_cmd() {
+        // 协议示例：第 6 个继电器打开 00 05 00 05 FF 00 9D EA
+        assert_eq!(
+            build_write_single_coil_cmd(6, true).unwrap(),
+            [0x00, 0x05, 0x00, 0x05, 0xFF, 0x00, 0x9D, 0xEA]
+        );
+        let off = build_write_single_coil_cmd(16, false).unwrap();
+        assert_eq!(&off[..6], &[0x00, 0x05, 0x00, 0x0F, 0x00, 0x00]);
+        assert!(crc_matches(&off));
+        assert!(build_write_single_coil_cmd(0, true).is_err());
+        assert!(build_write_single_coil_cmd(17, true).is_err());
     }
 
     #[test]
     fn test_coil_bit_mapping() {
-        // 验证线圈与 bit 的映射关系：b8~b15 对应线圈 1~8，b0~b7 对应线圈 9~16
+        // b8~b15 对应线圈 1~8，b0~b7 对应线圈 9~16
         assert_eq!(RelayStatus::coil_to_bit_pos(1), 8);
         assert_eq!(RelayStatus::coil_to_bit_pos(8), 15);
         assert_eq!(RelayStatus::coil_to_bit_pos(9), 0);
         assert_eq!(RelayStatus::coil_to_bit_pos(16), 7);
 
-        // 构造仅线圈 1 闭合
         let mut ch1 = [false; 16];
         ch1[0] = true;
         let s1 = RelayStatus::from_channels(ch1);
         assert_eq!(s1.mask, 1 << 8);
-        assert!(s1.channels[0]);
         assert_eq!(RelayStatus::from_u16(1 << 8), s1);
 
-        // 构造仅线圈 9 闭合
         let mut ch9 = [false; 16];
         ch9[8] = true;
         let s9 = RelayStatus::from_channels(ch9);
         assert_eq!(s9.mask, 1 << 0);
-        assert!(s9.channels[8]);
         assert_eq!(RelayStatus::from_u16(1 << 0), s9);
+
+        assert!(RelayStatus::mask_has_coil(0xFFFF, 15));
+        assert!(!RelayStatus::mask_has_coil(0x0000, 1));
+        assert!(!RelayStatus::mask_has_coil(0xFFFF, 0));
     }
 
     #[test]
     fn test_parse_read_coils_response() {
-        // 新版协议(2)示例报文：01 01 02 F0 0F BD F8
-        // 字节 3 (高字节) = 0xF0 (B15~B12 为 1 -> 线圈 5, 6, 7, 8 闭合)
-        // 字节 4 (低字节) = 0x0F (B3~B0 为 1 -> 线圈 9, 10, 11, 12 闭合)
-        let resp = [0x01, 0x01, 0x02, 0xF0, 0x0F, 0xBD, 0xF8];
-        let res = parse_relay_response(&resp).expect("应该解析成功");
-        assert!(res.is_some());
-        let status = res.unwrap();
-        assert_eq!(status.mask, 0xF00F);
+        // 协议示例：00 01 02 20 00 9D FC —— 线圈 6 反馈闭合
+        let resp = [0x00, 0x01, 0x02, 0x20, 0x00, 0x9D, 0xFC];
+        let RelayResponse::Status(status) = parse_relay_response(&resp).unwrap() else {
+            panic!("应解析为状态反馈");
+        };
+        assert_eq!(status.mask, 0x2000);
+        for (i, closed) in status.channels.iter().enumerate() {
+            assert_eq!(*closed, i == 5, "仅线圈 6 闭合，索引 {i}");
+        }
 
-        // 验证线圈 5, 6, 7, 8 闭合 (索引 4, 5, 6, 7)
-        assert!(!status.channels[0]);
-        assert!(!status.channels[1]);
-        assert!(!status.channels[2]);
-        assert!(!status.channels[3]);
-        assert!(status.channels[4]);
-        assert!(status.channels[5]);
-        assert!(status.channels[6]);
-        assert!(status.channels[7]);
+        // CRC 高字节在前同样接受
+        let swapped = [0x00, 0x01, 0x02, 0x20, 0x00, 0xFC, 0x9D];
+        assert!(parse_relay_response(&swapped).is_ok());
 
-        // 验证线圈 9, 10, 11, 12 闭合 (索引 8, 9, 10, 11)
-        assert!(status.channels[8]);
-        assert!(status.channels[9]);
-        assert!(status.channels[10]);
-        assert!(status.channels[11]);
-        assert!(!status.channels[12]);
-        assert!(!status.channels[13]);
-        assert!(!status.channels[14]);
-        assert!(!status.channels[15]);
-
-        // 测试旧版协议兼容性（高字节在前 F8 BD 也应能正常解析）
-        let old_resp = [0x01, 0x01, 0x02, 0xF0, 0x0F, 0xF8, 0xBD];
-        assert!(parse_relay_response(&old_resp).is_ok());
+        // CRC 错误 / 字节数异常 / 设备 ID 不符
+        assert!(parse_relay_response(&[0x00, 0x01, 0x02, 0x20, 0x00, 0x9D, 0xFD]).is_err());
+        assert!(parse_relay_response(&[0x00, 0x01, 0x03, 0x20, 0x00, 0x9D, 0xFC]).is_err());
+        assert!(parse_relay_response(&[0x01, 0x01, 0x02, 0x20, 0x00, 0x9D, 0xFC]).is_err());
     }
 
     #[test]
-    fn test_write_coils_cmd() {
-        // 文档示例报文：01 0F 00 00 00 10 02 0F F0 E7 94
-        // 高字节为 0x0F, 低字节为 0xF0 -> mask = 0x0FF0
-        let mask = 0x0FF0;
-        let cmd = build_write_coils_cmd(mask);
+    fn test_parse_write_single_coil_echo() {
+        // 协议示例：设备反馈与指令一致 00 05 00 05 FF 00 9D EA
+        let echo = [0x00, 0x05, 0x00, 0x05, 0xFF, 0x00, 0x9D, 0xEA];
         assert_eq!(
-            cmd,
-            [0x01, 0x0F, 0x00, 0x00, 0x00, 0x10, 0x02, 0x0F, 0xF0, 0xE7, 0x94]
+            parse_relay_response(&echo),
+            Ok(RelayResponse::CoilWritten {
+                coil_index: 6,
+                on: true
+            })
         );
+
+        let off = build_write_single_coil_cmd(3, false).unwrap();
+        assert_eq!(
+            parse_relay_response(&off),
+            Ok(RelayResponse::CoilWritten {
+                coil_index: 3,
+                on: false
+            })
+        );
+
+        // 非法状态值 / 地址越界
+        let mut bad = [0x00, 0x05, 0x00, 0x05, 0x12, 0x34, 0, 0];
+        let (l, h) = calculate_modbus_crc16(&bad[..6]);
+        bad[6] = l;
+        bad[7] = h;
+        assert!(parse_relay_response(&bad).is_err());
+        let mut out_of_range = [0x00, 0x05, 0x00, 0x10, 0xFF, 0x00, 0, 0];
+        let (l, h) = calculate_modbus_crc16(&out_of_range[..6]);
+        out_of_range[6] = l;
+        out_of_range[7] = h;
+        assert!(parse_relay_response(&out_of_range).is_err());
     }
 
     #[test]
-    fn test_parse_write_coils_response() {
-        // 新版协议(2)示例：01 0F 00 00 00 10 54 07
-        let resp = [0x01, 0x0F, 0x00, 0x00, 0x00, 0x10, 0x54, 0x07];
-        let res = parse_relay_response(&resp).expect("应该解析成功");
-        assert!(res.is_none());
-
-        // 测试旧版协议兼容性（高字节在前 07 54 也应能正常解析）
-        let old_resp = [0x01, 0x0F, 0x00, 0x00, 0x00, 0x10, 0x07, 0x54];
-        assert!(parse_relay_response(&old_resp).is_ok());
+    fn test_set_coil_updates_mask_and_channels() {
+        let mut status = RelayStatus::from_u16(0x2000); // 线圈 6 闭合
+        status.set_coil(1, true);
+        status.set_coil(9, true);
+        status.set_coil(6, false);
+        assert_eq!(status, RelayStatus::from_u16(0x0101));
+        status.set_coil(0, true); // 越界忽略
+        status.set_coil(17, true);
+        assert_eq!(status.mask, 0x0101);
     }
 }

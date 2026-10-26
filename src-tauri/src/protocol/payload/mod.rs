@@ -143,38 +143,42 @@ impl PayloadStreamReassembler {
 
         match payload_id {
             PAYLOAD_ID_RELAY => {
-                // 0xC3 继电器：读线圈反馈 7 字节，写线圈反馈 8 字节
-                while buf.len() >= 7 {
+                // 0xC3 继电器：读线圈反馈 7 字节，写单个线圈反馈 8 字节（与指令一致）
+                while buf.len() >= RELAY_READ_RESPONSE_LEN {
                     if buf[0] != RELAY_DEVICE_ID {
                         buf.advance(1);
                         continue;
                     }
-                    let fc = buf[1];
-                    let needed_len = if fc == FC_READ_COILS {
-                        7
-                    } else if fc == FC_WRITE_COILS {
-                        8
-                    } else {
-                        buf.advance(1);
-                        continue;
+                    let needed_len = match buf[1] {
+                        FC_READ_COILS => RELAY_READ_RESPONSE_LEN,
+                        FC_WRITE_SINGLE_COIL => RELAY_WRITE_FRAME_LEN,
+                        _ => {
+                            buf.advance(1);
+                            continue;
+                        }
                     };
-
                     if buf.len() < needed_len {
                         break;
                     }
 
-                    let frame = buf[..needed_len].to_vec();
-                    if let Ok(Some(status)) = parse_relay_response(&frame) {
-                        aggregate.relay = Some(status);
-                        aggregate.device_updated_ms.relay = Some(now_ms);
-                        aggregate.last_updated_ms = now_ms;
-                        buf.advance(needed_len);
-                    } else if parse_relay_response(&frame).is_ok() {
-                        // 写线圈确认，消费掉
-                        buf.advance(needed_len);
-                    } else {
+                    match parse_relay_response(&buf[..needed_len]) {
+                        Ok(RelayResponse::Status(status)) => {
+                            aggregate.relay = Some(status);
+                            aggregate.device_updated_ms.relay = Some(now_ms);
+                            aggregate.last_updated_ms = now_ms;
+                            buf.advance(needed_len);
+                        }
+                        Ok(RelayResponse::CoilWritten { coil_index, on }) => {
+                            // 写入确认即该路已生效：在已有状态上更新单路，等待下一次读线圈全量刷新
+                            if let Some(relay) = aggregate.relay.as_mut() {
+                                relay.set_coil(coil_index, on);
+                                aggregate.device_updated_ms.relay = Some(now_ms);
+                                aggregate.last_updated_ms = now_ms;
+                            }
+                            buf.advance(needed_len);
+                        }
                         // 校验失败，滑动 1 字节
-                        buf.advance(1);
+                        Err(_) => buf.advance(1),
                     }
                 }
             }
@@ -348,6 +352,38 @@ mod tests {
         assert!(agg.relay.is_some());
         // 时间戳保留，用于区分“从未收到”和“已掉线”
         assert_eq!(agg.device_updated_ms.boost_module, Some(1_000));
+    }
+
+    #[test]
+    fn test_reassembler_relay_status_and_write_echo() {
+        let mut reassembler = PayloadStreamReassembler::new();
+        let mut agg = MissionPayloadAggregate::new(95);
+
+        // 写入确认先于任何状态到达：没有基准状态，不凭单路反馈臆造全量状态
+        let echo6_on = build_write_single_coil_cmd(6, true).unwrap();
+        reassembler.feed_payload(PAYLOAD_ID_RELAY, &echo6_on, &mut agg, 500);
+        assert!(agg.relay.is_none());
+
+        // 读线圈反馈（协议示例：线圈 6 闭合），分两片 + 前导杂字节
+        let read_resp = [0x00, 0x01, 0x02, 0x20, 0x00, 0x9D, 0xFC];
+        reassembler.feed_payload(PAYLOAD_ID_RELAY, &[0x55], &mut agg, 1_000);
+        reassembler.feed_payload(PAYLOAD_ID_RELAY, &read_resp[..4], &mut agg, 1_000);
+        assert!(agg.relay.is_none(), "半包不应解析");
+        reassembler.feed_payload(PAYLOAD_ID_RELAY, &read_resp[4..], &mut agg, 1_001);
+        assert_eq!(agg.relay.map(|r| r.mask), Some(0x2000));
+        assert_eq!(agg.device_updated_ms.relay, Some(1_001));
+
+        // 写单个线圈反馈：线圈 1 打开、线圈 6 关闭
+        let echo1_on = build_write_single_coil_cmd(1, true).unwrap();
+        let echo6_off = build_write_single_coil_cmd(6, false).unwrap();
+        let mut stream = echo1_on.to_vec();
+        stream.extend_from_slice(&echo6_off);
+        reassembler.feed_payload(PAYLOAD_ID_RELAY, &stream, &mut agg, 2_000);
+        let relay = agg.relay.unwrap();
+        assert!(relay.channels[0]);
+        assert!(!relay.channels[5]);
+        assert_eq!(relay.mask, 0x0100);
+        assert_eq!(agg.device_updated_ms.relay, Some(2_000));
     }
 
     #[test]

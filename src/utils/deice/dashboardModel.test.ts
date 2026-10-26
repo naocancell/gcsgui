@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  CONTROLLABLE_RELAY_COUNT,
   RELAY_CHANNELS,
   RELAY_GROUPS,
   buildHeatSegments,
@@ -21,6 +22,9 @@ describe('防除冰大屏数据映射', () => {
     expect(RELAY_CHANNELS[0].name).toBe('右平尾加热膜供电')
     expect(RELAY_CHANNELS[7].name).toBe('机翼常加热膜供电')
     expect(RELAY_CHANNELS[15].reserved).toBe(true)
+    expect(RELAY_CHANNELS[14].name).toBe('桨叶防除冰控制')
+    // 新协议读线圈数量 0x0F：可控 15 路
+    expect(CONTROLLABLE_RELAY_COUNT).toBe(15)
   })
 
   it('大屏 4 个分区完整覆盖 16 路且不重复', () => {

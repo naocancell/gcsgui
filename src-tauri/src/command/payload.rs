@@ -1,94 +1,88 @@
 //! 任管载荷控制与查询 Tauri 命令层
 
 use crate::protocol::payload::{
-    build_read_coils_cmd, build_write_coils_cmd, next_uplink_seq, pack_payload_frame,
-    pack_uplink_payload_frame, resolve_relay_base_mask, unix_now_ms, MissionPayloadAggregate,
-    PendingRelayMask, RelayStatus, CODE_UPLINK, PAYLOAD_ID_DEICE, PAYLOAD_ID_RELAY,
+    build_read_coils_cmd, build_write_single_coil_cmd, next_uplink_seq, pack_payload_frame,
+    pack_uplink_payload_frame, MissionPayloadAggregate, RelayStatus, CODE_UPLINK,
+    PAYLOAD_ID_DEICE, PAYLOAD_ID_RELAY, RELAY_READ_COIL_COUNT,
 };
 use crate::state::AppState;
 use crate::uplink::dispatcher::{broadcast_raw_payload, broadcast_raw_payload_poll};
 
+/// 批量逐路下发时相邻两条写线圈指令的间隔，保证总线上每条指令独立成帧并收到反馈
+const RELAY_BATCH_INTERVAL_MS: u64 = 100;
+
 /// 单路继电器开关控制（继电器序号 1~16）
+///
+/// 新协议使用写单个线圈（0x05），只改变目标回路，不再需要基于回报掩码做读-改-写，
+/// 未收到状态回报时也可直接控制。
 #[tauri::command]
 pub async fn send_relay_control(
     state: tauri::State<'_, AppState>,
-    uav_id: u8,
+    _uav_id: u8,
     relay_index: u8,
     enabled: bool,
 ) -> Result<(), String> {
-    if !(1..=16).contains(&relay_index) {
-        return Err(format!("继电器编号超出范围 (1~16): {}", relay_index));
-    }
-
-    // 根据协议图映射：b0~b7 对应线圈 9~16，b8~b15 对应线圈 1~8
-    let bit_pos = RelayStatus::coil_to_bit_pos(relay_index);
-
-    // 写线圈一次覆盖 16 路：串行化读-改-写，防止并发/连续操作互相覆盖
-    let mut pending = state.relay_pending.lock().await;
-    let now_ms = unix_now_ms();
-    let reported = state.mission_payload_pool.get(&uav_id).and_then(|agg| {
-        agg.relay
-            .map(|r| (r.mask, agg.device_updated_ms.relay.unwrap_or(0)))
-    });
-    let current_mask = resolve_relay_base_mask(reported, *pending, now_ms)?;
-
-    let new_mask = if enabled {
-        current_mask | (1 << bit_pos)
-    } else {
-        current_mask & !(1 << bit_pos)
-    };
-
+    let cmd = build_write_single_coil_cmd(relay_index, enabled)?;
+    let _guard = state.relay_write_lock.lock().await;
     log::info!(
-        "[继电器] 单路切换 CH{relay_index:02} -> {}，掩码 0x{current_mask:04X} -> 0x{new_mask:04X}",
+        "[继电器] 单路切换 CH{relay_index:02} -> {}",
         if enabled { "通电" } else { "断开" }
     );
-    let res = send_relay_mask(state.inner(), new_mask).await;
-    if res.is_ok() {
-        *pending = Some(PendingRelayMask {
-            mask: new_mask,
-            sent_at_ms: now_ms,
-        });
-    }
-    res
+    send_relay_frame(state.inner(), &cmd).await.map_err(|e| {
+        log::warn!("[继电器] CH{relay_index:02} 写线圈下发失败: {e}");
+        e
+    })?;
+    schedule_relay_readback(state.inner());
+    Ok(())
 }
 
-/// 下发写线圈指令，成功后 200ms 回读一次确认
-async fn send_relay_mask(state: &AppState, mask: u16) -> Result<(), String> {
-    let inner_cmd = build_write_coils_cmd(mask);
-    let frame = pack_uplink_payload_frame(PAYLOAD_ID_RELAY, &inner_cmd);
-    let res = broadcast_raw_payload(state, &frame).await;
-    match &res {
-        Err(e) => log::warn!("[继电器] 写线圈 0x{mask:04X} 下发失败: {e}"),
-        Ok(()) => {
-            let state_clone = state.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                let inner_cmd = build_read_coils_cmd();
-                let query_frame = pack_uplink_payload_frame(PAYLOAD_ID_RELAY, &inner_cmd);
-                let _ = broadcast_raw_payload(&state_clone, &query_frame).await;
-            });
-        }
-    }
-    res
-}
-
-/// 批量设置 16 路继电器状态（掩码控制）
+/// 批量设置继电器状态（掩码控制，第 1~15 路逐路写单个线圈，第 16 路为空不下发）
+///
+/// 掩码位定义同 `RelayStatus`：b8~b15 对应线圈 1~8，b0~b7 对应线圈 9~16。
 #[tauri::command]
 pub async fn send_relay_batch(
     state: tauri::State<'_, AppState>,
     _uav_id: u8,
     mask: u16,
 ) -> Result<(), String> {
-    let mut pending = state.relay_pending.lock().await;
-    log::info!("[继电器] 批量设置掩码 0x{mask:04X}");
-    let res = send_relay_mask(state.inner(), mask).await;
-    if res.is_ok() {
-        *pending = Some(PendingRelayMask {
-            mask,
-            sent_at_ms: unix_now_ms(),
-        });
+    let _guard = state.relay_write_lock.lock().await;
+    log::info!("[继电器] 批量设置掩码 0x{mask:04X}（逐路下发 {RELAY_READ_COIL_COUNT} 路）");
+    let result = send_relay_mask(state.inner(), mask).await;
+    // 部分回路已下发时也回读一次，界面按设备实际状态刷新
+    schedule_relay_readback(state.inner());
+    result
+}
+
+async fn send_relay_mask(state: &AppState, mask: u16) -> Result<(), String> {
+    for coil in 1..=RELAY_READ_COIL_COUNT {
+        if coil > 1 {
+            tokio::time::sleep(std::time::Duration::from_millis(RELAY_BATCH_INTERVAL_MS)).await;
+        }
+        let on = RelayStatus::mask_has_coil(mask, coil);
+        let cmd = build_write_single_coil_cmd(coil, on)?;
+        if let Err(e) = send_relay_frame(state, &cmd).await {
+            log::warn!("[继电器] 批量下发在 CH{coil:02} 失败: {e}");
+            return Err(format!(
+                "第 {coil} 路下发失败（前 {} 路已下发）: {e}",
+                coil - 1
+            ));
+        }
     }
-    res
+    Ok(())
+}
+
+async fn send_relay_frame(state: &AppState, inner_cmd: &[u8]) -> Result<(), String> {
+    let frame = pack_uplink_payload_frame(PAYLOAD_ID_RELAY, inner_cmd);
+    broadcast_raw_payload(state, &frame).await
+}
+
+/// 写线圈后 200ms 回读一次全量状态确认
+fn schedule_relay_readback(state: &AppState) {
+    let state = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let _ = send_relay_frame(&state, &build_read_coils_cmd()).await;
+    });
 }
 
 /// 启动地面站 0xC3 继电器自主轮询后台任务（频率 0.5Hz，即 2 秒 1 次）
@@ -118,15 +112,13 @@ pub fn start_relay_status_poller(state: AppState) {
     });
 }
 
-/// 下发读线圈指令，主动查询 16 路继电器当前状态
+/// 下发读线圈指令，主动查询继电器当前状态（第 1~15 路）
 #[tauri::command]
 pub async fn query_relay_status(
     state: tauri::State<'_, AppState>,
     _uav_id: u8,
 ) -> Result<(), String> {
-    let inner_cmd = build_read_coils_cmd();
-    let frame = pack_uplink_payload_frame(PAYLOAD_ID_RELAY, &inner_cmd);
-    broadcast_raw_payload(&state, &frame).await
+    send_relay_frame(state.inner(), &build_read_coils_cmd()).await
 }
 
 /// 获取指定飞机当前载荷状态快照
