@@ -1,9 +1,7 @@
 <template>
   <section class="dd-card power-bus-card">
     <div class="dd-card-head">
-      <span class="dd-card-title">
-        电源与系统总线遥测
-      </span>
+      <span class="dd-card-title">电源与系统总线遥测</span>
     </div>
 
     <!-- 升压模块 -->
@@ -153,7 +151,7 @@ const batteryInput = computed(() => {
   return typeof v === 'number' && Number.isFinite(v) ? v : null
 })
 
-// 低压供电电流（0xC4 电流采集模块 2，0.005A 分辨率）
+// 低压供电电流（0xC4 电流采集模块 2，0.006A 分辨率）
 const lowVoltageSupplyCurrent = computed(() => {
   const c = payloadStore.currentPayload?.currentSensor2?.lowVoltageSupply
   return typeof c === 'number' && Number.isFinite(c) ? c : null

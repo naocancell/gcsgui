@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   CONTROLLABLE_RELAY_COUNT,
+  DEICE_ADJUST_DECREASE,
+  DEICE_ADJUST_INCREASE,
   RELAY_CHANNELS,
   RELAY_GROUPS,
   buildHeatSegments,
@@ -51,8 +53,8 @@ describe('防除冰大屏数据映射', () => {
       },
       tempSensor2: null,
       voltageSensor: { leftOuterWing: 241 } as never,
-      currentSensor1: { leftOuterWing: 4.2 } as never,
-      currentSensor2: null,
+      currentSensor1: { leftOuterWing: 4.2, rightHorizontalTail: 1.5 } as never,
+      currentSensor2: { leftVerticalTail: 2.4 } as never,
       environmentSensor: null,
       icingSensor: null,
       lastUpdatedMs: 0,
@@ -68,8 +70,14 @@ describe('防除冰大屏数据映射', () => {
     })
     const ri = segs.find((s) => s.key === 'rightInner')!
     expect(ri).toMatchObject({ relayId: 3, temp: null, voltage: null })
-    expect(segs.find((s) => s.key === 'leftVTail')!.relayId).toBe(6)
-    expect(segs.find((s) => s.key === 'rightHTail')!.relayId).toBe(1)
+    expect(segs.find((s) => s.key === 'leftVTail')!).toMatchObject({
+      relayId: 6,
+      current: 2.4,
+    })
+    expect(segs.find((s) => s.key === 'rightHTail')!).toMatchObject({
+      relayId: 1,
+      current: 1.5,
+    })
   })
 
   it('无遥测时分段数值全部为 null，不出现假 0', () => {
@@ -83,8 +91,9 @@ describe('防除冰大屏数据映射', () => {
   it('功率偏差、电压条等派生量计算正确且对非法值防御', () => {
     expect(powerDeviationPercent(2000, 1986)!).toBeCloseTo(-0.7, 5)
     expect(powerDeviationPercent(0, 100)).toBeNull()
-    expect(voltageBarPercent(50)).toBe(50)
-    expect(voltageBarPercent(75)).toBe(75)
+    // 电压采集模块量程 200V
+    expect(voltageBarPercent(50)).toBe(25)
+    expect(voltageBarPercent(75)).toBe(37.5)
     expect(voltageBarPercent(1000)).toBe(100)
     expect(voltageBarPercent(Number.NaN)).toBe(0)
     expect(voltageTier(99.8)).toBe('high')
@@ -137,7 +146,7 @@ describe('防除冰大屏数据映射', () => {
       tempSensor1: constTemps(1.2, -0.4, 0.8),
       tempSensor2: constTemps(0.5, 2.1, -1.3),
       voltageSensor: { wingConstHeat: 118.6 },
-      currentSensor1: { wingConstHeat: 6.25 },
+      currentSensor2: { leftWingConstHeat: 3.25, rightWingConstHeat: 3 },
     } as never)
     expect(row).toMatchObject({
       key: 'wingConst',
@@ -148,11 +157,22 @@ describe('防除冰大屏数据映射', () => {
       current: 6.25,
     })
     expect(row.detail).toContain('右外 -1.3°C')
+    expect(row.detail).toContain('左 3.25A / 右 3.00A')
+
+    const leftOnly = buildConstHeatRow({
+      currentSensor2: { leftWingConstHeat: 2.5 },
+    } as never)
+    expect(leftOnly.current).toBe(2.5)
 
     const empty = buildConstHeatRow(null)
     expect(empty.temp).toBeNull()
     expect(empty.voltage).toBeNull()
     expect(empty.current).toBeNull()
+  })
+
+  it('指令调节参数：0x00 增大功率，0x01 减小功率（1027 版协议）', () => {
+    expect(DEICE_ADJUST_INCREASE).toBe(0x00)
+    expect(DEICE_ADJUST_DECREASE).toBe(0x01)
   })
 
   it('恒功率目标功率：仅允许 0~2000W，越界与非法值不下发', () => {

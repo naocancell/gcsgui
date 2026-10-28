@@ -213,7 +213,11 @@ function num(val: unknown): number | null {
   return typeof val === 'number' && Number.isFinite(val) ? val : null
 }
 
-/** 将载荷聚合遥测映射为 10 个加热分段（左=设备1，右=设备2） */
+/**
+ * 将载荷聚合遥测映射为 10 个加热分段。
+ * 温度：左=温度采集 1，右=温度采集 2；
+ * 电流：机翼 6 段与右侧尾翼取电流采集 1，左侧尾翼取电流采集 2。
+ */
 export function buildHeatSegments(
   p: MissionPayloadAggregate | null | undefined,
 ): HeatSegment[] {
@@ -261,7 +265,7 @@ export function buildHeatSegments(
       temp: num(t2?.innerWingHeat),
       constTemp: num(t2?.innerWingConst),
       voltage: num(v?.rightInnerWing),
-      current: num(c2?.rightInnerWing),
+      current: num(c1?.rightInnerWing),
     },
     {
       key: 'rightMid',
@@ -271,7 +275,7 @@ export function buildHeatSegments(
       temp: num(t2?.midWingHeat),
       constTemp: num(t2?.midWingConst),
       voltage: num(v?.rightMidWing),
-      current: num(c2?.rightMidWing),
+      current: num(c1?.rightMidWing),
     },
     {
       key: 'rightOuter',
@@ -281,7 +285,7 @@ export function buildHeatSegments(
       temp: num(t2?.outerWingHeat),
       constTemp: num(t2?.outerWingConst),
       voltage: num(v?.rightOuterWing),
-      current: num(c2?.rightOuterWing),
+      current: num(c1?.rightOuterWing),
     },
     {
       key: 'leftHTail',
@@ -291,7 +295,7 @@ export function buildHeatSegments(
       temp: num(t1?.horizontalTail),
       constTemp: null,
       voltage: num(v?.leftHorizontalTail),
-      current: num(c1?.leftHorizontalTail),
+      current: num(c2?.leftHorizontalTail),
     },
     {
       key: 'rightHTail',
@@ -301,7 +305,7 @@ export function buildHeatSegments(
       temp: num(t2?.horizontalTail),
       constTemp: null,
       voltage: num(v?.rightHorizontalTail),
-      current: num(c2?.rightHorizontalTail),
+      current: num(c1?.rightHorizontalTail),
     },
     {
       key: 'leftVTail',
@@ -311,7 +315,7 @@ export function buildHeatSegments(
       temp: num(t1?.verticalTail),
       constTemp: null,
       voltage: num(v?.leftVerticalTail),
-      current: num(c1?.leftVerticalTail),
+      current: num(c2?.leftVerticalTail),
     },
     {
       key: 'rightVTail',
@@ -321,7 +325,7 @@ export function buildHeatSegments(
       temp: num(t2?.verticalTail),
       constTemp: null,
       voltage: num(v?.rightVerticalTail),
-      current: num(c2?.rightVerticalTail),
+      current: num(c1?.rightVerticalTail),
     },
   ]
 }
@@ -344,8 +348,8 @@ export const SYSTEM_VOLTAGE_CHANNELS: {
   { key: 'cloudDropHeat', name: '云滴探测 · 加温电压' },
 ]
 
-/** 电压条满量程 (V，协议 1.2.3.1 量程为 100V) */
-export const VOLTAGE_BAR_FULL_SCALE = 100
+/** 电压条满量程 (V，电压采集模块量程 200V) */
+export const VOLTAGE_BAR_FULL_SCALE = 200
 
 export function voltageBarPercent(val: number | null | undefined): number {
   if (typeof val !== 'number' || !Number.isFinite(val) || val <= 0) return 0
@@ -476,7 +480,7 @@ const CONST_TEMP_POINTS: {
 
 /**
  * 温压流矩阵“机翼常加热”行（CH08）：
- * 温度取 6 路常加热膜采温最低值，电压/电流取常加热膜专用采集通道。
+ * 温度取 6 路常加热膜采温最低值，电压取常加热膜专用通道，电流取左右两路常加热膜电流之和。
  */
 export function buildConstHeatRow(
   p: MissionPayloadAggregate | null | undefined,
@@ -487,9 +491,16 @@ export function buildConstHeatRow(
   }))
   const valid = temps.map((t) => t.temp).filter((t): t is number => t !== null)
   const voltage = num(p?.voltageSensor?.wingConstHeat)
-  const current = num(p?.currentSensor1?.wingConstHeat)
+  // 电流采集 2 的 IO7/IO8 分别采集右/左机翼常加热膜，CH08 总电流取两路之和
+  const leftCurrent = num(p?.currentSensor2?.leftWingConstHeat)
+  const rightCurrent = num(p?.currentSensor2?.rightWingConstHeat)
+  const current =
+    leftCurrent === null && rightCurrent === null
+      ? null
+      : (leftCurrent ?? 0) + (rightCurrent ?? 0)
   const detail = [
     `机翼常加热膜 CH08：${fmtFixed(voltage, 1)}V / ${fmtFixed(current, 2)}A`,
+    `电流：左 ${fmtFixed(leftCurrent, 2)}A / 右 ${fmtFixed(rightCurrent, 2)}A`,
     `温度（取最低）：${temps.map((t) => `${t.name} ${fmtFixed(t.temp, 1)}°C`).join(' / ')}`,
   ].join('\n')
   return {
@@ -502,6 +513,13 @@ export function buildConstHeatRow(
     detail,
   }
 }
+
+/** 除冰控制盒指令调节参数（协议表 4：0x00 增大功率、0x01 减小功率，每次 1%） */
+export const DEICE_ADJUST_INCREASE = 0x00
+export const DEICE_ADJUST_DECREASE = 0x01
+
+/** 协议将恒温模式（0x03）标注为“暂无”：控制盒暂不支持，界面禁止下发 */
+export const DEICE_CONST_TEMP_SUPPORTED = false
 
 /** 恒温模式目标温度允许范围（℃，协议参数为 uint16，不支持负温） */
 export const CONST_TEMP_TARGET_MIN = 0

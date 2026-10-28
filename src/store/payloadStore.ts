@@ -56,22 +56,25 @@ export interface VoltageSensorData {
   v48BoostModule: number
 }
 
+/** 电流采集模块 1（0x05）：机翼 6 段加热膜 + 右侧尾翼（IO1~IO8） */
 export interface CurrentSensorGroup1Data {
-  leftVerticalTail: number
-  leftHorizontalTail: number
-  leftInnerWing: number
-  leftMidWing: number
-  leftOuterWing: number
-  wingConstHeat: number
-}
-
-export interface CurrentSensorGroup2Data {
   rightHorizontalTail: number
   rightVerticalTail: number
+  leftInnerWing: number
   rightInnerWing: number
+  leftMidWing: number
   rightMidWing: number
   rightOuterWing: number
+  leftOuterWing: number
+}
+
+/** 电流采集模块 2（0x06）：左侧尾翼、低压供电、机翼常加热膜左右两路 */
+export interface CurrentSensorGroup2Data {
+  leftVerticalTail: number
+  leftHorizontalTail: number
   lowVoltageSupply: number
+  rightWingConstHeat: number
+  leftWingConstHeat: number
 }
 
 export interface EnvironmentSensorData {
@@ -268,7 +271,11 @@ export const usePayloadStore = defineStore('payloadStore', () => {
   }
 
   // 螺旋桨防除冰模式控制指令 (0x00关闭, 0x01调节, 0x02恒功率, 0x03恒温)
-  async function sendPropellerDeiceCommand(workMode: number, targetPower: number, targetTemp = 0) {
+  async function sendPropellerDeiceCommand(
+    workMode: number,
+    targetPower: number,
+    targetTemp = 0,
+  ) {
     return await invoke('send_propeller_deice_command', {
       uavId: activeUavId.value,
       workMode,
@@ -293,5 +300,3 @@ export const usePayloadStore = defineStore('payloadStore', () => {
     sendPropellerDeiceCommand,
   }
 })
-
-

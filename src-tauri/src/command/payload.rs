@@ -135,7 +135,7 @@ pub const PROPELLER_DEICE_FUNCTION_CODE: u8 = 0x77;
 
 /// 构建电防冰控制器 (DFB-2000-48-A) 接收控制帧（标准 12 字节）
 ///
-/// 协议来源：《电防冰控制器(DFB-2000-48-A)通信协议V10.pdf》 表 3 & 表 4
+/// 协议来源：《任管-载荷上下行协议》（1027 版）第 8 章 除冰控制盒 表 3 & 表 4
 ///
 /// 报文结构（12 字节定长）：
 /// - 字节 0~1: 同步码固定为 0xEB, 0x90
@@ -146,9 +146,9 @@ pub const PROPELLER_DEICE_FUNCTION_CODE: u8 = 0x77;
 ///   - 0x03: 恒温模式
 /// - 字节 5~10: 指令参数（2 字节小端 u16 LE，重复 3 次）
 ///   - 关闭模式: 0x0000（停止加热）
-///   - 指令调节: 0x0000 (减小 1%) 或 0x0001 (增大 1%)
+///   - 指令调节: 0x0000 (增大功率 1%) 或 0x0001 (减小功率 1%)，见《任管-载荷上下行协议》（1027 版）第 8 章表 4
 ///   - 恒功率模式: 目标设定功率 (0 ~ 65535 W)
-///   - 恒温模式: 目标设定温度 (0 ~ 65535 ℃)
+///   - 恒温模式: 目标设定温度 (0 ~ 65535 ℃)，协议标注控制盒暂不支持
 /// - 字节 11: 校验码，使得 “同步码” + “帧内容” + “校验码” = 0 MOD 256
 pub fn build_propeller_deice_cmd(work_mode: u8, param: u16) -> [u8; 12] {
     let mut buf = [0u8; 12];
@@ -196,6 +196,11 @@ pub fn build_propeller_deice_outer_frame(work_mode: u8, param: u16, seq: u8) -> 
     pack_payload_frame(CODE_UPLINK, PAYLOAD_ID_DEICE, seq, &inner_cmd)
 }
 
+/// 指令调节参数：增大功率 1%（新版协议 0x00 为增大，与旧版相反）
+pub const PROPELLER_DEICE_ADJUST_INCREASE: u16 = 0x0000;
+/// 指令调节参数：减小功率 1%
+pub const PROPELLER_DEICE_ADJUST_DECREASE: u16 = 0x0001;
+
 /// 恒功率模式目标功率上限 (W)：DFB-2000-48-A 额定功率 2000W
 pub const PROPELLER_DEICE_MAX_POWER_W: u16 = 2000;
 /// 恒温模式目标温度上限 (℃)
@@ -213,10 +218,16 @@ pub fn resolve_propeller_deice_param(
 ) -> Result<u16, String> {
     match work_mode {
         0x00 => Ok(0x0000),
-        // 0: 减小 1%, 1: 增大 1%
-        0x01 if target_power <= 1 => Ok(target_power),
+        // 0x00: 增大功率 1%, 0x01: 减小功率 1%
+        0x01 if matches!(
+            target_power,
+            PROPELLER_DEICE_ADJUST_INCREASE | PROPELLER_DEICE_ADJUST_DECREASE
+        ) =>
+        {
+            Ok(target_power)
+        }
         0x01 => Err(format!(
-            "指令调节参数只能为 0（减小 1%）或 1（增大 1%）: {target_power}"
+            "指令调节参数只能为 0（增大功率 1%）或 1（减小功率 1%）: {target_power}"
         )),
         // 目标功率 (W)
         0x02 if target_power <= PROPELLER_DEICE_MAX_POWER_W => Ok(target_power),
@@ -278,7 +289,7 @@ mod tests {
         let sum0: u32 = cmd0.iter().map(|&b| b as u32).sum();
         assert_eq!(sum0 % 256, 0, "模式0必须满足零和校验");
 
-        // 模式 1: 指令调节（增大），参数 1
+        // 模式 1: 指令调节（减小功率），参数 1
         let cmd1 = build_propeller_deice_cmd(0x01, 0x0001);
         assert_eq!(&cmd1[2..5], &[0x01, 0x01, 0x01]);
         assert_eq!(&cmd1[5..11], &[0x01, 0x00, 0x01, 0x00, 0x01, 0x00]);
@@ -384,6 +395,23 @@ mod tests {
         assert_eq!(resolve_propeller_deice_param(0x03, 0, 100), Ok(100));
         assert!(resolve_propeller_deice_param(0x03, 0, 101).is_err());
         assert!(resolve_propeller_deice_param(0x03, 0, i16::MAX).is_err());
+    }
+
+    #[test]
+    fn test_deice_adjust_param_direction() {
+        // 新版协议表 4：0x00 增大功率、0x01 减小功率
+        assert_eq!(PROPELLER_DEICE_ADJUST_INCREASE, 0x0000);
+        assert_eq!(PROPELLER_DEICE_ADJUST_DECREASE, 0x0001);
+        let increase = build_propeller_deice_cmd(
+            0x01,
+            resolve_propeller_deice_param(0x01, PROPELLER_DEICE_ADJUST_INCREASE, 0).unwrap(),
+        );
+        assert_eq!(&increase[5..11], &[0x00; 6]);
+        let decrease = build_propeller_deice_cmd(
+            0x01,
+            resolve_propeller_deice_param(0x01, PROPELLER_DEICE_ADJUST_DECREASE, 0).unwrap(),
+        );
+        assert_eq!(&decrease[5..11], &[0x01, 0x00, 0x01, 0x00, 0x01, 0x00]);
     }
 
     #[test]

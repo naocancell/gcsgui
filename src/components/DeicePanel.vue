@@ -231,6 +231,10 @@
                   selected: selectedPropMode === m.mode,
                   running: hasData && deiceData?.workMode === m.mode,
                 }"
+                :disabled="m.unsupported"
+                :title="
+                  m.unsupported ? '协议标注控制盒暂不支持该模式' : undefined
+                "
                 @click="selectedPropMode = m.mode"
               >
                 <span class="mode-name">{{ m.name }}</span>
@@ -239,7 +243,9 @@
                   {{
                     hasData && deiceData?.workMode === m.mode
                       ? '已激活'
-                      : '待命'
+                      : m.unsupported
+                        ? '暂无'
+                        : '待命'
                   }}
                 </span>
               </button>
@@ -262,7 +268,7 @@
                 type="button"
                 class="btn-send-cmd"
                 :disabled="isSendingCommand"
-                @click="handleSendAdjust(0)"
+                @click="handleSendAdjust(DEICE_ADJUST_DECREASE)"
               >
                 − 减小 1%
               </button>
@@ -270,7 +276,7 @@
                 type="button"
                 class="btn-send-cmd"
                 :disabled="isSendingCommand"
-                @click="handleSendAdjust(1)"
+                @click="handleSendAdjust(DEICE_ADJUST_INCREASE)"
               >
                 + 增大 1%
               </button>
@@ -422,6 +428,9 @@ import {
   CONST_POWER_TARGET_MIN,
   CONST_TEMP_TARGET_MAX,
   CONST_TEMP_TARGET_MIN,
+  DEICE_ADJUST_DECREASE,
+  DEICE_ADJUST_INCREASE,
+  DEICE_CONST_TEMP_SUPPORTED,
   normalizeConstPowerTarget,
   normalizeConstTempTarget,
   powerDeviationPercent,
@@ -458,12 +467,13 @@ useDashboardFit(bodyEl)
 
 const dragRegion = computed(() => (props.standalone ? '' : undefined))
 
-// 螺旋桨防除冰工作模式指令列表 (严格对应需求规范)
+// 螺旋桨防除冰工作模式指令列表（对应《任管-载荷上下行协议》1027 版第 8 章）
+// 恒温模式协议标注“暂无”，控制盒暂不支持时禁用
 const propModes = [
-  { mode: 0, name: '关闭模式' },
-  { mode: 1, name: '指令调节' },
-  { mode: 2, name: '恒功率' },
-  { mode: 3, name: '恒温模式' },
+  { mode: 0, name: '关闭模式', unsupported: false },
+  { mode: 1, name: '指令调节', unsupported: false },
+  { mode: 2, name: '恒功率', unsupported: false },
+  { mode: 3, name: '恒温模式', unsupported: !DEICE_CONST_TEMP_SUPPORTED },
 ]
 const selectedPropMode = ref<number>(2) // 默认恒功率模式
 const cmdTargetPower = ref<number>(2000) // 目标设定功率 (W)
@@ -491,6 +501,7 @@ const powerRangeHint = `目标功率需为 ${CONST_POWER_TARGET_MIN}~${CONST_POW
 
 async function confirmParamCommand() {
   if (powerTargetInvalid.value || tempTargetInvalid.value) return
+  if (selectedPropMode.value === 3 && !DEICE_CONST_TEMP_SUPPORTED) return
   paramPopoverShow.value = false
   if (selectedPropMode.value === 2) await handleSendConstantPower()
   else if (selectedPropMode.value === 3) await handleSendConstantTemp()
@@ -508,11 +519,14 @@ async function handleSendClosedMode() {
   }
 }
 
-async function handleSendAdjust(direction: 0 | 1) {
+async function handleSendAdjust(
+  direction: typeof DEICE_ADJUST_INCREASE | typeof DEICE_ADJUST_DECREASE,
+) {
   isSendingCommand.value = true
-  const dirName = direction === 1 ? '增大功率 (+1%)' : '减小功率 (-1%)'
+  const dirName =
+    direction === DEICE_ADJUST_INCREASE ? '增大功率 (+1%)' : '减小功率 (-1%)'
   try {
-    // 严格对应协议表 4：参数 0x00 减小，0x01 增大，功率每次变化 1%
+    // 对应 1027 版协议：参数 0x00 增大，0x01 减小，功率每次变化 1%
     await payloadStore.sendPropellerDeiceCommand(1, direction, 0)
     message.success(`已下发指令调节: [${dirName}]`)
   } catch (e: any) {
@@ -1134,8 +1148,13 @@ onBeforeUnmount(() => {
     border-color 0.15s ease;
 }
 
-.mode-option:hover {
+.mode-option:hover:not(:disabled) {
   border-color: rgb(148 163 184 / 22%);
+}
+
+.mode-option:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .mode-name {

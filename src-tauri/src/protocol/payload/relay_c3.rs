@@ -1,6 +1,6 @@
 //! 0xC3 继电器控制器协议（Modbus RTU）
 //!
-//! 依据《FP-95防除冰航电系统通信协议》1.2.6（设备 ID 0x00 暂定，波特率 115200）：
+//! 依据《任管-载荷上下行协议》（1027 版）第 5 章（设备 ID 0x00，波特率 115200）：
 //! - 读线圈（功能码 0x01）：`00 01 00 00 00 0F CRC`，读取 15 路（第 16 路为空）；
 //!   反馈 `00 01 02 <线圈1~8> <线圈9~16> CRC`，每字节 bit0 对应该组第一路
 //! - 写单个线圈（功能码 0x05）：`00 05 00 <00~0F> <FF/00> 00 CRC`，
@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// 继电器控制器设备 ID（协议暂定 0x00）
+/// 继电器控制器设备 ID
 pub const RELAY_DEVICE_ID: u8 = 0x00;
 pub const FC_READ_COILS: u8 = 0x01;
 pub const FC_WRITE_SINGLE_COIL: u8 = 0x05;
