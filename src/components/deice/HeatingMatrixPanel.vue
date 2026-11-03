@@ -17,7 +17,7 @@
         <tr
           v-for="row in rows"
           :key="row.key"
-          :class="{ 'row-const': row.key === 'wingConst' }"
+          :class="{ 'row-const': row.key.includes('Const') }"
           :title="row.detail"
         >
           <td class="col-pos">
@@ -50,7 +50,7 @@ import { computed } from 'vue'
 import { usePayloadStore } from '@/store/payloadStore'
 import { usePayloadRelayControl } from '@/composables/useDeiceDashboard'
 import {
-  buildConstHeatRow,
+  buildConstHeatRows,
   buildHeatSegments,
   buildHeatStripRows,
   fmtFixed,
@@ -59,10 +59,10 @@ import {
 const payloadStore = usePayloadStore()
 const { isRelayClosed, relayStatus } = usePayloadRelayControl()
 
-// 9 条分段加热 + 机翼常加热（CH08）
+// 10 条分段加热（左右垂尾独立） + 2 条常加热（左右机翼独立）
 const rows = computed(() => {
   const p = payloadStore.currentPayload
-  return [...buildHeatStripRows(buildHeatSegments(p)), buildConstHeatRow(p)]
+  return [...buildHeatStripRows(buildHeatSegments(p)), ...buildConstHeatRows(p)]
 })
 
 function tempClass(relayIds: number[], temp: number | null) {

@@ -213,6 +213,11 @@ function num(val: unknown): number | null {
   return typeof val === 'number' && Number.isFinite(val) ? val : null
 }
 
+/** 温度数值解析：直接保留底层原始数值（包括传感器未接入/断线时的 -204.8℃） */
+export function numTemp(val: unknown): number | null {
+  return num(val)
+}
+
 /**
  * 将载荷聚合遥测映射为 10 个加热分段。
  * 温度：左=温度采集 1，右=温度采集 2；
@@ -232,8 +237,8 @@ export function buildHeatSegments(
       name: '左翼外段',
       tag: '外机翼',
       relayId: 11,
-      temp: num(t1?.outerWingHeat),
-      constTemp: num(t1?.outerWingConst),
+      temp: numTemp(t1?.outerWingHeat),
+      constTemp: numTemp(t1?.outerWingConst),
       voltage: num(v?.leftOuterWing),
       current: num(c1?.leftOuterWing),
     },
@@ -242,8 +247,8 @@ export function buildHeatSegments(
       name: '左翼中段',
       tag: '中机翼',
       relayId: 10,
-      temp: num(t1?.midWingHeat),
-      constTemp: num(t1?.midWingConst),
+      temp: numTemp(t1?.midWingHeat),
+      constTemp: numTemp(t1?.midWingConst),
       voltage: num(v?.leftMidWing),
       current: num(c1?.leftMidWing),
     },
@@ -252,8 +257,8 @@ export function buildHeatSegments(
       name: '左翼内段',
       tag: '内机翼',
       relayId: 9,
-      temp: num(t1?.innerWingHeat),
-      constTemp: num(t1?.innerWingConst),
+      temp: numTemp(t1?.innerWingHeat),
+      constTemp: numTemp(t1?.innerWingConst),
       voltage: num(v?.leftInnerWing),
       current: num(c1?.leftInnerWing),
     },
@@ -262,8 +267,8 @@ export function buildHeatSegments(
       name: '右翼内段',
       tag: '内机翼',
       relayId: 3,
-      temp: num(t2?.innerWingHeat),
-      constTemp: num(t2?.innerWingConst),
+      temp: numTemp(t2?.innerWingHeat),
+      constTemp: numTemp(t2?.innerWingConst),
       voltage: num(v?.rightInnerWing),
       current: num(c1?.rightInnerWing),
     },
@@ -272,8 +277,8 @@ export function buildHeatSegments(
       name: '右翼中段',
       tag: '中机翼',
       relayId: 4,
-      temp: num(t2?.midWingHeat),
-      constTemp: num(t2?.midWingConst),
+      temp: numTemp(t2?.midWingHeat),
+      constTemp: numTemp(t2?.midWingConst),
       voltage: num(v?.rightMidWing),
       current: num(c1?.rightMidWing),
     },
@@ -282,8 +287,8 @@ export function buildHeatSegments(
       name: '右翼外段',
       tag: '外机翼',
       relayId: 5,
-      temp: num(t2?.outerWingHeat),
-      constTemp: num(t2?.outerWingConst),
+      temp: numTemp(t2?.outerWingHeat),
+      constTemp: numTemp(t2?.outerWingConst),
       voltage: num(v?.rightOuterWing),
       current: num(c1?.rightOuterWing),
     },
@@ -292,7 +297,7 @@ export function buildHeatSegments(
       name: '左平尾',
       tag: '水平尾翼',
       relayId: 7,
-      temp: num(t1?.horizontalTail),
+      temp: numTemp(t1?.horizontalTail),
       constTemp: null,
       voltage: num(v?.leftHorizontalTail),
       current: num(c2?.leftHorizontalTail),
@@ -302,7 +307,7 @@ export function buildHeatSegments(
       name: '右平尾',
       tag: '水平尾翼',
       relayId: 1,
-      temp: num(t2?.horizontalTail),
+      temp: numTemp(t2?.horizontalTail),
       constTemp: null,
       voltage: num(v?.rightHorizontalTail),
       current: num(c1?.rightHorizontalTail),
@@ -312,7 +317,7 @@ export function buildHeatSegments(
       name: '左垂尾',
       tag: '垂直尾翼',
       relayId: 6,
-      temp: num(t1?.verticalTail),
+      temp: numTemp(t1?.verticalTail),
       constTemp: null,
       voltage: num(v?.leftVerticalTail),
       current: num(c2?.leftVerticalTail),
@@ -322,7 +327,7 @@ export function buildHeatSegments(
       name: '右垂尾',
       tag: '垂直尾翼',
       relayId: 2,
-      temp: num(t2?.verticalTail),
+      temp: numTemp(t2?.verticalTail),
       constTemp: null,
       voltage: num(v?.rightVerticalTail),
       current: num(c1?.rightVerticalTail),
@@ -429,7 +434,8 @@ function avg(list: (number | null)[]): number | null {
   return vals.reduce((sum, v) => sum + v, 0) / vals.length
 }
 
-const STRIP_ORDER: { key: string; name: string; parts: HeatSegmentKey[] }[] = [
+/** 翼面加热条独立显示顺序：10 条分段加热膜全部独立分开展示（左右垂尾独立） */
+export const STRIP_ORDER: { key: string; name: string; parts: HeatSegmentKey[] }[] = [
   { key: 'leftOuter', name: '左翼外段', parts: ['leftOuter'] },
   { key: 'leftMid', name: '左翼中段', parts: ['leftMid'] },
   { key: 'leftInner', name: '左翼内段', parts: ['leftInner'] },
@@ -438,7 +444,8 @@ const STRIP_ORDER: { key: string; name: string; parts: HeatSegmentKey[] }[] = [
   { key: 'rightInner', name: '右翼内段', parts: ['rightInner'] },
   { key: 'leftHTail', name: '左平尾', parts: ['leftHTail'] },
   { key: 'rightHTail', name: '右平尾', parts: ['rightHTail'] },
-  { key: 'vTail', name: '垂直尾翼', parts: ['leftVTail', 'rightVTail'] },
+  { key: 'leftVTail', name: '左垂尾', parts: ['leftVTail'] },
+  { key: 'rightVTail', name: '右垂尾', parts: ['rightVTail'] },
 ]
 
 export function buildHeatStripRows(segments: HeatSegment[]): HeatStripRow[] {
@@ -446,19 +453,17 @@ export function buildHeatStripRows(segments: HeatSegment[]): HeatStripRow[] {
     const parts = row.parts
       .map((k) => segments.find((s) => s.key === k))
       .filter((s): s is HeatSegment => Boolean(s))
-    const detail = parts
-      .map(
-        (s) =>
-          `${s.name} CH${String(s.relayId).padStart(2, '0')}：${fmtFixed(s.temp, 1)}°C / ${fmtFixed(s.voltage, 1)}V / ${fmtFixed(s.current, 2)}A`,
-      )
-      .join('\n')
+    const seg = parts[0]
+    const detail = seg
+      ? `${seg.name} CH${String(seg.relayId).padStart(2, '0')}：${fmtFixed(seg.temp, 1)}°C / ${fmtFixed(seg.voltage, 1)}V / ${fmtFixed(seg.current, 2)}A`
+      : ''
     return {
       key: row.key,
       name: row.name,
-      relayIds: parts.map((s) => s.relayId),
-      temp: avg(parts.map((s) => s.temp)),
-      voltage: avg(parts.map((s) => s.voltage)),
-      current: avg(parts.map((s) => s.current)),
+      relayIds: seg ? [seg.relayId] : [],
+      temp: seg?.temp ?? null,
+      voltage: seg?.voltage ?? null,
+      current: seg?.current ?? null,
       detail,
     }
   })
@@ -482,36 +487,74 @@ const CONST_TEMP_POINTS: {
  * 温压流矩阵“机翼常加热”行（CH08）：
  * 温度取 6 路常加热膜采温最低值，电压取常加热膜专用通道，电流取左右两路常加热膜电流之和。
  */
+/**
+ * 温压流矩阵“机翼常加热”行（CH08）：
+ * 彻底拆开左翼常加热与右翼常加热单独显示，左翼显示左翼常加电流，右翼显示右翼常加电流。
+ */
+export function buildConstHeatRows(
+  p: MissionPayloadAggregate | null | undefined,
+): HeatStripRow[] {
+  const voltage = num(p?.voltageSensor?.wingConstHeat)
+  const leftCurrent = num(p?.currentSensor2?.leftWingConstHeat)
+  const rightCurrent = num(p?.currentSensor2?.rightWingConstHeat)
+
+  const leftTemps = [
+    { name: '左内', temp: numTemp(p?.tempSensor1?.innerWingConst) },
+    { name: '左中', temp: numTemp(p?.tempSensor1?.midWingConst) },
+    { name: '左外', temp: numTemp(p?.tempSensor1?.outerWingConst) },
+  ]
+  const leftValid = leftTemps
+    .map((t) => t.temp)
+    .filter((t): t is number => t !== null)
+
+  const rightTemps = [
+    { name: '右内', temp: numTemp(p?.tempSensor2?.innerWingConst) },
+    { name: '右中', temp: numTemp(p?.tempSensor2?.midWingConst) },
+    { name: '右外', temp: numTemp(p?.tempSensor2?.outerWingConst) },
+  ]
+  const rightValid = rightTemps
+    .map((t) => t.temp)
+    .filter((t): t is number => t !== null)
+
+  const leftDetail = [
+    `左机翼常加热膜（CH08供电）`,
+    `供电电压：${fmtFixed(voltage, 1)}V · 供电电流：${fmtFixed(leftCurrent, 2)}A`,
+    `采温点：${leftTemps.map((t) => `${t.name} ${fmtFixed(t.temp, 1)}°C`).join(' / ')}`,
+  ].join('\n')
+
+  const rightDetail = [
+    `右机翼常加热膜（CH08供电）`,
+    `供电电压：${fmtFixed(voltage, 1)}V · 供电电流：${fmtFixed(rightCurrent, 2)}A`,
+    `采温点：${rightTemps.map((t) => `${t.name} ${fmtFixed(t.temp, 1)}°C`).join(' / ')}`,
+  ].join('\n')
+
+  return [
+    {
+      key: 'leftWingConst',
+      name: '左翼常加热',
+      relayIds: [8],
+      temp: leftValid.length ? Math.min(...leftValid) : null,
+      voltage,
+      current: leftCurrent,
+      detail: leftDetail,
+    },
+    {
+      key: 'rightWingConst',
+      name: '右翼常加热',
+      relayIds: [8],
+      temp: rightValid.length ? Math.min(...rightValid) : null,
+      voltage,
+      current: rightCurrent,
+      detail: rightDetail,
+    },
+  ]
+}
+
+/** 兼容旧接口，单行常加热 */
 export function buildConstHeatRow(
   p: MissionPayloadAggregate | null | undefined,
 ): HeatStripRow {
-  const temps = CONST_TEMP_POINTS.map((pt) => ({
-    name: pt.name,
-    temp: num(p?.[pt.sensor]?.[pt.field]),
-  }))
-  const valid = temps.map((t) => t.temp).filter((t): t is number => t !== null)
-  const voltage = num(p?.voltageSensor?.wingConstHeat)
-  // 电流采集 2 的 IO7/IO8 分别采集右/左机翼常加热膜，CH08 总电流取两路之和
-  const leftCurrent = num(p?.currentSensor2?.leftWingConstHeat)
-  const rightCurrent = num(p?.currentSensor2?.rightWingConstHeat)
-  const current =
-    leftCurrent === null && rightCurrent === null
-      ? null
-      : (leftCurrent ?? 0) + (rightCurrent ?? 0)
-  const detail = [
-    `机翼常加热膜 CH08：${fmtFixed(voltage, 1)}V / ${fmtFixed(current, 2)}A`,
-    `电流：左 ${fmtFixed(leftCurrent, 2)}A / 右 ${fmtFixed(rightCurrent, 2)}A`,
-    `温度（取最低）：${temps.map((t) => `${t.name} ${fmtFixed(t.temp, 1)}°C`).join(' / ')}`,
-  ].join('\n')
-  return {
-    key: 'wingConst',
-    name: '机翼常加热',
-    relayIds: [8],
-    temp: valid.length ? Math.min(...valid) : null,
-    voltage,
-    current,
-    detail,
-  }
+  return buildConstHeatRows(p)[0]
 }
 
 /** 除冰控制盒指令调节参数（协议表 4：0x00 增大功率、0x01 减小功率，每次 1%） */

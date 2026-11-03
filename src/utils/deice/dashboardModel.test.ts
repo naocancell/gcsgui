@@ -7,6 +7,7 @@ import {
   RELAY_GROUPS,
   buildHeatSegments,
   buildConstHeatRow,
+  buildConstHeatRows,
   buildHeatStripRows,
   buildSparklinePoints,
   normalizeConstPowerTarget,
@@ -107,7 +108,7 @@ describe('防除冰大屏数据映射', () => {
     expect(buildSparklinePoints([], 100, 50, 0, 10)).toBe('')
   })
 
-  it('9 条加热条：左右垂尾合并为垂直尾翼并取均值', () => {
+  it('10 条加热条：左右垂尾分开独立展示', () => {
     const segs = buildHeatSegments(null).map((s) =>
       s.key === 'leftVTail'
         ? { ...s, temp: -1.0, voltage: 120, current: 1.0 }
@@ -125,49 +126,68 @@ describe('防除冰大屏数据映射', () => {
       '右翼内段',
       '左平尾',
       '右平尾',
-      '垂直尾翼',
+      '左垂尾',
+      '右垂尾',
     ])
-    const v = rows[8]
-    expect(v.relayIds).toEqual([6, 2])
-    expect(v.temp).toBeCloseTo(-1.5, 5)
-    expect(v.voltage).toBeCloseTo(121, 5)
-    expect(v.current).toBeCloseTo(1.2, 5)
+    const lv = rows[8]
+    expect(lv.name).toBe('左垂尾')
+    expect(lv.relayIds).toEqual([6])
+    expect(lv.temp).toBeCloseTo(-1.0, 5)
+    expect(lv.voltage).toBeCloseTo(120, 5)
+    expect(lv.current).toBeCloseTo(1.0, 5)
+
+    const rv = rows[9]
+    expect(rv.name).toBe('右垂尾')
+    expect(rv.relayIds).toEqual([2])
+    expect(rv.temp).toBeCloseTo(-2.0, 5)
+    expect(rv.voltage).toBeCloseTo(122, 5)
+    expect(rv.current).toBeCloseTo(1.4, 5)
     expect(rows[0].temp).toBeNull()
   })
 
-  it('机翼常加热行（CH08）：温度取 6 路最低值，电压/电流取常加热专用通道', () => {
+  it('机翼常加热行（CH08）：左右两翼独立分开展示', () => {
     const constTemps = (inner: number, mid: number, outer: number) =>
       ({
         innerWingConst: inner,
         midWingConst: mid,
         outerWingConst: outer,
       }) as never
-    const row = buildConstHeatRow({
+    const rows = buildConstHeatRows({
       tempSensor1: constTemps(1.2, -0.4, 0.8),
       tempSensor2: constTemps(0.5, 2.1, -1.3),
       voltageSensor: { wingConstHeat: 118.6 },
       currentSensor2: { leftWingConstHeat: 3.25, rightWingConstHeat: 3 },
     } as never)
-    expect(row).toMatchObject({
-      key: 'wingConst',
-      name: '机翼常加热',
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({
+      key: 'leftWingConst',
+      name: '左翼常加热',
+      relayIds: [8],
+      temp: -0.4,
+      voltage: 118.6,
+      current: 3.25,
+    })
+    expect(rows[1]).toMatchObject({
+      key: 'rightWingConst',
+      name: '右翼常加热',
       relayIds: [8],
       temp: -1.3,
       voltage: 118.6,
-      current: 6.25,
+      current: 3,
     })
-    expect(row.detail).toContain('右外 -1.3°C')
-    expect(row.detail).toContain('左 3.25A / 右 3.00A')
+  })
 
-    const leftOnly = buildConstHeatRow({
-      currentSensor2: { leftWingConstHeat: 2.5 },
+  it('如实保留并显示 -204.8℃', () => {
+    const segs = buildHeatSegments({
+      tempSensor1: {
+        verticalTail: -204.8,
+        horizontalTail: 12.5,
+      },
     } as never)
-    expect(leftOnly.current).toBe(2.5)
-
-    const empty = buildConstHeatRow(null)
-    expect(empty.temp).toBeNull()
-    expect(empty.voltage).toBeNull()
-    expect(empty.current).toBeNull()
+    const leftVTail = segs.find((s) => s.key === 'leftVTail')
+    const leftHTail = segs.find((s) => s.key === 'leftHTail')
+    expect(leftVTail?.temp).toBeCloseTo(-204.8, 1)
+    expect(leftHTail?.temp).toBe(12.5)
   })
 
   it('指令调节参数：0x00 增大功率，0x01 减小功率（1027 版协议）', () => {

@@ -108,7 +108,7 @@ import {
   useTelemetryRate,
 } from '@/composables/useDeiceDashboard'
 import {
-  buildConstHeatRow,
+  buildConstHeatRows,
   buildHeatSegments,
   buildHeatStripRows,
   fmtFixed,
@@ -285,7 +285,10 @@ const uavStore = useUavStore()
 const { isRelayClosed, relayStatus } = usePayloadRelayControl()
 
 const segments = computed(() => buildHeatSegments(payloadStore.currentPayload))
-const stripRows = computed(() => buildHeatStripRows(segments.value))
+const stripRows = computed(() => [
+  ...buildHeatStripRows(segments.value),
+  ...buildConstHeatRows(payloadStore.currentPayload),
+])
 const hasRelay = computed(() => Boolean(relayStatus.value?.channels))
 
 const heatingStripCount = computed(
@@ -349,8 +352,10 @@ const STATE_TEXT: Record<BandState, string> = {
 function bandTitle(band: Band): string {
   const state = STATE_TEXT[bandState(band)]
   if (!band.segKey) {
-    const row = buildConstHeatRow(payloadStore.currentPayload)
-    return `机翼常加热膜 · CH08 · ${state}\n电压 ${fmtFixed(row.voltage, 1)}V · 电流 ${fmtFixed(row.current, 2)}A · 最低温度 ${fmtFixed(row.temp, 1)}°C`
+    const constRows = buildConstHeatRows(payloadStore.currentPayload)
+    const isLeft = band.key === 'leftConst'
+    const row = isLeft ? constRows[0] : constRows[1]
+    return `${row.name} · CH08 · ${state}\n电压 ${fmtFixed(row.voltage, 1)}V · 电流 ${fmtFixed(row.current, 2)}A · 最低温度 ${fmtFixed(row.temp, 1)}°C`
   }
   const seg = segments.value.find((s) => s.key === band.segKey)
   if (!seg) return state
