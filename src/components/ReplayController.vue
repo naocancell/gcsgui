@@ -35,6 +35,9 @@ const dragPosition = ref(0)
 const seeking = ref(false)
 let seekLockTimer: ReturnType<typeof setTimeout> | null = null
 let clickDebounceTimer: ReturnType<typeof setTimeout> | null = null
+/** 同一时刻只有一个 seek 请求在途；在途期间的新目标只保留最后一个，完成后再提交 */
+let seekInFlight = false
+let pendingSeekTarget: number | null = null
 
 const position = computed(() =>
   dragging.value || seeking.value
@@ -91,8 +94,9 @@ function handleDragStart() {
     clearTimeout(clickDebounceTimer)
     clickDebounceTimer = null
   }
+  // 从当前显示位置起拖（跳转在途时显示的是待生效目标，不回弹到后端旧位置）
+  dragPosition.value = position.value
   dragging.value = true
-  dragPosition.value = store.replayStatus?.positionNs ?? 0
 }
 
 function handleDragUpdate(value: number) {
@@ -107,6 +111,12 @@ function handleDragUpdate(value: number) {
   }
 }
 
+function takePendingSeek(): number | null {
+  const target = pendingSeekTarget
+  pendingSeekTarget = null
+  return target
+}
+
 async function commitSeek(target: number) {
   if (clickDebounceTimer) {
     clearTimeout(clickDebounceTimer)
@@ -114,23 +124,40 @@ async function commitSeek(target: number) {
   }
   dragPosition.value = target
   seeking.value = true
-  if (seekLockTimer) clearTimeout(seekLockTimer)
+  if (seekLockTimer) {
+    clearTimeout(seekLockTimer)
+    seekLockTimer = null
+  }
+  if (seekInFlight) {
+    // 上一次跳转尚未返回：只记住最新目标，避免请求在后端排队
+    pendingSeekTarget = target
+    return
+  }
 
+  seekInFlight = true
+  pendingSeekTarget = null
+  let next: number | null = target
   try {
-    await store.seek(target)
-  } catch (e) {
-    message.error(String(e))
+    while (next !== null) {
+      try {
+        await store.seek(next)
+      } catch (e) {
+        message.error(String(e))
+      }
+      next = takePendingSeek()
+    }
   } finally {
-    dragging.value = false
+    seekInFlight = false
     // 锁定 250ms，跨过后端 100ms emitter 首个同步周期，平滑过渡无抖动
     seekLockTimer = setTimeout(() => {
-      seeking.value = false
       seekLockTimer = null
+      if (!seekInFlight) seeking.value = false
     }, 250)
   }
 }
 
 async function handleDragEnd() {
+  dragging.value = false
   await commitSeek(dragPosition.value)
 }
 

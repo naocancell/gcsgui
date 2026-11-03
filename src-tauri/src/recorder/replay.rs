@@ -202,6 +202,27 @@ impl ReplayEngine {
         }
     }
 
+    /// 只注销代数一致的虚拟链路：旧任务收尾时不会误删新会话刚注册的同名链路
+    fn unregister_owned_links(app_state: &AppState, links: &[(String, u64)]) {
+        for (name, generation) in links {
+            if app_state
+                .active_links
+                .remove_if(name, |_, link| link.generation == *generation)
+                .is_some()
+            {
+                log::info!("[Replay] 注销虚拟链路 {name}");
+            }
+        }
+    }
+
+    /// 等待已取消的 pacing 任务退出；超时则强制中止，保证跳转/停止不会无限等待
+    async fn join_pacing(mut join: tauri::async_runtime::JoinHandle<()>) {
+        if tokio::time::timeout(PACING_JOIN_TIMEOUT, &mut join).await.is_err() {
+            log::error!("[Replay] 旧回放任务 {PACING_JOIN_TIMEOUT:?} 内未退出，强制中止");
+            join.abort();
+        }
+    }
+
     fn set_status(app_state: &AppState, status: ReplayStatus) {
         *app_state
             .replay_status
@@ -241,7 +262,21 @@ impl ReplayEngine {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string_lossy().into_owned());
 
-        let (speed_tx, speed_rx) = watch::channel(speed.max(0.0));
+        let speed = speed.max(0.0);
+        // 先发布初始状态再启动任务：短文件可能瞬间播完，后发布会覆盖 Stopped 终态
+        Self::set_status(
+            app_state,
+            ReplayStatus {
+                state: ReplayState::Playing,
+                position_ns: 0,
+                duration_ns,
+                speed,
+                file_name: file_name.clone(),
+                start_wall_ms: header.start_wall_ms,
+            },
+        );
+
+        let (speed_tx, speed_rx) = watch::channel(speed);
         let (pause_tx, pause_rx) = watch::channel(false);
         let cancel = CancellationToken::new();
         let is_finished = Arc::new(AtomicBool::new(false));
@@ -255,7 +290,6 @@ impl ReplayEngine {
             pause_rx,
             link_map.clone(),
             0, // 从头播放
-            speed,
             is_finished.clone(),
             header.start_wall_ms,
         ));
@@ -273,18 +307,6 @@ impl ReplayEngine {
             pause_tx,
             start_wall_ms: header.start_wall_ms,
         });
-
-        Self::set_status(
-            app_state,
-            ReplayStatus {
-                state: ReplayState::Playing,
-                position_ns: 0,
-                duration_ns,
-                speed,
-                file_name: file_name.clone(),
-                start_wall_ms: header.start_wall_ms,
-            },
-        );
 
         log::info!("[Replay] 回放开始: {path:?}");
         Ok(ReplayInfo {
@@ -387,7 +409,7 @@ impl ReplayEngine {
             (file, duration_ns, virtual_links, link_map, link_entries, speed, old_join, position_ns, start_wall_ms)
         };
 
-        let _ = old_join.await;
+        Self::join_pacing(old_join).await;
         app_state.reset_rx_pools();
 
         // 阶段 2：若此前自然播完已注销虚拟链路，seek 时确保重新注册到 app_state
@@ -403,7 +425,23 @@ impl ReplayEngine {
             }
         }
 
-        // 阶段 3：拉起新 pacing（快进至目标点后按原速继续）
+        // 阶段 3：先发布目标位置状态，再拉起新 pacing（快进至目标点后按原速继续）
+        let file_name = file
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        Self::set_status(
+            app_state,
+            ReplayStatus {
+                state: ReplayState::Playing,
+                position_ns,
+                duration_ns,
+                speed,
+                file_name,
+                start_wall_ms,
+            },
+        );
+
         let (speed_tx, speed_rx) = watch::channel(speed);
         let (pause_tx, pause_rx) = watch::channel(false);
         let cancel = CancellationToken::new();
@@ -417,15 +455,10 @@ impl ReplayEngine {
             pause_rx,
             link_map.clone(),
             position_ns,
-            speed,
             is_finished.clone(),
             start_wall_ms,
         ));
 
-        let file_name = file
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
         *self.write_inner() = Some(ReplaySession {
             cancel,
             join,
@@ -440,17 +473,6 @@ impl ReplayEngine {
             start_wall_ms,
         });
 
-        Self::set_status(
-            app_state,
-            ReplayStatus {
-                state: ReplayState::Playing,
-                position_ns,
-                duration_ns,
-                speed,
-                file_name,
-                start_wall_ms,
-            },
-        );
         log::info!("[Replay] 跳转至 {position_ns} ns");
         Ok(())
     }
@@ -470,7 +492,7 @@ impl ReplayEngine {
         };
 
         session.cancel.cancel();
-        let _ = session.join.await;
+        Self::join_pacing(session.join).await;
         Self::unregister_virtual_links(app_state, &session.virtual_links);
 
         *app_state
@@ -482,11 +504,23 @@ impl ReplayEngine {
     }
 }
 
+/// 跳转时只重演目标点之前这段时间的数据来重建状态。
+///
+/// 实时显示的死链剔除阈值为 10s，各类周期帧在 60s 内都会多次出现；
+/// 从文件开头整段重演在长文件上要几十秒，期间暂停、再拖动、停止都要排队等待，界面表现为“卡死”。
+const SEEK_WARMUP_NS: u64 = 60_000_000_000;
+
+/// 等待旧 pacing 任务退出的上限；超时则强制中止，保证跳转/停止命令永不挂死
+const PACING_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// 跳过预热窗口之前的记录时，每读这么多条主动让出一次执行权
+const SKIP_YIELD_EVERY: u32 = 4096;
+
 /// pacing 主循环：按记录时间轴驱动注入。
 ///
-/// - `resume_position_ns > 0` 时为 seek 快进模式：从头读到该点全部注入（MAX 倍速），
-///   到达后按用户倍速继续；
-/// - 倍速/暂停通过 watch 通道实时生效；
+/// - `resume_position_ns > 0` 时为 seek 快进模式：预热窗口之前的记录只读取跳过（链路公告照常处理），
+///   窗口内的记录以 MAX 倍速注入，到达目标点后按用户倍速继续；
+/// - 倍速/暂停通过 watch 通道实时生效；取消信号在每条记录、每次等待和每次发送时都会检查；
 /// - MAX 倍速（speed=0）注入速率由 RouterTx 容量背压自然限制。
 #[allow(clippy::too_many_arguments)]
 async fn pacing_loop(
@@ -498,11 +532,11 @@ async fn pacing_loop(
     mut pause_rx: watch::Receiver<bool>,
     mut links: HashMap<u16, (String, u64)>,
     resume_position_ns: u64,
-    initial_speed: f32,
     finished_flag: Arc<AtomicBool>,
     start_wall_ms: i64,
 ) {
     let _finish_guard = FinishedGuard(finished_flag);
+    let _clock_guard = ReplayClockGuard(app_state.clone());
 
     let fd = match File::open(&file) {
         Ok(f) => f,
@@ -518,42 +552,42 @@ async fn pacing_loop(
     }
     let mut cursor = Cursor::new(reader);
 
-    let mut speed = initial_speed.max(0.0);
-    let mut paused = false;
+    // 本任务按 LinkAnnounce 注册的虚拟链路：任务退出时注销（跳转后的新任务读到公告会重新注册）
+    let mut announced: Vec<(String, u64)> = Vec::new();
     let mut prev_ts: Option<u64> = None;
     let mut finished_naturally = false;
 
-    // seek 快进段的逻辑时刻：基准取“现在 − 目标位置”，快进记录按录制时间戳落在过去、
-    // 间隔与录制一致，快进到位那一刻恰好对齐当前时刻，之后切回真实时钟（单调不回退）。
-    // 这样仲裁器观察窗/断链重同步与子帧超时在快进段内仍按录制时间判定。
-    let fast_forward_base = if resume_position_ns > 0 {
-        Instant::now().checked_sub(Duration::from_nanos(resume_position_ns))
-    } else {
-        None
-    };
-    let mut fast_forwarding = fast_forward_base.is_some();
-    let _clock_guard = ReplayClockGuard(app_state.clone());
+    // 快进段：仅注入 [resume − 预热窗口, resume) 的记录。逻辑时刻取“快进开始时刻 − (目标位置 − 记录时间戳)”，
+    // 记录间隔与录制一致、快进到位时恰好对齐当前时刻，之后切回真实时钟（单调不回退），
+    // 仲裁器观察窗/断链重同步与子帧超时在快进段内仍按录制时间判定。
+    let warmup_start_ns = resume_position_ns.saturating_sub(SEEK_WARMUP_NS);
+    let fast_forward_origin = Instant::now();
+    let mut fast_forwarding = resume_position_ns > 0;
+    let mut skipped_since_yield = 0u32;
 
     loop {
-        // 控制信号实时生效
-        while speed_rx.has_changed().unwrap_or(false) {
-            speed = (*speed_rx.borrow()).max(0.0);
-        }
-        while pause_rx.has_changed().unwrap_or(false) {
-            paused = *pause_rx.borrow();
+        if cancel.is_cancelled() {
+            break;
         }
 
-        // 暂停：等待恢复或取消（快进段不暂停，尽快到位）
-        if paused && prev_ts.map_or(false, |t| t >= resume_position_ns) {
+        // 控制信号实时生效。必须用 borrow_and_update 标记已读：
+        // 只用 borrow() 不会清除 has_changed，控制命令到达后会陷入不让出线程的死循环。
+        let speed = (*speed_rx.borrow_and_update()).max(0.0);
+        let paused = *pause_rx.borrow_and_update();
+
+        // 暂停：等待恢复、变速或取消（快进段不暂停，尽快到位）
+        if paused && !fast_forwarding {
             tokio::select! {
-                _ = pause_rx.changed() => continue,
+                biased;
                 _ = cancel.cancelled() => break,
+                Ok(()) = pause_rx.changed() => continue,
+                Ok(()) = speed_rx.changed() => continue,
             }
         }
 
         // peek 下一条（出错视为终止，但不标记自然播完）
-        match cursor.peek() {
-            Ok(Some(_)) => {}
+        let rec = match cursor.peek() {
+            Ok(Some(rec)) => rec.clone(),
             Ok(None) => {
                 finished_naturally = true;
                 break;
@@ -562,25 +596,41 @@ async fn pacing_loop(
                 log::error!("[Replay] 读取记录失败: {e}");
                 break;
             }
-        }
-        let rec = cursor.peek().ok().flatten().cloned().expect("peek 已确认有记录");
-
-        // 到期时间：相邻记录时间差 ÷ 倍速；快进段（ts < resume 点）恒为 MAX
-        let effective_speed = if rec.timestamp_ns < resume_position_ns {
-            0.0
-        } else {
-            speed
         };
-        if let Some(prev) = prev_ts {
-            let delta = rec.timestamp_ns.saturating_sub(prev);
-            if delta > 0 && effective_speed > 0.0 {
-                let wait = Duration::from_nanos((delta as f64 / effective_speed as f64) as u64);
+
+        if fast_forwarding && rec.timestamp_ns >= resume_position_ns {
+            // 快进到位：超时判定切回真实时钟。乱序的旧时间戳记录不会再把逻辑时钟拨回过去。
+            fast_forwarding = false;
+            app_state.set_replay_clock(None);
+        }
+
+        // 预热窗口之前的记录：只处理链路公告，不注入、不等待
+        if fast_forwarding && rec.timestamp_ns < warmup_start_ns {
+            if rec.record_type == record_type::LINK_ANNOUNCE {
+                apply_link_announce(&app_state, &rec.payload, &mut links, &mut announced);
+            }
+            prev_ts = Some(rec.timestamp_ns);
+            cursor.advance();
+            skipped_since_yield += 1;
+            if skipped_since_yield >= SKIP_YIELD_EVERY {
+                skipped_since_yield = 0;
+                tokio::task::yield_now().await;
+            }
+            continue;
+        }
+
+        // 到期时间：相邻记录时间差 ÷ 倍速；快进段恒为 MAX
+        if !fast_forwarding && speed > 0.0 {
+            if let Some(prev) = prev_ts {
+                let delta = rec.timestamp_ns.saturating_sub(prev);
+                let wait = Duration::from_nanos((delta as f64 / speed as f64) as u64);
                 if !wait.is_zero() {
                     tokio::select! {
-                        _ = tokio::time::sleep(wait) => {}
+                        biased;
                         _ = cancel.cancelled() => break,
-                        _ = pause_rx.changed() => continue,
-                        _ = speed_rx.changed() => continue,
+                        Ok(()) = pause_rx.changed() => continue,
+                        Ok(()) = speed_rx.changed() => continue,
+                        _ = tokio::time::sleep(wait) => {}
                     }
                 }
             }
@@ -595,36 +645,36 @@ async fn pacing_loop(
                     prev_ts = Some(rec.timestamp_ns);
                     continue;
                 };
-                let received_at = match fast_forward_base {
-                    Some(base) if rec.timestamp_ns < resume_position_ns => {
-                        let at = base + Duration::from_nanos(rec.timestamp_ns);
-                        app_state.set_replay_clock(Some(at));
-                        at
-                    }
-                    _ => Instant::now(),
+                let received_at = if fast_forwarding {
+                    let behind = Duration::from_nanos(resume_position_ns.saturating_sub(rec.timestamp_ns));
+                    let at = fast_forward_origin
+                        .checked_sub(behind)
+                        .unwrap_or(fast_forward_origin);
+                    app_state.set_replay_clock(Some(at));
+                    at
+                } else {
+                    Instant::now()
                 };
                 let raw = RawData {
                     source_link: virtual_name.clone(),
                     link_generation: *generation,
-                    data: rec.payload.clone(),
+                    data: rec.payload,
                     received_at,
                 };
-                if router_tx.send(raw).await.is_err() {
-                    log::warn!("[Replay] RouterTx 已关闭，回放终止");
-                    break;
+                // RouterTx 背压时也要能被 seek/stop 立即取消
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => break,
+                    sent = router_tx.send(raw) => {
+                        if sent.is_err() {
+                            log::warn!("[Replay] RouterTx 已关闭，回放终止");
+                            break;
+                        }
+                    }
                 }
             }
             record_type::LINK_ANNOUNCE => {
-                match format::decode_link_announce_payload(&rec.payload) {
-                    Ok(entry) => {
-                        if let Some((name, generation)) =
-                            ReplayEngine::register_virtual_link(&app_state, &entry)
-                        {
-                            links.insert(entry.link_id, (name, generation));
-                        }
-                    }
-                    Err(e) => log::warn!("[Replay] LinkAnnounce 解析失败: {e}"),
-                }
+                apply_link_announce(&app_state, &rec.payload, &mut links, &mut announced);
             }
             record_type::LINK_RESTART => {
                 // V1：仅作流切分标记，流式找包头会自动重同步
@@ -638,12 +688,7 @@ async fn pacing_loop(
         // 更新进度：快进段（恢复内部状态）不暴露中间进度，避免向前端推送 0~resume 之间的瞬态导致进度条乱跳
         prev_ts = Some(rec.timestamp_ns);
         cursor.advance();
-        if fast_forwarding && rec.timestamp_ns >= resume_position_ns {
-            // 快进到位：超时判定切回真实时钟
-            fast_forwarding = false;
-            app_state.set_replay_clock(None);
-        }
-        if rec.timestamp_ns >= resume_position_ns {
+        if !fast_forwarding {
             let mut guard = app_state
                 .replay_status
                 .write()
@@ -654,34 +699,58 @@ async fn pacing_loop(
         }
     }
 
+    // 被取消（跳转/停止/重新开始）时只注销本任务公告注册的链路；文件头链路由会话管理
+    if !finished_naturally || cancel.is_cancelled() {
+        ReplayEngine::unregister_owned_links(&app_state, &announced);
+        return;
+    }
+
     // 自然播完：标记终态并注销虚拟链路（用户 seek 时会自动重新按需注册）
-    if finished_naturally {
-        let file_name = file
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let duration_ns = {
-            let guard = app_state
-                .replay_status
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            guard.as_ref().map_or(0, |s| s.duration_ns)
-        };
-        // 先注销虚拟链路再置 Stopped：观察到 replay_active() == false 时虚拟链路必已移除
-        let virtual_names: Vec<String> = links.values().map(|(n, _)| n.clone()).collect();
-        ReplayEngine::unregister_virtual_links(&app_state, &virtual_names);
-        ReplayEngine::set_status(
-            &app_state,
-            ReplayStatus {
-                state: ReplayState::Stopped,
-                position_ns: duration_ns,
-                duration_ns,
-                speed: 0.0,
-                file_name,
-                start_wall_ms,
-            },
-        );
-        log::info!("[Replay] 回放播完，标记为 Stopped 状态并自动收尾虚拟链路");
+    let file_name = file
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let duration_ns = {
+        let guard = app_state
+            .replay_status
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard.as_ref().map_or(0, |s| s.duration_ns)
+    };
+    // 先注销虚拟链路再置 Stopped：观察到 replay_active() == false 时虚拟链路必已移除。
+    // 只移除代数一致的链路，避免误删新会话刚注册的同名链路。
+    let owned: Vec<(String, u64)> = links.values().cloned().collect();
+    ReplayEngine::unregister_owned_links(&app_state, &owned);
+    ReplayEngine::set_status(
+        &app_state,
+        ReplayStatus {
+            state: ReplayState::Stopped,
+            position_ns: duration_ns,
+            duration_ns,
+            speed: 0.0,
+            file_name,
+            start_wall_ms,
+        },
+    );
+    log::info!("[Replay] 回放播完，标记为 Stopped 状态并自动收尾虚拟链路");
+}
+
+/// 处理 LinkAnnounce：注册虚拟链路并记入本任务的链路表
+fn apply_link_announce(
+    app_state: &AppState,
+    payload: &[u8],
+    links: &mut HashMap<u16, (String, u64)>,
+    announced: &mut Vec<(String, u64)>,
+) {
+    match format::decode_link_announce_payload(payload) {
+        Ok(entry) => {
+            if let Some((name, generation)) = ReplayEngine::register_virtual_link(app_state, &entry) {
+                announced.retain(|(existing, _)| existing != &name);
+                announced.push((name.clone(), generation));
+                links.insert(entry.link_id, (name, generation));
+            }
+        }
+        Err(e) => log::warn!("[Replay] LinkAnnounce 解析失败: {e}"),
     }
 }
 
@@ -820,6 +889,212 @@ mod tests {
         assert!(app_state.replay_status_snapshot().is_none());
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// 测试用：写一个回放文件，records = (类型, 时间戳, link_id, 载荷)
+    fn write_replay_file(
+        tag: &str,
+        links: Vec<super::super::format::LinkEntry>,
+        records: &[(u8, u64, u16, Vec<u8>)],
+    ) -> PathBuf {
+        use super::super::format::{encode_header, encode_record_into, FileHeader, Record};
+        use std::io::Write;
+
+        let path = std::env::temp_dir().join(format!(
+            "gcsgui_replay_{tag}_{}.dat",
+            std::process::id()
+        ));
+        let mut file = File::create(&path).unwrap();
+        file.write_all(&encode_header(&FileHeader { start_wall_ms: 0, links }))
+            .unwrap();
+        let mut buf = Vec::new();
+        for (record_type, timestamp_ns, link_id, payload) in records {
+            encode_record_into(
+                &mut buf,
+                &Record {
+                    record_type: *record_type,
+                    timestamp_ns: *timestamp_ns,
+                    link_id: *link_id,
+                    payload,
+                },
+            );
+        }
+        file.write_all(&buf).unwrap();
+        path
+    }
+
+    fn test_link(link_id: u16, name: &str) -> super::super::format::LinkEntry {
+        super::super::format::LinkEntry {
+            link_id,
+            protocol: 2,
+            link_type: 0,
+            name: name.into(),
+        }
+    }
+
+    fn index_of(raw: &RawData) -> u32 {
+        u32::from_le_bytes(raw.data[..4].try_into().unwrap())
+    }
+
+    /// 长文件拖到末尾：跳转立即返回，只重演目标点前的预热窗口，且晚注册的链路照常可用
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn seek_far_into_long_file_replays_only_warmup_window() {
+        const STEP_NS: u64 = 100_000_000; // 10 Hz
+        const COUNT: u32 = 6_000; // 600 s
+        let mut records = vec![(
+            record_type::LINK_ANNOUNCE,
+            0,
+            0,
+            super::super::format::encode_link_announce_payload(&test_link(1, "late")),
+        )];
+        for i in 0..COUNT {
+            records.push((record_type::RX_RAW, u64::from(i) * STEP_NS, 0, i.to_le_bytes().to_vec()));
+        }
+        records.push((record_type::RX_RAW, 580 * 1_000_000_000 + 1, 1, u32::MAX.to_le_bytes().to_vec()));
+        records.sort_by_key(|r| r.1);
+        let path = write_replay_file("warmup", vec![test_link(0, "main")], &records);
+
+        let app_state = AppState::new();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let engine = ReplayEngine::new();
+        engine.start(&app_state, &tx, path.clone(), 1.0).unwrap();
+        let first = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await.unwrap().unwrap();
+        assert_eq!(index_of(&first), 0);
+
+        let target = 590 * 1_000_000_000;
+        tokio::time::timeout(Duration::from_secs(2), engine.seek(&app_state, &tx, target))
+            .await
+            .expect("跳转不应等待")
+            .unwrap();
+        assert_eq!(app_state.replay_status_snapshot().unwrap().position_ns, target);
+
+        // 预热窗口 [530 s, 590 s) 以 MAX 注入，之后按 1× 继续
+        let mut indices = Vec::new();
+        let mut late_link_seen = false;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let raw = rx.recv().await.unwrap();
+                if raw.source_link == format!("{REPLAY_LINK_PREFIX}late") {
+                    late_link_seen = true;
+                    continue;
+                }
+                let index = index_of(&raw);
+                indices.push(index);
+                if index >= 5_900 {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("预热窗口应快速注入完毕");
+        let first_after_seek = indices.iter().copied().find(|&i| i != 0 && i != 1).unwrap();
+        assert!(first_after_seek >= 5_300, "不应从文件开头重演: {first_after_seek}");
+        assert!(late_link_seen, "预热窗口之前公告的链路应可接收数据");
+        assert!(
+            Instant::now().saturating_duration_since(app_state.clock_now()) < Duration::from_millis(200),
+            "快进结束后应切回真实时钟"
+        );
+
+        tokio::time::timeout(Duration::from_secs(2), engine.stop(&app_state))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!app_state.active_links.contains_key(&format!("{REPLAY_LINK_PREFIX}late")));
+        assert!(!app_state.active_links.contains_key(&format!("{REPLAY_LINK_PREFIX}main")));
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// 暂停中改倍速再恢复：控制信号不能让 pacing 陷入死循环，之后跳转与停止仍立即生效
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pause_speed_resume_then_seek_and_stop() {
+        let records: Vec<_> = (0..400u32)
+            .map(|i| (record_type::RX_RAW, u64::from(i) * 50_000_000, 0, i.to_le_bytes().to_vec()))
+            .collect();
+        let path = write_replay_file("controls", vec![test_link(0, "controls")], &records);
+
+        let app_state = AppState::new();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let engine = ReplayEngine::new();
+        engine.start(&app_state, &tx, path.clone(), 1.0).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), rx.recv()).await.unwrap().unwrap();
+
+        engine.pause(&app_state).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        while rx.try_recv().is_ok() {}
+        engine.set_speed(&app_state, 4.0).unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), rx.recv()).await.is_err(),
+            "暂停后不应继续注入"
+        );
+        assert_eq!(app_state.replay_status_snapshot().unwrap().state, ReplayState::Paused);
+
+        engine.resume(&app_state).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("变速并恢复后应继续注入")
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(2), engine.seek(&app_state, &tx, 10_000_000_000))
+            .await
+            .expect("跳转不应卡住")
+            .unwrap();
+        let raw = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let raw = rx.recv().await.unwrap();
+                if index_of(&raw) >= 200 {
+                    return raw;
+                }
+            }
+        })
+        .await
+        .expect("跳转后应从目标点继续");
+        assert!(index_of(&raw) <= 210);
+        assert_eq!(app_state.replay_status_snapshot().unwrap().speed, 4.0);
+
+        tokio::time::timeout(Duration::from_secs(2), engine.stop(&app_state))
+            .await
+            .expect("停止不应卡住")
+            .unwrap();
+        assert!(app_state.replay_status_snapshot().is_none());
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// 路由队列已满（下游处理不过来）时，连续跳转与停止都不能卡在发送上
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn repeated_seek_and_stop_cancel_when_router_is_full() {
+        let records: Vec<_> = (0..20_000u32)
+            .map(|i| (record_type::RX_RAW, u64::from(i) * 1_000_000, 0, i.to_le_bytes().to_vec()))
+            .collect();
+        let path = write_replay_file("backpressure", vec![test_link(0, "backpressure")], &records);
+
+        let app_state = AppState::new();
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let engine = ReplayEngine::new();
+        engine.start(&app_state, &tx, path.clone(), 0.0).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while tx.capacity() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        for target_s in [15u64, 3, 19, 8] {
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                engine.seek(&app_state, &tx, target_s * 1_000_000_000),
+            )
+            .await
+            .expect("队列满时跳转不应卡住")
+            .unwrap();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tokio::time::timeout(Duration::from_secs(1), engine.stop(&app_state))
+            .await
+            .expect("队列满时停止不应卡住")
+            .unwrap();
+        assert!(app_state.replay_status_snapshot().is_none());
+        let _ = std::fs::remove_file(path);
     }
 
     #[tokio::test]
