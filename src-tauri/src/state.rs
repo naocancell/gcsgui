@@ -167,6 +167,8 @@ pub struct AppState {
 
     /// 全链路遥测指标埋点统计器
     pub metrics: Arc<LinkMetrics>,
+    /// RX 层：AA55 任管载荷及 0xC4 子设备接收帧频统计器
+    pub payload_rate_tracker: Arc<Mutex<crate::protocol::payload::PayloadRateTracker>>,
 
     /// RX 层：多物理链路仲裁器发布的最新健康快照。
     pub rx_health: Arc<RwLock<crate::router::rx_arbiter::RxHealthSnapshot>>,
@@ -207,6 +209,7 @@ impl AppState {
             active_links: Arc::new(DashMap::new()),
             next_link_generation: Arc::new(AtomicU64::new(0)),
             metrics: Arc::new(LinkMetrics::default()),
+            payload_rate_tracker: Arc::new(Mutex::new(crate::protocol::payload::PayloadRateTracker::new())),
             rx_health: Arc::new(RwLock::new(Default::default())),
             recorder: Arc::new(crate::recorder::RecorderService::new()),
             replay: Arc::new(crate::recorder::replay::ReplayEngine::new()),
@@ -227,6 +230,7 @@ impl AppState {
         self.fp981c_seen.clear();
         self.mission_payload_seen.clear();
         *self.fp95_state.lock().expect("FP95 state mutex poisoned") = None;
+        *self.payload_rate_tracker.lock().unwrap() = crate::protocol::payload::PayloadRateTracker::new();
         self.rx_epoch.fetch_add(1, Ordering::Relaxed);
     }
 

@@ -1,12 +1,14 @@
 pub mod ice_c5;
 pub mod outer;
 pub mod relay_c3;
+pub mod rate_tracker;
 pub mod sensors_c4;
 
 pub use crate::protocol::fp95::FP95Frame94Sub2;
 pub use ice_c5::*;
 pub use outer::*;
 pub use relay_c3::*;
+pub use rate_tracker::*;
 pub use sensors_c4::*;
 
 use serde::{Deserialize, Serialize};
@@ -32,6 +34,9 @@ pub struct MissionPayloadAggregate {
     /// 各子设备最近一次成功解析的时间（Unix ms），用于单设备掉线判定
     #[serde(default)]
     pub device_updated_ms: PayloadDeviceTimestamps,
+    /// AA55 各载荷分类与 0xC4 内部子设备实时帧频统计 (Hz)
+    #[serde(default)]
+    pub frame_rates: Option<PayloadFrameRates>,
 }
 
 /// 任管载荷数据在状态池中的机号。
@@ -132,6 +137,18 @@ impl PayloadStreamReassembler {
         aggregate: &mut MissionPayloadAggregate,
         now_ms: u64,
     ) {
+        self.feed_payload_with_tracker(payload_id, chunk, aggregate, now_ms, None);
+    }
+
+    /// 喂入一帧外层解包后的有效载荷数据，支持带帧频统计打点
+    pub fn feed_payload_with_tracker(
+        &mut self,
+        payload_id: u8,
+        chunk: &[u8],
+        aggregate: &mut MissionPayloadAggregate,
+        now_ms: u64,
+        mut tracker: Option<&mut PayloadRateTracker>,
+    ) {
         let buf = self.buffers.entry(payload_id).or_default();
         buf.extend_from_slice(chunk);
 
@@ -210,6 +227,9 @@ impl PayloadStreamReassembler {
                     let frame = buf[..needed_len].to_vec();
                     match parse_bus_0xc4_frame(&frame) {
                         Ok(data) => {
+                            if let Some(t) = tracker.as_deref_mut() {
+                                t.record_c4_device(dev_id, now_ms);
+                            }
                             match data {
                                 Bus0xC4DeviceData::BoostModule(d) => {
                                     aggregate.boost_module = Some(d);

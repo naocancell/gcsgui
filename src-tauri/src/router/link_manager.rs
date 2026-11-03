@@ -665,7 +665,18 @@ fn process_payload_frame(
                 .entry(uav_id)
                 .or_insert_with(|| crate::protocol::payload::MissionPayloadAggregate::new(uav_id));
 
-            reassembler.feed_payload(outer.payload_id, &outer.data, &mut agg, now_ms);
+            {
+                let mut tracker = app_state.payload_rate_tracker.lock().unwrap();
+                tracker.record_outer(outer.payload_id, now_ms);
+                reassembler.feed_payload_with_tracker(
+                    outer.payload_id,
+                    &outer.data,
+                    &mut agg,
+                    now_ms,
+                    Some(&mut *tracker),
+                );
+                agg.frame_rates = Some(tracker.snapshot(now_ms));
+            }
             if outer.payload_id == crate::protocol::payload::PAYLOAD_ID_DEICE {
                 if let Some(deice) = &agg.deice {
                     // 载荷外层协议不带机号，合入 FP95 聚合时不得覆盖 FP95 帧上报的真实机号
@@ -1306,5 +1317,56 @@ mod tests {
             .all(|r| r.link_id == ValidatedKind::Fp95.link_id()));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn test_aa55_frame_rate_tracking_integration() {
+        let app_state = AppState::new();
+        let mut reassembler = crate::protocol::payload::PayloadStreamReassembler::new();
+        let now = Instant::now();
+
+        // 1. 构造 0xC6 电防冰外层帧
+        let deice_inner = [
+            0xEB, 0x90, 0x01, 0x02, 0x00, 0x64, 0x07, 0xD0, 0x01, 0xF4, 0x14, 0x50, 0x00, 0x00,
+        ];
+        let mut deice_frame_raw = deice_inner;
+        let sum: u32 = deice_frame_raw[..13].iter().map(|&b| b as u32).sum();
+        deice_frame_raw[13] = ((256 - (sum % 256)) % 256) as u8;
+
+        let outer_deice = crate::protocol::payload::pack_payload_frame(
+            crate::protocol::payload::CODE_DOWNLINK,
+            crate::protocol::payload::PAYLOAD_ID_DEICE,
+            1,
+            &deice_frame_raw,
+        );
+
+        process_payload_frame(&outer_deice, &mut reassembler, "LINK-1", &app_state, now);
+
+        // 2. 构造 0xC4 包含升压模块 (0x01) 外层帧
+        let boost_inner = [
+            0x01, 0x03, 0x09, 0x0A, 0xF0, 0x03, 0xE8, 0x27, 0x10, 0x01, 0xF4, 0x5A, 0x9A, 0xB4,
+        ];
+        let outer_boost = crate::protocol::payload::pack_payload_frame(
+            crate::protocol::payload::CODE_DOWNLINK,
+            crate::protocol::payload::PAYLOAD_ID_BUS_SENSORS,
+            2,
+            &boost_inner,
+        );
+
+        process_payload_frame(&outer_boost, &mut reassembler, "LINK-1", &app_state, now);
+
+        // 3. 验证帧频统计结果
+        let rates = app_state.payload_rate_tracker.lock().unwrap().snapshot(crate::protocol::payload::unix_now_ms());
+        assert_eq!(rates.total, 2.0);
+        assert_eq!(rates.deice, 1.0);
+        assert_eq!(rates.bus_sensors, 1.0);
+        assert_eq!(rates.c4_devices.boost_module, 1.0);
+
+        let agg = app_state.mission_payload_pool.get(&crate::protocol::payload::MISSION_PAYLOAD_UAV_ID).unwrap();
+        assert!(agg.frame_rates.is_some());
+        let agg_rates = agg.frame_rates.as_ref().unwrap();
+        assert_eq!(agg_rates.total, 2.0);
+        assert_eq!(agg_rates.deice, 1.0);
+        assert_eq!(agg_rates.bus_sensors, 1.0);
+        assert_eq!(agg_rates.c4_devices.boost_module, 1.0);
     }
 }

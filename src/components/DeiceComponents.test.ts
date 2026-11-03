@@ -6,6 +6,7 @@ import DeicePanel from './DeicePanel.vue'
 import DeiceView from '@/views/DeiceView.vue'
 import ToolbarActions from './toolbar/ToolbarActions.vue'
 import Toolbar from './toolbar.vue'
+import { usePayloadStore } from '@/store/payloadStore'
 
 // Mock tauri API for DeiceView
 vi.mock('@tauri-apps/api/window', () => ({
@@ -150,5 +151,49 @@ describe('防除冰系统组件与视图集成测试', () => {
     )
     expect(fileContent).toContain("import { openOrRestoreDeiceWindow } from '@/utils/deiceWindow'")
     expect(fileContent).toContain('@show-deice="openOrRestoreDeiceWindow"')
+  })
+
+  it('usePayloadStore 应正确管理 AA55 实时帧频及其分类统计', () => {
+    const payloadStore = usePayloadStore()
+    expect(payloadStore.frameRates).toBeNull()
+    expect(payloadStore.totalFrameRateText).toBe('0.0')
+
+    payloadStore.payloadMap[95] = {
+      uavId: 95,
+      relay: null,
+      boostModule: null,
+      tempSensor1: null,
+      tempSensor2: null,
+      voltageSensor: null,
+      currentSensor1: null,
+      currentSensor2: null,
+      environmentSensor: null,
+      icingSensor: null,
+      lastUpdatedMs: Date.now(),
+      frameRates: {
+        total: 10.5,
+        atmosphere: 1.0,
+        flare: 0.0,
+        cloudDrop: 0.0,
+        relay: 2.5,
+        busSensors: 4.0,
+        icing: 1.0,
+        deice: 2.0,
+        c4Devices: {
+          boostModule: 1.0,
+          tempSensor1: 1.0,
+          tempSensor2: 1.0,
+          voltageSensor: 0.5,
+          currentSensor1: 0.5,
+          currentSensor2: 0.0,
+          environmentSensor: 0.0,
+        },
+      },
+    }
+
+    expect(payloadStore.frameRates?.total).toBe(10.5)
+    expect(payloadStore.totalFrameRateText).toBe('10.5')
+    expect(payloadStore.frameRates?.busSensors).toBe(4.0)
+    expect(payloadStore.frameRates?.c4Devices.boostModule).toBe(1.0)
   })
 })

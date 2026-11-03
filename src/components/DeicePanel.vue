@@ -40,6 +40,166 @@
           <span class="chip chip-plain">
             继电器已闭合 {{ closedRelayCount }}/{{ CONTROLLABLE_RELAY_COUNT }}
           </span>
+          <n-popover
+            trigger="hover"
+            placement="bottom"
+            :show-arrow="false"
+            class="aa55-rate-popover"
+          >
+            <template #trigger>
+              <span
+                class="chip chip-clickable"
+                :class="(payloadStore.frameRates?.total ?? 0) > 0 ? 'chip-green' : 'chip-plain'"
+                title="悬停或点击查看各载荷及传感器细分帧频"
+              >
+                帧频 · {{ payloadStore.totalFrameRateText }} Hz
+              </span>
+            </template>
+            <div class="aa55-popover-content">
+              <div class="popover-title">
+                <span>载荷实时帧频监控</span>
+                <span class="popover-total dd-mono">
+                  总计 {{ payloadStore.totalFrameRateText }} Hz
+                </span>
+              </div>
+              <div class="popover-section">
+                <div class="section-label">外层载荷分类 (0xC0 ~ 0xC6)</div>
+                <div class="rate-grid">
+                  <div class="rate-item">
+                    <span class="item-name">0xC6 电防冰控制器</span>
+                    <span
+                      class="item-val dd-mono"
+                      :class="{ active: (payloadStore.frameRates?.deice ?? 0) > 0 }"
+                    >
+                      {{ formatFixed(payloadStore.frameRates?.deice, 1) }} Hz
+                    </span>
+                  </div>
+                  <div class="rate-item">
+                    <span class="item-name">0xC5 结冰传感器</span>
+                    <span
+                      class="item-val dd-mono"
+                      :class="{ active: (payloadStore.frameRates?.icing ?? 0) > 0 }"
+                    >
+                      {{ formatFixed(payloadStore.frameRates?.icing, 1) }} Hz
+                    </span>
+                  </div>
+                  <div class="rate-item">
+                    <span class="item-name">0xC3 继电器控制器</span>
+                    <span
+                      class="item-val dd-mono"
+                      :class="{ active: (payloadStore.frameRates?.relay ?? 0) > 0 }"
+                    >
+                      {{ formatFixed(payloadStore.frameRates?.relay, 1) }} Hz
+                    </span>
+                  </div>
+                  <div class="rate-item">
+                    <span class="item-name">0xC4 传感器总线</span>
+                    <span
+                      class="item-val dd-mono"
+                      :class="{ active: (payloadStore.frameRates?.busSensors ?? 0) > 0 }"
+                    >
+                      {{ formatFixed(payloadStore.frameRates?.busSensors, 1) }} Hz
+                    </span>
+                  </div>
+                  <div class="rate-item">
+                    <span class="item-name">0xC0 大气数据测量</span>
+                    <span
+                      class="item-val dd-mono"
+                      :class="{ active: (payloadStore.frameRates?.atmosphere ?? 0) > 0 }"
+                    >
+                      {{ formatFixed(payloadStore.frameRates?.atmosphere, 1) }} Hz
+                    </span>
+                  </div>
+                  <div class="rate-item">
+                    <span class="item-name">0xC1 人影焰条</span>
+                    <span
+                      class="item-val dd-mono"
+                      :class="{ active: (payloadStore.frameRates?.flare ?? 0) > 0 }"
+                    >
+                      {{ formatFixed(payloadStore.frameRates?.flare, 1) }} Hz
+                    </span>
+                  </div>
+                  <div class="rate-item">
+                    <span class="item-name">0xC2 云滴探测</span>
+                    <span
+                      class="item-val dd-mono"
+                      :class="{ active: (payloadStore.frameRates?.cloudDrop ?? 0) > 0 }"
+                    >
+                      {{ formatFixed(payloadStore.frameRates?.cloudDrop, 1) }} Hz
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div class="popover-section">
+                <div class="section-label">0xC4 总线内部子设备细分 (Modbus)</div>
+                <div class="rate-grid c4-grid">
+                  <div class="rate-item">
+                    <span class="item-name">0x01 升压模块</span>
+                    <span
+                      class="item-val dd-mono"
+                      :class="{ active: (payloadStore.frameRates?.c4Devices?.boostModule ?? 0) > 0 }"
+                    >
+                      {{ formatFixed(payloadStore.frameRates?.c4Devices?.boostModule, 1) }} Hz
+                    </span>
+                  </div>
+                  <div class="rate-item">
+                    <span class="item-name">0x02 左侧温采 1</span>
+                    <span
+                      class="item-val dd-mono"
+                      :class="{ active: (payloadStore.frameRates?.c4Devices?.tempSensor1 ?? 0) > 0 }"
+                    >
+                      {{ formatFixed(payloadStore.frameRates?.c4Devices?.tempSensor1, 1) }} Hz
+                    </span>
+                  </div>
+                  <div class="rate-item">
+                    <span class="item-name">0x03 右侧温采 2</span>
+                    <span
+                      class="item-val dd-mono"
+                      :class="{ active: (payloadStore.frameRates?.c4Devices?.tempSensor2 ?? 0) > 0 }"
+                    >
+                      {{ formatFixed(payloadStore.frameRates?.c4Devices?.tempSensor2, 1) }} Hz
+                    </span>
+                  </div>
+                  <div class="rate-item">
+                    <span class="item-name">0x04 电压采集</span>
+                    <span
+                      class="item-val dd-mono"
+                      :class="{ active: (payloadStore.frameRates?.c4Devices?.voltageSensor ?? 0) > 0 }"
+                    >
+                      {{ formatFixed(payloadStore.frameRates?.c4Devices?.voltageSensor, 1) }} Hz
+                    </span>
+                  </div>
+                  <div class="rate-item">
+                    <span class="item-name">0x05 电流采集 1</span>
+                    <span
+                      class="item-val dd-mono"
+                      :class="{ active: (payloadStore.frameRates?.c4Devices?.currentSensor1 ?? 0) > 0 }"
+                    >
+                      {{ formatFixed(payloadStore.frameRates?.c4Devices?.currentSensor1, 1) }} Hz
+                    </span>
+                  </div>
+                  <div class="rate-item">
+                    <span class="item-name">0x06 电流采集 2</span>
+                    <span
+                      class="item-val dd-mono"
+                      :class="{ active: (payloadStore.frameRates?.c4Devices?.currentSensor2 ?? 0) > 0 }"
+                    >
+                      {{ formatFixed(payloadStore.frameRates?.c4Devices?.currentSensor2, 1) }} Hz
+                    </span>
+                  </div>
+                  <div class="rate-item">
+                    <span class="item-name">0x07 温湿压传感器</span>
+                    <span
+                      class="item-val dd-mono"
+                      :class="{ active: (payloadStore.frameRates?.c4Devices?.environmentSensor ?? 0) > 0 }"
+                    >
+                      {{ formatFixed(payloadStore.frameRates?.c4Devices?.environmentSensor, 1) }} Hz
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </n-popover>
         </div>
 
         <div class="header-actions" @mousedown.stop @dblclick.stop>
@@ -865,6 +1025,17 @@ onBeforeUnmount(() => {
   }
 }
 
+.chip-clickable {
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.chip-clickable:hover {
+  background: rgb(148 163 184 / 14%);
+  filter: brightness(1.15);
+}
+
 .chip {
   font-size: 11px;
   padding: 4px 8px;
@@ -1358,5 +1529,86 @@ onBeforeUnmount(() => {
 .alarm-active .indicator-dot {
   background: var(--dd-red);
   box-shadow: 0 0 6px var(--dd-red);
+}
+
+:global(.aa55-rate-popover) {
+  background: #0f172a !important;
+  border: 1px solid rgb(51 65 85 / 80%) !important;
+  border-radius: 6px !important;
+  padding: 12px 14px !important;
+  box-shadow:
+    0 10px 25px -5px rgb(0 0 0 / 60%),
+    0 8px 10px -6px rgb(0 0 0 / 50%) !important;
+  color: var(--dd-text, #f1f5f9) !important;
+  width: 360px;
+}
+
+.aa55-popover-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.aa55-popover-content .popover-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgb(148 163 184 / 15%);
+  color: #38bdf8;
+}
+
+.aa55-popover-content .popover-total {
+  font-size: 12px;
+  color: #4ade80;
+  background: rgb(74 222 128 / 10%);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.aa55-popover-content .popover-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.aa55-popover-content .section-label {
+  font-size: 11px;
+  color: var(--dd-text-2, #94a3b8);
+  margin-bottom: 2px;
+  font-weight: 500;
+}
+
+.aa55-popover-content .rate-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 6px;
+}
+
+.aa55-popover-content .rate-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  background: rgb(30 41 59 / 60%);
+  padding: 3px 6px;
+  border-radius: 3px;
+  border: 1px solid rgb(255 255 255 / 4%);
+}
+
+.aa55-popover-content .item-name {
+  color: #cbd5e1;
+}
+
+.aa55-popover-content .item-val {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.aa55-popover-content .item-val.active {
+  color: #4ade80;
+  font-weight: 600;
 }
 </style>

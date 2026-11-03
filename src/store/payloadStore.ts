@@ -101,6 +101,30 @@ export interface IcingSensorData {
   versionMinor: number
 }
 
+/** 0xC4 传感器总线挂载 7 种设备的细分帧频 (Hz) */
+export interface C4DeviceRates {
+  boostModule: number
+  tempSensor1: number
+  tempSensor2: number
+  voltageSensor: number
+  currentSensor1: number
+  currentSensor2: number
+  environmentSensor: number
+}
+
+/** AA55 各载荷分类与综合实时帧频 (Hz) */
+export interface PayloadFrameRates {
+  total: number
+  atmosphere: number
+  flare: number
+  cloudDrop: number
+  relay: number
+  busSensors: number
+  icing: number
+  deice: number
+  c4Devices: C4DeviceRates
+}
+
 export interface MissionPayloadAggregate {
   uavId: number
   relay: RelayStatus | null
@@ -116,6 +140,8 @@ export interface MissionPayloadAggregate {
   lastUpdatedMs: number
   /** 各子设备最近一次成功解析的时间（Unix ms），超时后后端会清空对应数据 */
   deviceUpdatedMs?: Partial<Record<PayloadDeviceKey, number | null>>
+  /** AA55 各分类及 0xC4 内部子设备实时接收帧频 (Hz) */
+  frameRates?: PayloadFrameRates | null
 }
 
 export type PayloadDeviceKey =
@@ -171,6 +197,20 @@ export const usePayloadStore = defineStore('payloadStore', () => {
       default:
         return { text: '未知状态', level: 'offline' }
     }
+  })
+
+  // AA55 实时帧频快照
+  const frameRates = computed<PayloadFrameRates | null>(() => {
+    return currentPayload.value?.frameRates || null
+  })
+
+  // AA55 综合总帧频文本 (保留 1 位小数)
+  const totalFrameRateText = computed<string>(() => {
+    const total = frameRates.value?.total
+    if (typeof total === 'number' && Number.isFinite(total)) {
+      return total.toFixed(1)
+    }
+    return '0.0'
   })
 
   // 16 组加热膜最低温度与位置追踪 (严格基于 tempSensor1 / tempSensor2 真实采温)
@@ -292,6 +332,8 @@ export const usePayloadStore = defineStore('payloadStore', () => {
     deiceStatus,
     icingDesc,
     minHeatingMat,
+    frameRates,
+    totalFrameRateText,
     startListening,
     stopListening,
     sendRelayControl,

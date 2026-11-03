@@ -95,6 +95,15 @@ pub async fn start_emitter(app_handle: AppHandle, app_state: AppState) {
             }
         }
 
+        // 刷新载荷最新帧频快照（支持自然衰减）
+        if !app_state.mission_payload_pool.is_empty() {
+            let now_ms = crate::protocol::payload::unix_now_ms();
+            let rates = app_state.payload_rate_tracker.lock().unwrap().snapshot(now_ms);
+            for mut agg in app_state.mission_payload_pool.iter_mut() {
+                agg.frame_rates = Some(rates.clone());
+            }
+        }
+
         // 推送任管载荷聚合状态
         let payload_list: Vec<_> = app_state
             .mission_payload_pool
