@@ -196,4 +196,31 @@ describe('防除冰系统组件与视图集成测试', () => {
     expect(payloadStore.frameRates?.busSensors).toBe(4.0)
     expect(payloadStore.frameRates?.c4Devices.boostModule).toBe(1.0)
   })
+
+  it('DeicePanel.vue 应包含自动除冰开/关及除冰自动周期装订控件与接口调用', () => {
+    const fileContent = fs.readFileSync(
+      path.resolve(__dirname, 'DeicePanel.vue'),
+      'utf-8',
+    )
+    // 验证原全部通电/全部断开已删除
+    expect(fileContent).not.toContain('全部通电')
+    expect(fileContent).not.toContain('全部断开')
+    expect(fileContent).not.toContain('handleSetAll')
+
+    // 验证包含自动除冰开/关
+    expect(fileContent).toContain('自动除冰开')
+    expect(fileContent).toContain('自动除冰关')
+    expect(fileContent).toContain('handleAutoDeiceSwitch')
+    expect(fileContent).toContain('autoDeiceOn')
+    expect(fileContent).toContain('autoDeiceOff')
+    expect(fileContent).toContain('submit_flight_switch_command')
+
+    // 验证包含除冰自动周期设置与装订
+    expect(fileContent).toContain('自动周期')
+    expect(fileContent).toContain('装订周期')
+    expect(fileContent).toContain('handleBindDeiceCycle')
+    expect(fileContent).toContain('bind_deice_auto_cycle')
+    expect(fileContent).toContain('selectedAutoCycle')
+  })
+
 })

@@ -6,7 +6,7 @@ use crate::protocol::fp95_command::{
     AirTrafficParamConfig, AirTrafficParamReadback, TransponderSwitchConfig,
     TransponderSwitchReadback, WeightBindingConfig, WeightReadback,
     AIR_TRAFFIC_BIND_CODE, AIR_TRAFFIC_QUERY_CODE, SWITCH_BIND_CODE, SWITCH_QUERY_CODE,
-    WEIGHT_BIND_CODE, WEIGHT_QUERY_CODE,
+    DEICE_CYCLE_BIND_CODE, WEIGHT_BIND_CODE, WEIGHT_QUERY_CODE, encode_deice_auto_cycle_binding,
 };
 use crate::protocol::uplink::NoAckCommand;
 use crate::uplink::{
@@ -232,5 +232,26 @@ pub async fn query_weight_params(
     {
         FP95Response::WeightQuery(readback) => Ok(readback),
         _ => Err("重量参数查询收到非预期回报".to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn bind_deice_auto_cycle(
+    handle: tauri::State<'_, UplinkHandle>,
+    coordinator: tauri::State<'_, FP95ResponseCoordinator>,
+    cycle_seconds: u8,
+) -> Result<(), String> {
+    let payload = encode_deice_auto_cycle_binding(cycle_seconds)?;
+    match submit_acknowledged_command(
+        &handle,
+        &coordinator,
+        DEICE_CYCLE_BIND_CODE,
+        payload,
+        ExpectedResponse::DeiceAutoCycleBinding(payload),
+    )
+    .await?
+    {
+        FP95Response::BindingConfirmed => Ok(()),
+        _ => Err("除冰自动周期装订收到非预期回报".to_string()),
     }
 }

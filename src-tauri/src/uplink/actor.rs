@@ -84,8 +84,8 @@ impl ActiveFlightSwitch {
     fn new(command: FlightSwitchCommand) -> Self {
         Self {
             command,
-            command_frames_remaining: 6,
-            release_frames_remaining: 4,
+            command_frames_remaining: 1,
+            release_frames_remaining: 0,
         }
     }
 
@@ -243,12 +243,7 @@ impl UplinkCore {
         &mut self,
         command: FlightSwitchCommand,
     ) -> Result<(), UplinkCommandError> {
-        if self.active_flight_switch.is_some() {
-            return Err(UplinkCommandError::Conflict {
-                message: "已有飞行开关指令正在发送".to_string(),
-                status: self.status(),
-            });
-        }
+        // 开关指令采用直接覆盖模式：单包即发，最新点击直接覆盖前一次状态，杜绝任何死锁冲突
         self.active_flight_switch = Some(ActiveFlightSwitch::new(command));
         Ok(())
     }
@@ -273,6 +268,8 @@ impl UplinkCore {
 
     pub(crate) fn tick(&mut self, sink: &dyn UplinkFrameSink) {
         if !sink.has_targets() {
+            // 无可用上行链路目标时，清空待发开关指令，避免离线滞留
+            self.active_flight_switch = None;
             return;
         }
         let context = self.frame_context();
@@ -301,6 +298,8 @@ impl UplinkCore {
 
         if sink.try_dispatch(frame).is_err() {
             self.dropped_ticks += 1;
+            // 尝试投递后，单包开关指令本周期即结束，不卡死下个 tick
+            self.active_flight_switch = None;
             return;
         }
 
@@ -756,5 +755,39 @@ mod tests {
         core.tick(&sink);
         assert_eq!(sink.last()[4], 7);
         assert_eq!(core.status().aircraft_id, 7);
+    }
+
+    #[test]
+    fn test_flight_switch_sends_exactly_one_frame_and_overwrites() {
+        let mut core = UplinkCore::new(1);
+        let sink = RecordingSink::new();
+
+        // 连续多次下发不同开关指令，全部直接覆盖成功且不报错
+        core.submit_flight_switch(FlightSwitchCommand::AutoDeiceOn).unwrap();
+        core.submit_flight_switch(FlightSwitchCommand::AutoDeiceOff).unwrap();
+        assert_eq!(core.status().active_flight_switch, Some(FlightSwitchCommand::AutoDeiceOff));
+
+        // 第一次 tick: 发送最新覆盖的开关指令帧（恰好1包 AutoDeiceOff）
+        core.tick(&sink);
+        assert_eq!(sink.last()[6], FlightSwitchCommand::AutoDeiceOff.code());
+        assert_eq!(sink.last()[7], FlightSwitchCommand::AutoDeiceOff.code());
+        assert_eq!(sink.last()[8], FlightSwitchCommand::AutoDeiceOff.code());
+        assert_eq!(core.status().active_flight_switch, None);
+
+        // 第二次 tick: 恢复为 0x00，不再发送开关指令
+        core.tick(&sink);
+        assert_eq!(sink.last()[6], 0x00);
+        assert_eq!(sink.last()[7], 0x00);
+        assert_eq!(sink.last()[8], 0x00);
+
+        // 无目标链路时提交开关指令，tick 不会使其死锁，能够自动清空
+        struct NoTargetSink;
+        impl UplinkFrameSink for NoTargetSink {
+            fn has_targets(&self) -> bool { false }
+            fn try_dispatch(&self, _frame: [u8; 32]) -> Result<(), ()> { Ok(()) }
+        }
+        core.submit_flight_switch(FlightSwitchCommand::PayloadOn).unwrap();
+        core.tick(&NoTargetSink);
+        assert_eq!(core.status().active_flight_switch, None);
     }
 }

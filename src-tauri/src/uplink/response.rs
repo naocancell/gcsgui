@@ -3,7 +3,7 @@ use tokio::sync::oneshot;
 
 use crate::protocol::fp95_command::{
     decode_air_traffic_query, decode_switch_query, decode_weight_query,
-    matches_air_traffic_binding, matches_switch_binding, matches_weight_binding,
+    matches_air_traffic_binding, matches_deice_auto_cycle_binding, matches_switch_binding, matches_weight_binding,
     AirTrafficParamReadback, TransponderSwitchReadback, WeightReadback,
     AIR_TRAFFIC_QUERY_CODE, SWITCH_QUERY_CODE, WEIGHT_QUERY_CODE,
 };
@@ -16,6 +16,7 @@ pub enum ExpectedResponse {
     AirTrafficQuery,
     WeightBinding([u8; 15]),
     WeightQuery,
+    DeiceAutoCycleBinding([u8; 15]),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -122,7 +123,8 @@ impl FP95ResponseCoordinator {
             let result = match pending.expected {
                 ExpectedResponse::SwitchBinding(_)
                 | ExpectedResponse::AirTrafficBinding(_)
-                | ExpectedResponse::WeightBinding(_) => {
+                | ExpectedResponse::WeightBinding(_)
+                | ExpectedResponse::DeiceAutoCycleBinding(_) => {
                     Ok(FP95Response::BindingConfirmed)
                 }
                 ExpectedResponse::SwitchQuery => {
@@ -149,6 +151,9 @@ impl FP95ResponseCoordinator {
             ExpectedResponse::AirTrafficQuery => data[0] == AIR_TRAFFIC_QUERY_CODE,
             ExpectedResponse::WeightBinding(payload) => matches_weight_binding(data, payload),
             ExpectedResponse::WeightQuery => data[0] == WEIGHT_QUERY_CODE,
+            ExpectedResponse::DeiceAutoCycleBinding(payload) => {
+                matches_deice_auto_cycle_binding(data, payload)
+            }
         }
     }
 }

@@ -369,3 +369,52 @@ pub fn matches_weight_binding(data: &[u8; 16], expected: &[u8; 15]) -> bool {
     data[0] == WEIGHT_BIND_CODE && data[1..16] == expected[..]
 }
 
+pub const DEICE_CYCLE_BIND_CODE: u8 = 0x77;
+
+pub fn encode_deice_auto_cycle_binding(cycle_seconds: u8) -> Result<[u8; 15], String> {
+    if !matches!(cycle_seconds, 5 | 10 | 20) {
+        return Err(format!(
+            "除冰自动周期必须为 5s、10s 或 20s，实际为: {}s",
+            cycle_seconds
+        ));
+    }
+    let mut payload = [0u8; 15];
+    payload[0] = cycle_seconds;
+    Ok(payload)
+}
+
+pub fn matches_deice_auto_cycle_binding(data: &[u8; 16], expected: &[u8; 15]) -> bool {
+    data[0] == DEICE_CYCLE_BIND_CODE && data[1] == expected[0]
+}
+
+#[cfg(test)]
+mod deice_cycle_tests {
+    use super::*;
+
+    #[test]
+    fn test_encode_deice_auto_cycle_binding() {
+        assert_eq!(encode_deice_auto_cycle_binding(5).unwrap()[0], 5);
+        assert_eq!(encode_deice_auto_cycle_binding(10).unwrap()[0], 10);
+        assert_eq!(encode_deice_auto_cycle_binding(20).unwrap()[0], 20);
+        assert!(encode_deice_auto_cycle_binding(15).is_err());
+        assert!(encode_deice_auto_cycle_binding(0).is_err());
+    }
+
+    #[test]
+    fn test_matches_deice_auto_cycle_binding() {
+        let expected = encode_deice_auto_cycle_binding(10).unwrap();
+        let mut echo = [0u8; 16];
+        echo[0] = 0x77;
+        echo[1] = 10;
+        assert!(matches_deice_auto_cycle_binding(&echo, &expected));
+
+        let mut bad_echo = echo;
+        bad_echo[1] = 20;
+        assert!(!matches_deice_auto_cycle_binding(&bad_echo, &expected));
+
+        let mut bad_code = echo;
+        bad_code[0] = 0x76;
+        assert!(!matches_deice_auto_cycle_binding(&bad_code, &expected));
+    }
+}
+

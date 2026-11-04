@@ -213,23 +213,56 @@
               °C
             </template>
           </span>
-          <span class="loop-label">回路总控</span>
+          <span class="loop-label">自动除冰</span>
           <button
             class="hdr-btn hdr-btn-on"
             type="button"
-            :disabled="loadingBatch"
-            @click="handleSetAll(true)"
+            :disabled="isSendingDeiceSwitch"
+            @click="handleAutoDeiceSwitch(true)"
           >
-            全部通电
+            自动除冰开
           </button>
           <button
             class="hdr-btn hdr-btn-off"
             type="button"
-            :disabled="loadingBatch"
-            @click="handleSetAll(false)"
+            :disabled="isSendingDeiceSwitch"
+            @click="handleAutoDeiceSwitch(false)"
           >
-            全部断开
+            自动除冰关
           </button>
+
+          <!-- 除冰自动周期设置（装订指令，有0x80回报） -->
+          <div class="cycle-ctrl-group">
+            <span class="cycle-label">自动周期</span>
+            <div class="cycle-tabs">
+              <button
+                v-for="sec in [5, 10, 20]"
+                :key="sec"
+                type="button"
+                class="cycle-tab"
+                :class="{ active: selectedAutoCycle === sec }"
+                :disabled="isBindingCycle"
+                @click="selectedAutoCycle = sec"
+              >
+                {{ sec }}s
+              </button>
+            </div>
+            <button
+              class="hdr-btn hdr-btn-bind"
+              type="button"
+              :disabled="isBindingCycle"
+              @click="handleBindDeiceCycle"
+            >
+              {{ isBindingCycle ? '装订中...' : '装订周期' }}
+            </button>
+            <span
+              v-if="confirmedAutoCycle !== null"
+              class="cycle-confirmed-tag"
+              :title="`当前已确认除冰自动周期: ${confirmedAutoCycle}s`"
+            >
+              已装订 {{ confirmedAutoCycle }}s
+            </span>
+          </div>
           <div v-if="props.standalone" class="window-controls">
             <button
               class="window-control"
@@ -572,6 +605,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onBeforeUnmount } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { NConfigProvider, NPopover, darkTheme, useMessage } from 'naive-ui'
 import { useUavStore } from '@/store/uavStore'
 import { usePayloadStore } from '@/store/payloadStore'
@@ -618,14 +652,56 @@ const uavStore = useUavStore()
 const message = useMessage()
 // 挂载载荷遥测监听（含继电器初态巡检），并获取载荷 store
 const payloadStore: ReturnType<typeof usePayloadStore> = usePayloadLink()
-const { closedRelayCount, loadingBatch, handleSetAll } =
-  usePayloadRelayControl()
+const { closedRelayCount } = usePayloadRelayControl()
 const { samples: powerSamples } = useDeicePowerHistory(uavStore)
 // 大屏自适应：窗口高度不足时整体等比缩放三栏内容，尽量免滚动完整呈现
 const bodyEl = ref<HTMLElement | null>(null)
 useDashboardFit(bodyEl)
 
 const dragRegion = computed(() => (props.standalone ? '' : undefined))
+
+// 自动除冰开关指令控制（代码 0x75 自动除冰开 / 0x76 自动除冰关，连续发6帧再发4帧0x00）
+const isSendingDeiceSwitch = ref(false)
+
+async function handleAutoDeiceSwitch(enabled: boolean) {
+  isSendingDeiceSwitch.value = true
+  const cmdName = enabled ? '自动除冰开' : '自动除冰关'
+  try {
+    await invoke('submit_flight_switch_command', {
+      command: enabled ? 'autoDeiceOn' : 'autoDeiceOff',
+    })
+    message.success(`已下发${cmdName}指令`)
+  } catch (e: any) {
+    message.error(`下发${cmdName}指令失败: ${e?.message ?? e}`)
+  } finally {
+    isSendingDeiceSwitch.value = false
+  }
+}
+
+// 除冰自动周期设置（装订指令 0x77，带 0x80 回报确认，周期可选 5s / 10s / 20s）
+const selectedAutoCycle = ref<number>(10)
+const isBindingCycle = ref(false)
+const confirmedAutoCycle = ref<number | null>(null)
+
+async function handleBindDeiceCycle() {
+  const cycle = selectedAutoCycle.value
+  if (![5, 10, 20].includes(cycle)) {
+    message.warning('除冰自动周期必须为 5s、10s 或 20s')
+    return
+  }
+  isBindingCycle.value = true
+  try {
+    await invoke('bind_deice_auto_cycle', {
+      cycleSeconds: cycle,
+    })
+    confirmedAutoCycle.value = cycle
+    message.success(`除冰自动周期装订成功 (${cycle}s)`)
+  } catch (e: any) {
+    message.error(`除冰自动周期装订失败: ${e?.message ?? e}`)
+  } finally {
+    isBindingCycle.value = false
+  }
+}
 
 // 螺旋桨防除冰工作模式指令列表（对应《任管-载荷上下行协议》1027 版第 8 章）
 // 恒温模式协议标注“暂无”，控制盒暂不支持时禁用
@@ -1143,6 +1219,73 @@ onBeforeUnmount(() => {
 .ctrl-temp-label {
   font-size: 10px;
   letter-spacing: -0.2px;
+}
+
+.cycle-ctrl-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgb(255 255 255 / 4%);
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid rgb(255 255 255 / 8%);
+}
+
+.cycle-label {
+  font-size: 11px;
+  color: var(--dd-text-2);
+  white-space: nowrap;
+}
+
+.cycle-tabs {
+  display: flex;
+  background: rgb(0 0 0 / 25%);
+  border-radius: 4px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.cycle-tab {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 3px;
+  border: none;
+  background: transparent;
+  color: var(--dd-text-2);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cycle-tab:hover:not(:disabled) {
+  color: var(--dd-text-1);
+}
+
+.cycle-tab.active {
+  background: var(--dd-cyan, #06b6d4);
+  color: #0b1120;
+  font-weight: 700;
+}
+
+.hdr-btn-bind {
+  background: rgb(14 116 144 / 35%);
+  border-color: rgb(34 211 238 / 20%);
+  color: var(--dd-cyan, #22d3ee);
+  height: 26px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
+.cycle-confirmed-tag {
+  font-size: 11px;
+  color: var(--dd-green);
+  font-family: var(--dd-font-mono);
+  white-space: nowrap;
+  background: rgb(34 197 94 / 12%);
+  border: 1px solid rgb(34 197 94 / 25%);
+  border-radius: 3px;
+  padding: 1px 5px;
 }
 
 .window-controls {

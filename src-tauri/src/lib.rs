@@ -185,6 +185,7 @@ pub fn run() {
             submit_uplink_command,
             submit_flight_switch_command,
             bind_transponder_switches,
+            bind_deice_auto_cycle,
             query_transponder_switches,
             bind_air_traffic_params,
             query_air_traffic_params,
