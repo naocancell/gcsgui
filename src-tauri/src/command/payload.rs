@@ -6,7 +6,7 @@ use crate::protocol::payload::{
     PAYLOAD_ID_DEICE, PAYLOAD_ID_RELAY, RELAY_READ_COIL_COUNT,
 };
 use crate::state::AppState;
-use crate::uplink::dispatcher::{broadcast_raw_payload, broadcast_raw_payload_poll};
+use crate::uplink::dispatcher::broadcast_raw_payload;
 
 /// 批量逐路下发时相邻两条写线圈指令的间隔，保证总线上每条指令独立成帧并收到反馈
 const RELAY_BATCH_INTERVAL_MS: u64 = 100;
@@ -32,7 +32,6 @@ pub async fn send_relay_control(
         log::warn!("[继电器] CH{relay_index:02} 写线圈下发失败: {e}");
         e
     })?;
-    schedule_relay_readback(state.inner());
     Ok(())
 }
 
@@ -47,10 +46,7 @@ pub async fn send_relay_batch(
 ) -> Result<(), String> {
     let _guard = state.relay_write_lock.lock().await;
     log::info!("[继电器] 批量设置掩码 0x{mask:04X}（逐路下发 {RELAY_READ_COIL_COUNT} 路）");
-    let result = send_relay_mask(state.inner(), mask).await;
-    // 部分回路已下发时也回读一次，界面按设备实际状态刷新
-    schedule_relay_readback(state.inner());
-    result
+    send_relay_mask(state.inner(), mask).await
 }
 
 async fn send_relay_mask(state: &AppState, mask: u16) -> Result<(), String> {
@@ -74,42 +70,6 @@ async fn send_relay_mask(state: &AppState, mask: u16) -> Result<(), String> {
 async fn send_relay_frame(state: &AppState, inner_cmd: &[u8]) -> Result<(), String> {
     let frame = pack_uplink_payload_frame(PAYLOAD_ID_RELAY, inner_cmd);
     broadcast_raw_payload(state, &frame).await
-}
-
-/// 写线圈后 200ms 回读一次全量状态确认
-fn schedule_relay_readback(state: &AppState) {
-    let state = state.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        let _ = send_relay_frame(&state, &build_read_coils_cmd()).await;
-    });
-}
-
-/// 启动地面站 0xC3 继电器自主轮询后台任务（频率 0.5Hz，即 2 秒 1 次）
-///
-/// 穿插在原本的上行链路中，当存在活动通信链路时自动周期性发送读线圈指令
-pub fn start_relay_status_poller(state: AppState) {
-    tauri::async_runtime::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(2000));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-        loop {
-            interval.tick().await;
-
-            // 仅在存在活动的上行通信链路时穿插发送读线圈指令；
-            // 回放安全围栏：回放会话存在时暂停轮询，避免向真实链路发包
-            let has_active_uplink = state
-                .active_links
-                .iter()
-                .any(|entry| matches!(entry.protocol, crate::comms::ProtocolType::FP981C | crate::comms::ProtocolType::FP95));
-
-            if has_active_uplink && !state.replay_active() {
-                let inner_cmd = build_read_coils_cmd();
-                let frame = pack_uplink_payload_frame(PAYLOAD_ID_RELAY, &inner_cmd);
-                let _ = broadcast_raw_payload_poll(&state, &frame).await;
-            }
-        }
-    });
 }
 
 /// 下发读线圈指令，主动查询继电器当前状态（第 1~15 路）

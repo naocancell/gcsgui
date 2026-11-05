@@ -2,20 +2,16 @@ import { ref, computed, watch, onMounted, onBeforeUnmount, type Ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import { usePayloadStore } from '@/store/payloadStore'
 import type { useUavStore } from '@/store/uavStore'
-import { logger } from '@/utils/logger'
 import {
   CONTROLLABLE_RELAY_COUNT,
   RELAY_CHANNELS,
 } from '@/utils/deice/dashboardModel'
 
-/** 挂载载荷遥测监听，并在进入页面时主动巡检一次继电器初态 */
+/** 挂载载荷遥测监听（状态由飞控端周期性轮询下发刷新） */
 export function usePayloadLink() {
   const payloadStore = usePayloadStore()
   onMounted(() => {
     payloadStore.startListening()
-    payloadStore.queryRelayStatus().catch((err) => {
-      logger.warn('初态同步继电器状态巡检异常:', err)
-    })
   })
   onBeforeUnmount(() => {
     payloadStore.stopListening()
@@ -44,22 +40,12 @@ export function usePayloadRelayControl() {
     return Boolean(channels[index - 1])
   }
 
-  function scheduleReadback(tag: string) {
-    // 控制下发后延时 200ms 主动回读一次，快速确认状态
-    setTimeout(() => {
-      payloadStore.queryRelayStatus().catch((err) => {
-        logger.warn(`${tag}继电器状态回读巡检异常:`, err)
-      })
-    }, 200)
-  }
-
   async function handleToggleRelay(index: number, enabled: boolean) {
     loadingSwitch.value = index
     const name = RELAY_CHANNELS[index - 1]?.name ?? `回路${index}`
     try {
       await payloadStore.sendRelayControl(index, enabled)
       message.success(`已下发: ${name} [${enabled ? '通电' : '断开'}]`)
-      scheduleReadback('')
     } catch (e: unknown) {
       message.error(`控制 ${name} 失败: ${e}`)
     } finally {
@@ -72,7 +58,6 @@ export function usePayloadRelayControl() {
     try {
       await payloadStore.sendRelayBatch(enabled ? 0xffff : 0x0000)
       message.success(`已下发全部 [${enabled ? '通电' : '断开'}]`)
-      scheduleReadback('批量')
     } catch (e: unknown) {
       message.error(`操作失败: ${e}`)
     } finally {

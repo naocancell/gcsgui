@@ -391,7 +391,7 @@ impl AppState {
     }
 
     /// 回放会话是否激活（Playing 或 Paused；Stopped/无会话为 false）。
-    /// 用于安全围栏：回放期间抑制一切对外副作用（伺服转发/继电器轮询/上行发送）。
+    /// 用于安全围栏：回放期间抑制一切对外副作用（伺服转发/上行发送）。
     pub fn replay_active(&self) -> bool {
         let guard = self
             .replay_status

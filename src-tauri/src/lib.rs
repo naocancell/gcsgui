@@ -131,9 +131,6 @@ pub fn run() {
             // 启动串口热插拔监测后台任务
             crate::command::serial::start_port_monitor(app.handle().clone());
 
-            // 启动 0xC3 继电器 0.5Hz 自主轮询上行任务（开始通信后自主轮询）
-            crate::command::payload::start_relay_status_poller(app_state.clone());
-
             // 初始化记录回放子系统数据存放目录
             let rec_dir = app
                 .path()
